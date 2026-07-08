@@ -22,6 +22,7 @@ export interface Config {
 	};
 	/** Low-level Claude Agent SDK plumbing. Most users won't need these. */
 	provider?: {
+		systemPromptMode?: "append" | "replace";
 		appendSystemPrompt?: boolean;
 		settingSources?: SettingSource[];
 		strictMcpConfig?: boolean;

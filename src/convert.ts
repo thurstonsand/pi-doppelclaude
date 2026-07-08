@@ -5,7 +5,7 @@ import type { Message as PiMessage } from "@earendil-works/pi-ai";
 import type { Message as SessionMessage } from "cc-session-io";
 import { pascalCase } from "change-case";
 
-export const PROVIDER_ID = "claude-bridge";
+export const PROVIDER_ID = "anthropic";
 
 export const PI_TO_SDK_TOOL_NAME: Record<string, string> = {
 	read: "Read", write: "Write", edit: "Edit", bash: "Bash",
