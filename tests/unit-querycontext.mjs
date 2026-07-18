@@ -1,11 +1,11 @@
 /**
  * Tests for QueryContext class and context stack infrastructure.
- * Exercises isolation, guards, deferred message merging, and context pinning
+ * Exercises isolation, guards, streaming input queueing, and context pinning
  * using the real module — no API calls, no extension activation.
  */
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { ctx, pushContext, popContext, resetStack, stackDepth } from "../src/query-state.js";
+import { PushQueue, ctx, pushContext, popContext, resetStack, stackDepth } from "../src/query-state.js";
 
 const fakeModel = { api: "anthropic", provider: "anthropic", id: "test-model" };
 const activeQuery = (id) => ({ id, async interrupt() {}, close() {} });
@@ -57,7 +57,7 @@ describe("stack isolation and restore", () => {
 		ctx().activeQuery = activeQuery("parent");
 		ctx().pendingToolCalls.set("t1", { toolName: "read", resolve: () => {} });
 		ctx().latestCursor = 42;
-		ctx().deferredUserMessages = ["parent-msg"];
+		ctx().readyForInput = true;
 
 		// Push — child should be clean
 		pushContext();
@@ -65,7 +65,7 @@ describe("stack isolation and restore", () => {
 		assert.strictEqual(ctx().pendingToolCalls.size, 0);
 		assert.strictEqual(ctx().pendingResults.size, 0);
 		assert.strictEqual(ctx().latestCursor, 0);
-		assert.deepStrictEqual(ctx().deferredUserMessages, []);
+		assert.strictEqual(ctx().readyForInput, false);
 
 		// Mutate child
 		ctx().activeQuery = activeQuery("child");
@@ -80,53 +80,53 @@ describe("stack isolation and restore", () => {
 		assert.strictEqual(ctx().latestCursor, 42);
 	});
 
-	it("deferred messages merge on pop in FIFO order", () => {
-		ctx().activeQuery = activeQuery("parent");
-		ctx().deferredUserMessages = ["parent-1", "parent-2"];
-
-		pushContext();
-		ctx().deferredUserMessages = ["child-1", "child-2"];
-
-		popContext();
-		assert.deepStrictEqual(
-			ctx().deferredUserMessages,
-			["parent-1", "parent-2", "child-1", "child-2"],
-		);
-	});
-
 	it("triple-nested isolation — each level independent, pop restores", () => {
 		// Level 0 (root)
 		ctx().activeQuery = activeQuery("L0");
 		ctx().latestCursor = 10;
-		ctx().deferredUserMessages = ["L0-msg"];
+		ctx().persistent = true;
 
 		// Level 1
 		pushContext();
 		assert.strictEqual(stackDepth(), 1);
 		ctx().activeQuery = activeQuery("L1");
 		ctx().latestCursor = 20;
-		ctx().deferredUserMessages = ["L1-msg"];
+		ctx().persistent = false;
 
 		// Level 2
 		pushContext();
 		assert.strictEqual(stackDepth(), 2);
 		ctx().activeQuery = activeQuery("L2");
 		ctx().latestCursor = 30;
-		ctx().deferredUserMessages = ["L2-msg"];
+		ctx().persistent = false;
 
-		// Pop L2 → L1 (L2's deferred merge into L1)
+		// Pop L2 → L1
 		popContext();
 		assert.strictEqual(stackDepth(), 1);
 		assert.equal(ctx().activeQuery.id, "L1");
 		assert.strictEqual(ctx().latestCursor, 20);
-		assert.deepStrictEqual(ctx().deferredUserMessages, ["L1-msg", "L2-msg"]);
 
-		// Pop L1 → L0 (L1+L2's deferred merge into L0)
+		// Pop L1 → L0
 		popContext();
 		assert.strictEqual(stackDepth(), 0);
 		assert.equal(ctx().activeQuery.id, "L0");
 		assert.strictEqual(ctx().latestCursor, 10);
-		assert.deepStrictEqual(ctx().deferredUserMessages, ["L0-msg", "L1-msg", "L2-msg"]);
+		assert.strictEqual(ctx().persistent, true);
+	});
+});
+
+describe("PushQueue", () => {
+	it("keeps streaming until explicitly ended", async () => {
+		const queue = new PushQueue();
+		const iterator = queue[Symbol.asyncIterator]();
+		queue.push("first");
+		assert.deepStrictEqual(await iterator.next(), { value: "first", done: false });
+		const second = iterator.next();
+		queue.push("second");
+		assert.deepStrictEqual(await second, { value: "second", done: false });
+		queue.end();
+		assert.deepStrictEqual(await iterator.next(), { value: undefined, done: true });
+		assert.throws(() => queue.push("late"), /ended input queue/);
 	});
 });
 

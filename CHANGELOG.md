@@ -2,6 +2,7 @@
 
 ## UNRELEASED
 
+- **Refactor: keep provider queries alive across turns** — move every provider request to Agent SDK streaming input mode, push follow-up turns and steering into one persistent Claude Code process, use live model switching when only the model changes, and close or rebuild the process when session history or query options drift. Replacement queries now wait for the prior JSONL writer to exit before resuming or rebuilding its session; abort prefers the SDK's graceful interrupt before falling back to a hard close.
 - **Fix: surface Agent SDK and MCP bridge failures** — propagate in-band Claude Code result errors to pi and AskClaude, match parallel MCP calls by their native `tool_use_id`, and fail the provider immediately if Claude Code omits the required MCP metadata. Shell integration tests now use a portable macOS-compatible timeout helper.
 - **Refactor: align query options with the Agent SDK contract** — explicitly authorize bypass permissions, use typed strict MCP isolation everywhere, derive setting sources from the system prompt mode, identify bridge requests in the SDK User-Agent, and remove the obsolete pi-ai stream compatibility shim.
 - **Remove: fringe bridge configuration overrides** — hard-code AskClaude's name, label, and shared-session default, and remove `provider.strictMcpConfig`, `provider.settingSources`, `askClaude.name`, `askClaude.label`, and `askClaude.defaultIsolated`.

@@ -4,12 +4,47 @@
 import type { Message as PiMessage } from "@earendil-works/pi-ai";
 import type { Message as SessionMessage } from "cc-session-io";
 import { pascalCase } from "change-case";
+import { MCP_TOOL_PREFIX } from "./skills.js";
 
 export const PROVIDER_ID = "anthropic";
 
 export const PI_TO_SDK_TOOL_NAME: Record<string, string> = {
 	read: "Read", write: "Write", edit: "Edit", bash: "Bash",
 };
+
+const SDK_TO_PI_TOOL_NAME: Record<string, string> = {
+	read: "read", write: "write", edit: "edit", bash: "bash",
+};
+
+const SDK_TO_PI_ARG_NAMES: Record<string, Record<string, string>> = {
+	read: { file_path: "path" },
+	write: { file_path: "path" },
+	edit: { file_path: "path", old_string: "oldText", new_string: "newText", old_text: "oldText", new_text: "newText" },
+};
+
+export function mapSdkToolNameToPi(name: string, customToolNameToPi?: Map<string, string>): string {
+	const normalized = name.toLowerCase();
+	const builtin = SDK_TO_PI_TOOL_NAME[normalized];
+	if (builtin) return builtin;
+	const custom = customToolNameToPi?.get(name) ?? customToolNameToPi?.get(normalized);
+	if (custom) return custom;
+	if (normalized.startsWith(MCP_TOOL_PREFIX)) return name.slice(MCP_TOOL_PREFIX.length);
+	return name;
+}
+
+export function mapSdkToolArgsToPi(
+	toolName: string,
+	args: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+	const renames = SDK_TO_PI_ARG_NAMES[toolName.toLowerCase()];
+	const result: Record<string, unknown> = {};
+	for (const [key, value] of Object.entries(args ?? {})) {
+		const piKey = renames?.[key] ?? key;
+		if (!(piKey in result)) result[piKey] = value;
+	}
+	if (toolName.toLowerCase() === "bash" && result.timeout == null) result.timeout = 120;
+	return result;
+}
 
 export function sanitizeToolId(id: string, cache: Map<string, string>): string {
 	const existing = cache.get(id);

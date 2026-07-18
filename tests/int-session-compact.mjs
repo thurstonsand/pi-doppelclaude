@@ -16,6 +16,8 @@ console.log("=== int-session-compact.mjs ===");
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { getSessionPath } from "cc-session-io";
+import { verifyWrittenSession } from "../src/session-verify.js";
 import { createRpcHarness } from "./lib/rpc-harness.mjs";
 
 const TIMEOUT = 180_000;
@@ -34,6 +36,18 @@ const harness = createRpcHarness({
 });
 
 const { startAndWait, stop, send, promptAndWait, DEBUG_LOG, RPC_LOG } = harness;
+
+async function waitForStableFile(path, timeout = 5000) {
+	let snapshot = readFileSync(path, "utf8");
+	const deadline = Date.now() + timeout;
+	while (Date.now() < deadline) {
+		await new Promise((resolve) => setTimeout(resolve, 500));
+		const next = readFileSync(path, "utf8");
+		if (next === snapshot) return snapshot;
+		snapshot = next;
+	}
+	throw new Error("session JSONL did not become stable");
+}
 
 await startAndWait();
 
@@ -64,6 +78,11 @@ try {
 	}
 	const preEventLog = fullLog.slice(0, compactIdx);
 	const postEventLog = fullLog.slice(compactIdx);
+	const writerStoppedIdx = postEventLog.indexOf("consumeQuery: query exited, closing=true");
+	const rebuildIdx = postEventLog.indexOf("syncResult: path=rebuild");
+	if (writerStoppedIdx === -1 || rebuildIdx === -1 || writerStoppedIdx > rebuildIdx) {
+		throw new Error("session JSONL rebuild began before the persistent Claude Code writer had stopped");
+	}
 
 	const preCompactSessionIds = [...preEventLog.matchAll(/syncResult: path=(?:reuse|rebuild) sessionId=([a-f0-9-]+)/g)]
 		.map((m) => m[1]);
@@ -116,6 +135,21 @@ try {
 			`session replaced sharedSession before the session_compact handler ran, orphaning the ` +
 			`main pre-compact JSONL.`);
 	}
+
+	const jsonlPath = getSessionPath(preCompactSessionId, process.cwd(), process.env.CLAUDE_CONFIG_DIR);
+	const firstSnapshot = await waitForStableFile(jsonlPath);
+	const records = firstSnapshot.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+	const integrityWarnings = verifyWrittenSession(jsonlPath, preCompactSessionId, records.length);
+	if (integrityWarnings.length > 0) throw new Error(`rebuilt JSONL failed integrity checks: ${integrityWarnings.join("; ")}`);
+	if (records.some((record) => record.sessionId !== preCompactSessionId)) {
+		throw new Error("rebuilt JSONL contains records from another session");
+	}
+	await new Promise((resolve) => setTimeout(resolve, 1500));
+	const secondSnapshot = readFileSync(jsonlPath, "utf8");
+	if (secondSnapshot !== firstSnapshot) {
+		throw new Error("rebuilt JSONL changed after the replacement turn completed — a late writer remained");
+	}
+	console.log(`  JSONL stable: ${records.length} records, ${Buffer.byteLength(firstSnapshot)} bytes`);
 
 	console.log("PASS");
 } catch (e) {

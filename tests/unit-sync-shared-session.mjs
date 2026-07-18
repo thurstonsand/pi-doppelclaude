@@ -12,13 +12,42 @@ process.env.CLAUDE_BRIDGE_DEBUG_PATH = join(debugDir, "claude-bridge.log");
 
 const { __test } = await import("../src/index.js");
 
-describe("syncSharedSession", () => {
+describe("shared session sync planning", () => {
 	after(() => {
 		rmSync(debugDir, { recursive: true, force: true });
 	});
 
 	afterEach(() => {
 		__test.resetSharedSession();
+	});
+
+	it("plans a clean start when no session exists", () => {
+		const plan = __test.planSharedSessionSync([{ role: "user", content: "hello", timestamp: Date.now() }], null);
+		assert.equal(plan.path, "clean-start");
+		assert.equal(plan.previousSession, null);
+	});
+
+	it("plans reuse for a trailing assistant without mutating the session", () => {
+		const session = { sessionId: "11111111-1111-4111-8111-111111111111", cursor: 1, cwd: "/tmp" };
+		const plan = __test.planSharedSessionSync([
+			{ role: "user", content: "first", timestamp: 1 },
+			{ role: "assistant", content: [{ type: "text", text: "answer" }], timestamp: 2 },
+			{ role: "user", content: "next", timestamp: 3 },
+		], session);
+		assert.equal(plan.path, "reuse");
+		assert.equal(plan.advanceCursor, true);
+		assert.equal(session.cursor, 1);
+	});
+
+	it("plans rebuild for divergent history", () => {
+		const session = { sessionId: "11111111-1111-4111-8111-111111111111", cursor: 1, cwd: "/tmp" };
+		const plan = __test.planSharedSessionSync([
+			{ role: "user", content: "first", timestamp: 1 },
+			{ role: "user", content: "foreign turn", timestamp: 2 },
+			{ role: "assistant", content: [{ type: "text", text: "foreign answer" }], timestamp: 3 },
+			{ role: "user", content: "next", timestamp: 4 },
+		], session);
+		assert.equal(plan.path, "rebuild");
 	});
 
 	it("does not reuse a cached main session for a shorter synthetic compact context", () => {

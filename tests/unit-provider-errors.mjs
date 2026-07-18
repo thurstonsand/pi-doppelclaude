@@ -33,7 +33,10 @@ describe("provider SDK result errors", () => {
 		queryCtx.resetTurnState(fakeModel);
 		const stream = queryCtx.currentPiStream;
 
-		await __test.consumeQuery(sdkQuery, new Map(), fakeModel, () => false, queryCtx);
+		await __test.consumeQuery(sdkQuery, new Map(), fakeModel, queryCtx, {
+			onResult() {},
+			onSessionId() {},
+		});
 		__test.finalizeCurrentStream(queryCtx);
 
 		const events = await collect(stream);

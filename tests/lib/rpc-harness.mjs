@@ -79,9 +79,13 @@ export function createRpcHarness(opts) {
 		await new Promise((r) => setTimeout(r, ms));
 	}
 
-	function stop() {
-		pi?.kill();
-		return new Promise((r) => rpcLog?.end(r));
+	async function stop() {
+		if (pi && pi.exitCode === null) {
+			const closed = new Promise((resolve) => pi.once("close", resolve));
+			pi.kill();
+			await closed;
+		}
+		if (rpcLog) await new Promise((resolve) => rpcLog.end(resolve));
 	}
 
 	function addListener(fn) {

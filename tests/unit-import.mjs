@@ -3,7 +3,7 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { sanitizeToolId, convertPiMessages } from "../src/convert.js";
+import { sanitizeToolId, convertPiMessages, mapSdkToolArgsToPi, mapSdkToolNameToPi } from "../src/convert.js";
 
 /** Shorthand: convert pi messages and return just the anthropic messages. */
 function convert(messages, customToolNameToSdk) {
@@ -11,6 +11,20 @@ function convert(messages, customToolNameToSdk) {
 }
 
 // --- Tests ---
+
+describe("SDK tool conversion", () => {
+	it("maps built-in and MCP tool names to pi", () => {
+		assert.equal(mapSdkToolNameToPi("Read"), "read");
+		assert.equal(mapSdkToolNameToPi("mcp__custom-tools__SlowTool"), "SlowTool");
+	});
+
+	it("renames SDK arguments and applies the pi bash timeout", () => {
+		assert.deepEqual(mapSdkToolArgsToPi("edit", { file_path: "a.ts", old_string: "a", new_string: "b" }), {
+			path: "a.ts", oldText: "a", newText: "b",
+		});
+		assert.deepEqual(mapSdkToolArgsToPi("bash", { command: "pwd" }), { command: "pwd", timeout: 120 });
+	});
+});
 
 describe("tool ID sanitization", () => {
 	it("Kimi-style IDs with dots and colons", () => {
