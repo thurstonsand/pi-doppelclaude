@@ -54,13 +54,6 @@
 
 ## Deferred
 
-- **Claude Code dual-write cleanup**: The Agent SDK requires Claude Code to
-  persist locally before mirroring into `sessionStore`. After the bridge replaces
-  the authoritative store transcript, the local JSONL can remain as a stale
-  earlier fragment visible to `claude --resume`. Cleanup would reintroduce the
-  path plumbing this store integration removed; revisit if the SDK supports
-  store mirroring without local persistence.
-
 - **CC CLI debug log accumulation**: When `CLAUDE_BRIDGE_DEBUG=1`, every
   `query()` call writes a new file under `~/.pi/agent/cc-cli-logs/`. These
   accumulate indefinitely.

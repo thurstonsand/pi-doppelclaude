@@ -6,7 +6,7 @@ import type { Base64ImageSource, ContentBlockParam, MessageParam } from "@anthro
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { Text } from "@earendil-works/pi-tui";
-import { createSession, repairToolPairing } from "cc-session-io";
+import { createSession, deleteSession, repairToolPairing } from "cc-session-io";
 import { appendFileSync, mkdirSync } from "fs";
 import { homedir } from "os";
 import { dirname, join } from "path";
@@ -693,6 +693,7 @@ function closeQueryContext(c: QueryContext, label: string, inputWasReady = c.rea
 	const drainNaturally = inputWasReady && c.inputQueue !== null;
 	c.inputQueue?.end();
 	const storeWriter = c.sessionStoreWriter;
+	const localSessionFragment = c.localSessionFragment;
 	if (drainNaturally) {
 		debug("provider: waiting for natural query EOF before closing session-store writer");
 	} else {
@@ -708,7 +709,12 @@ function closeQueryContext(c: QueryContext, label: string, inputWasReady = c.rea
 	const completion = c.completion ?? Promise.resolve();
 	const closeCompletion = completion.finally(() => {
 		storeWriter?.close();
+		if (localSessionFragment) {
+			deleteSession(localSessionFragment.sessionId, localSessionFragment.cwd, localSessionFragment.claudeDir);
+			debug(`provider: deleted first-spawn session fragment ${localSessionFragment.sessionId.slice(0, 8)}`);
+		}
 		if (c.sessionStoreWriter === storeWriter) c.sessionStoreWriter = null;
+		if (c.localSessionFragment === localSessionFragment) c.localSessionFragment = null;
 		if (c.closeCompletion === closeCompletion) c.closeCompletion = null;
 	});
 	c.closeCompletion = closeCompletion;
@@ -942,6 +948,13 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 					if (!queryCtx.persistent) void closeQueryContext(queryCtx, "reentrant turn complete");
 				},
 				onSessionId(sessionId) {
+					if (!syncResult.sessionId && !queryCtx.localSessionFragment) {
+						queryCtx.localSessionFragment = {
+							sessionId,
+							cwd,
+							...(process.env.CLAUDE_CONFIG_DIR ? { claudeDir: process.env.CLAUDE_CONFIG_DIR } : {}),
+						};
+					}
 					if (!syncResult.preserveSharedSession) sharedSession = { sessionId, cursor: queryCtx.latestCursor };
 				},
 			}).then(() => {

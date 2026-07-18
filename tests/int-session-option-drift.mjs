@@ -3,9 +3,10 @@
 // stop before loading the same session-store transcript.
 
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { getSessionPath } from "cc-session-io";
 import { createRpcHarness } from "./lib/rpc-harness.mjs";
 
 const cwd = mkdtempSync(join(tmpdir(), "pi-claude-bridge-option-drift-"));
@@ -49,8 +50,10 @@ try {
 	const prefix = sessionId.slice(0, 8);
 	assert.ok(log.includes(`session-store: load writer=provider session=${prefix}`), "replacement query did not resume through SessionStore");
 	assert.ok(log.includes(`session-store: append writer=provider session=${prefix}`), "replacement query did not mirror records into SessionStore");
-	console.log("PASS: replacement resumed and mirrored through SessionStore");
+	assert.equal(existsSync(getSessionPath(sessionId, cwd)), false, "first-spawn fragment survived replacement writer shutdown");
+	console.log("PASS: replacement resumed through SessionStore without leaving a local fragment");
 } finally {
 	await harness.stop();
+	if (sessionId) assert.equal(existsSync(getSessionPath(sessionId, cwd)), false, "first-spawn fragment survived session shutdown");
 	rmSync(cwd, { recursive: true, force: true });
 }

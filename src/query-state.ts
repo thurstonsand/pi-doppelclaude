@@ -22,6 +22,12 @@ export interface ActiveQuery {
 	close(): void;
 }
 
+export interface LocalSessionFragment {
+	sessionId: string;
+	cwd: string;
+	claudeDir?: string;
+}
+
 export class PushQueue<T> implements AsyncIterable<T> {
 	private values: T[] = [];
 	private waiter: ((result: IteratorResult<T>) => void) | null = null;
@@ -77,6 +83,7 @@ export class QueryContext {
 	abortCleanup: (() => void) | null = null;
 	completion: Promise<void> | null = null;
 	closeCompletion: Promise<void> | null = null;
+	localSessionFragment: LocalSessionFragment | null = null;
 	turnAborted = false;
 	pendingToolCalls = new Map<string, PendingToolCall>();
 	pendingResults = new Map<string, McpResult>();
