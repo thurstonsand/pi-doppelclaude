@@ -3,9 +3,10 @@
  */
 import { describe, it, after, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { getSessionPath } from "cc-session-io";
 
 const debugDir = mkdtempSync(join(tmpdir(), "sync-shared-session-debug-"));
 process.env.CLAUDE_BRIDGE_DEBUG_PATH = join(debugDir, "claude-bridge.log");
@@ -28,7 +29,7 @@ describe("shared session sync planning", () => {
 	});
 
 	it("plans reuse for a trailing assistant without mutating the session", () => {
-		const session = { sessionId: "11111111-1111-4111-8111-111111111111", cursor: 1, cwd: "/tmp" };
+		const session = { sessionId: "11111111-1111-4111-8111-111111111111", cursor: 1 };
 		const plan = __test.planSharedSessionSync([
 			{ role: "user", content: "first", timestamp: 1 },
 			{ role: "assistant", content: [{ type: "text", text: "answer" }], timestamp: 2 },
@@ -40,7 +41,7 @@ describe("shared session sync planning", () => {
 	});
 
 	it("plans rebuild for divergent history", () => {
-		const session = { sessionId: "11111111-1111-4111-8111-111111111111", cursor: 1, cwd: "/tmp" };
+		const session = { sessionId: "11111111-1111-4111-8111-111111111111", cursor: 1 };
 		const plan = __test.planSharedSessionSync([
 			{ role: "user", content: "first", timestamp: 1 },
 			{ role: "user", content: "foreign turn", timestamp: 2 },
@@ -50,13 +51,35 @@ describe("shared session sync planning", () => {
 		assert.equal(plan.path, "rebuild");
 	});
 
+	it("rebuilds into the store without writing Claude's project directory", () => {
+		const cwd = mkdtempSync(join(tmpdir(), "sync-shared-session-store-"));
+		try {
+			const messages = [
+				{ role: "user", content: "remember one", timestamp: 1 },
+				{ role: "assistant", content: [{ type: "text", text: "one" }], api: "anthropic", provider: "anthropic", model: "claude-haiku-4-5", timestamp: 2 },
+				{ role: "user", content: "next", timestamp: 3 },
+			];
+			const first = __test.syncSharedSession(messages, cwd);
+			assert.equal(first.path, "rebuild");
+			assert.ok(first.sessionId);
+			assert.equal(__test.getStoredSession(first.sessionId).length, 2);
+			assert.equal(existsSync(getSessionPath(first.sessionId, cwd)), false);
+
+			__test.setSharedSession({ sessionId: first.sessionId, cursor: 0, needsRebuild: true });
+			const second = __test.syncSharedSession(messages, cwd);
+			assert.equal(second.sessionId, first.sessionId);
+			assert.equal(__test.getStoredSession(first.sessionId).length, 2);
+		} finally {
+			rmSync(cwd, { recursive: true, force: true });
+		}
+	});
+
 	it("does not reuse a cached main session for a shorter synthetic compact context", () => {
 		const cwd = mkdtempSync(join(tmpdir(), "sync-shared-session-"));
 		try {
 			const mainSession = {
 				sessionId: "11111111-1111-4111-8111-111111111111",
 				cursor: 42,
-				cwd,
 			};
 			__test.setSharedSession(mainSession);
 

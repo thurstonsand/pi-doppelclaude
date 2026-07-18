@@ -9,6 +9,7 @@
 import type { AssistantMessage, AssistantMessageEventStream, Model } from "@earendil-works/pi-ai";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { McpResult } from "./extract-tool-results.js";
+import type { SessionStoreWriter } from "./session-store.js";
 
 export interface PendingToolCall {
 	toolName: string;
@@ -63,6 +64,7 @@ export class QueryContext {
 	// Query-scoped (fully isolated per query)
 	activeQuery: ActiveQuery | null = null;
 	inputQueue: PushQueue<SDKUserMessage> | null = null;
+	sessionStoreWriter: SessionStoreWriter | null = null;
 	currentPiStream: AssistantMessageEventStream | null = null;
 	fatalError: string | null = null;
 	latestCursor = 0;
@@ -74,6 +76,7 @@ export class QueryContext {
 	activeModel: Model<any> | null = null;
 	abortCleanup: (() => void) | null = null;
 	completion: Promise<void> | null = null;
+	closeCompletion: Promise<void> | null = null;
 	turnAborted = false;
 	pendingToolCalls = new Map<string, PendingToolCall>();
 	pendingResults = new Map<string, McpResult>();

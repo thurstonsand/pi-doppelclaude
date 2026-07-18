@@ -1,13 +1,11 @@
 #!/usr/bin/env node
 // Verifies query-option drift waits for the persistent Claude Code writer to
-// stop before resuming the same session file.
+// stop before loading the same session-store transcript.
 
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { deleteSession, getSessionPath } from "cc-session-io";
-import { verifyWrittenSession } from "../src/session-verify.js";
 import { createRpcHarness } from "./lib/rpc-harness.mjs";
 
 const cwd = mkdtempSync(join(tmpdir(), "pi-claude-bridge-option-drift-"));
@@ -17,18 +15,6 @@ const harness = createRpcHarness({
 	cwd,
 	defaultTimeout: 120_000,
 });
-
-async function waitForStableFile(path, timeout = 5000) {
-	let snapshot = readFileSync(path, "utf8");
-	const deadline = Date.now() + timeout;
-	while (Date.now() < deadline) {
-		await new Promise((resolve) => setTimeout(resolve, 500));
-		const next = readFileSync(path, "utf8");
-		if (next === snapshot) return snapshot;
-		snapshot = next;
-	}
-	throw new Error("session JSONL did not become stable");
-}
 
 let sessionId;
 await harness.startAndWait();
@@ -49,20 +35,22 @@ try {
 	assert.equal((log.match(/fresh streaming query/g) ?? []).length, 2, "thinking drift should respawn exactly once");
 
 	const closeIdx = log.indexOf("provider: closing query (query options changed)");
+	const naturalEofIdx = log.indexOf("provider: waiting for natural query EOF", closeIdx);
+	const finalAppendIdx = log.indexOf("session-store: append writer=provider", naturalEofIdx);
 	const stoppedIdx = log.indexOf("consumeQuery: query exited, closing=true", closeIdx);
+	const writerClosedIdx = log.indexOf("session-store: closed writer=provider", stoppedIdx);
 	const secondSpawnIdx = log.indexOf("provider: fresh streaming query", stoppedIdx);
-	assert.ok(closeIdx >= 0 && stoppedIdx > closeIdx && secondSpawnIdx > stoppedIdx, "replacement query spawned before the old writer stopped");
+	assert.ok(
+		closeIdx >= 0 && naturalEofIdx > closeIdx && finalAppendIdx > naturalEofIdx &&
+		stoppedIdx > finalAppendIdx && writerClosedIdx >= stoppedIdx && secondSpawnIdx > stoppedIdx,
+		"replacement query did not await the old process's final mirror flush",
+	);
 
-	const jsonlPath = getSessionPath(sessionId, cwd, process.env.CLAUDE_CONFIG_DIR);
-	const firstSnapshot = await waitForStableFile(jsonlPath);
-	const records = firstSnapshot.split("\n").filter(Boolean).map((line) => JSON.parse(line));
-	assert.deepEqual(verifyWrittenSession(jsonlPath, sessionId, records.length), []);
-	assert.ok(records.every((record) => record.sessionId === sessionId), "JSONL contains a foreign session ID");
-	await new Promise((resolve) => setTimeout(resolve, 1500));
-	assert.equal(readFileSync(jsonlPath, "utf8"), firstSnapshot, "JSONL changed after the replacement turn completed");
-	console.log(`PASS: ${records.length} stable records, ${Buffer.byteLength(firstSnapshot)} bytes`);
+	const prefix = sessionId.slice(0, 8);
+	assert.ok(log.includes(`session-store: load writer=provider session=${prefix}`), "replacement query did not resume through SessionStore");
+	assert.ok(log.includes(`session-store: append writer=provider session=${prefix}`), "replacement query did not mirror records into SessionStore");
+	console.log("PASS: replacement resumed and mirrored through SessionStore");
 } finally {
 	await harness.stop();
-	if (sessionId) deleteSession(sessionId, cwd, process.env.CLAUDE_CONFIG_DIR);
 	rmSync(cwd, { recursive: true, force: true });
 }

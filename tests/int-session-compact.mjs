@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Verifies the bridge rebuilds CC's session JSONL after a pi-side /compact.
+// Verifies the bridge rebuilds its SDK session-store transcript after pi /compact.
 //
 // Bug it guards against: syncSharedSession's REUSE check uses
 // `priorMessages.slice(sharedSession.cursor)`. After /compact, pi shrinks
@@ -16,8 +16,6 @@ console.log("=== int-session-compact.mjs ===");
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getSessionPath } from "cc-session-io";
-import { verifyWrittenSession } from "../src/session-verify.js";
 import { createRpcHarness } from "./lib/rpc-harness.mjs";
 
 const TIMEOUT = 180_000;
@@ -36,18 +34,6 @@ const harness = createRpcHarness({
 });
 
 const { startAndWait, stop, send, promptAndWait, DEBUG_LOG, RPC_LOG } = harness;
-
-async function waitForStableFile(path, timeout = 5000) {
-	let snapshot = readFileSync(path, "utf8");
-	const deadline = Date.now() + timeout;
-	while (Date.now() < deadline) {
-		await new Promise((resolve) => setTimeout(resolve, 500));
-		const next = readFileSync(path, "utf8");
-		if (next === snapshot) return snapshot;
-		snapshot = next;
-	}
-	throw new Error("session JSONL did not become stable");
-}
 
 await startAndWait();
 
@@ -81,7 +67,7 @@ try {
 	const writerStoppedIdx = postEventLog.indexOf("consumeQuery: query exited, closing=true");
 	const rebuildIdx = postEventLog.indexOf("syncResult: path=rebuild");
 	if (writerStoppedIdx === -1 || rebuildIdx === -1 || writerStoppedIdx > rebuildIdx) {
-		throw new Error("session JSONL rebuild began before the persistent Claude Code writer had stopped");
+		throw new Error("session-store rebuild began before the persistent Claude Code writer had stopped");
 	}
 
 	const preCompactSessionIds = [...preEventLog.matchAll(/syncResult: path=(?:reuse|rebuild) sessionId=([a-f0-9-]+)/g)]
@@ -92,7 +78,7 @@ try {
 	}
 	console.log(`  Pre-compact sessionId: ${preCompactSessionId}`);
 
-	// Capture both the path and the rebuild flavor (preserved | rotated-post-abort | first).
+	// Capture both the path and rebuild flavor.
 	const syncResults = [...postEventLog.matchAll(/syncResult: path=(reuse|rebuild|clean-start)(?: sessionId=([a-f0-9-]+) priors=\d+ (\S+))?/g)]
 		.map((m) => ({ path: m[1], sessionId: m[2], flavor: m[3] }));
 	console.log(`  Post-event syncResults: ${JSON.stringify(syncResults)}`);
@@ -104,7 +90,7 @@ try {
 	const first = syncResults[0];
 
 	// First syncResult after the event must NOT reuse — pi's history has
-	// shrunk and CC's session JSONL is now stale.
+	// shrunk and CC's stored transcript is now stale.
 	if (first.path === "clean-start") {
 		throw new Error(
 			"first syncResult after session_compact was clean-start. The compact summarization " +
@@ -117,39 +103,28 @@ try {
 			"Symptom: triggers Claude Code's autocompact-thrashing (issue #8) on long sessions.");
 	}
 
-	// Compact has no concurrent CC writer, so the rebuild should preserve
-	// the sessionId and wipe the JSONL in place (preserveId branch). If we
-	// see "rotated-post-abort" here, the needsRebuild → preserveId logic
-	// got re-conflated and we're leaking orphan JSONLs into ~/.claude/projects/
-	// on every compact.
+	// Store replacement preserves the session ID without bridge-owned file manipulation.
 	if (first.path === "rebuild" && first.flavor !== "preserved") {
 		throw new Error(
 			`post-compact rebuild used flavor=${first.flavor}, expected "preserved". ` +
-			`Compact has no concurrent CC writer — it should rebuild in place (deleteSession + ` +
-			`createSession with the same UUID), not rotate. Rotating leaks orphan JSONL files.`);
+			`SessionStore replacement should never rotate the UUID.`);
 	}
 	if (first.path === "rebuild" && first.sessionId !== preCompactSessionId) {
 		throw new Error(
 			`post-compact rebuild preserved sessionId=${first.sessionId}, but expected the original ` +
 			`pre-compact sessionId=${preCompactSessionId}. This means the compact summarization ` +
 			`session replaced sharedSession before the session_compact handler ran, orphaning the ` +
-			`main pre-compact JSONL.`);
+			`main pre-compact transcript.`);
 	}
 
-	const jsonlPath = getSessionPath(preCompactSessionId, process.cwd(), process.env.CLAUDE_CONFIG_DIR);
-	const firstSnapshot = await waitForStableFile(jsonlPath);
-	const records = firstSnapshot.split("\n").filter(Boolean).map((line) => JSON.parse(line));
-	const integrityWarnings = verifyWrittenSession(jsonlPath, preCompactSessionId, records.length);
-	if (integrityWarnings.length > 0) throw new Error(`rebuilt JSONL failed integrity checks: ${integrityWarnings.join("; ")}`);
-	if (records.some((record) => record.sessionId !== preCompactSessionId)) {
-		throw new Error("rebuilt JSONL contains records from another session");
+	const prefix = preCompactSessionId.slice(0, 8);
+	if (!postEventLog.includes(`session-store: replace session=${prefix}`)) {
+		throw new Error("post-compact rebuild did not replace the authoritative store transcript");
 	}
-	await new Promise((resolve) => setTimeout(resolve, 1500));
-	const secondSnapshot = readFileSync(jsonlPath, "utf8");
-	if (secondSnapshot !== firstSnapshot) {
-		throw new Error("rebuilt JSONL changed after the replacement turn completed — a late writer remained");
+	if (!postEventLog.includes(`session-store: load writer=provider session=${prefix}`)) {
+		throw new Error("SDK did not load the rebuilt transcript from SessionStore");
 	}
-	console.log(`  JSONL stable: ${records.length} records, ${Buffer.byteLength(firstSnapshot)} bytes`);
+	console.log("  SessionStore replacement loaded by the SDK");
 
 	console.log("PASS");
 } catch (e) {

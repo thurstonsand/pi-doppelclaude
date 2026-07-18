@@ -320,9 +320,14 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
 		let capturedSessionId: string | undefined;
 
 		for await (const message of sdkQuery) {
-			if (message.type === "system" && (message as any).subtype === "init" && (message as any).session_id) {
-				capturedSessionId = (message as any).session_id;
-				hooks.onSessionId(capturedSessionId!);
+			if (message.type === "system") {
+				const systemMessage = message as any;
+				if (systemMessage.subtype === "init" && systemMessage.session_id) {
+					capturedSessionId = systemMessage.session_id;
+					hooks.onSessionId(capturedSessionId!);
+				} else if (systemMessage.subtype === "mirror_error") {
+					debug("consumeQuery: sessionStore mirror_error", systemMessage.error, systemMessage.key);
+				}
 			}
 			if (!queryCtx.currentPiStream || !queryCtx.turnOutput) continue;
 

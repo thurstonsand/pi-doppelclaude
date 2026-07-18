@@ -8,8 +8,8 @@
 // isolated mode (clean slate).
 //
 // Requires: pi CLI, Claude Code (for Agent SDK subprocess).
-// Requires: CLAUDE_BRIDGE_TESTING_ALT_PROVIDER (e.g. "minimax")
-// Requires: CLAUDE_BRIDGE_TESTING_ALT_MODEL (e.g. "MiniMax-M2.7-highspeed")
+// Requires: CLAUDE_BRIDGE_TESTING_ALT_PROVIDER and CLAUDE_BRIDGE_TESTING_ALT_MODEL
+// naming any authenticated non-bridge model available to pi.
 
 console.log("=== session-resume-test.mjs ===");
 
@@ -167,26 +167,19 @@ try {
   console.log(`  AskClaude result: ${(lastToolResult || "").slice(0, 120)}`);
   if (lastToolResult?.toLowerCase().includes(WORD_C)) throw new Error(`Turn 8 isolated AskClaude should not know '${WORD_C}': ${lastToolResult}`);
 
-  // sessionId stability: sessionId should stay stable across normal
-  // rebuilds (Case 2 → Case 4 → Case 3). It's allowed to rotate exactly
-  // once per abort: the post-abort rebuild takes a fresh UUID on purpose,
-  // to avoid a race with the killed CC subprocess's late interrupt-cleanup
-  // writes (which would otherwise append an orphan record at the same
-  // path and break the parent-uuid chain for the next resume).
-  //
-  // This test exercises one abort (Turn 5), so we expect exactly 2 unique
-  // sessionIds: pre-abort and post-abort.
+  // SessionStore writer revisions fence late post-abort mirror appends, so the
+  // session UUID remains stable across normal rebuilds and abort recovery.
   const debugLog = readFileSync(DEBUG_LOG, "utf8");
   const sessionIds = new Set();
-  const rotatedPostAbort = [];
-  for (const match of debugLog.matchAll(/syncResult: path=(reuse|rebuild) sessionId=([a-f0-9-]+)(?: priors=\d+ (\S+))?/g)) {
+  for (const match of debugLog.matchAll(/syncResult: path=(reuse|rebuild) sessionId=([a-f0-9-]+)/g)) {
     sessionIds.add(match[2]);
-    if (match[3] === "rotated-post-abort") rotatedPostAbort.push(match[2]);
   }
   if (sessionIds.size === 0) throw new Error("no syncResult markers found in debug log");
-  if (sessionIds.size > 2) throw new Error(`expected ≤2 distinct sessionIds (one pre-abort, one post-abort rotation), got ${sessionIds.size}: ${[...sessionIds].join(", ")}`);
-  if (rotatedPostAbort.length !== 1) throw new Error(`expected exactly 1 post-abort rotation, got ${rotatedPostAbort.length}`);
-  console.log(`  sessionIds observed: ${sessionIds.size} (expected 2 due to 1 post-abort rotation)`);
+  if (sessionIds.size !== 1) throw new Error(`expected 1 stable sessionId across abort recovery, got ${sessionIds.size}: ${[...sessionIds].join(", ")}`);
+  if (!debugLog.includes("session-store: ignored stale append") && !debugLog.includes("session-store: replace")) {
+    throw new Error("no SessionStore rebuild/fencing diagnostics found after abort");
+  }
+  console.log("  sessionId remained stable across abort recovery");
 
   console.log("PASS");
 } catch (e) {

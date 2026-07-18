@@ -174,16 +174,16 @@ Available tools:
 
 `npm run test:unit` for the offline unit suite (`tests/unit-*.mjs`).
 
-`npm test` for the full suite, which adds integration tests that hit APIs (`tests/int-*.{sh,mjs}`: smoke, multi-turn, cache, session-resume, session-rebuild, tool-message). Set `CLAUDE_BRIDGE_TESTING_ALT_MODEL` in `.env.test` for the alt-provider smoke test (e.g. `openrouter/z-ai/glm-4.7-flash`).
+`npm test` for the full suite, which adds integration tests that hit APIs (`tests/int-*.{sh,mjs}`: smoke, multi-turn, cache, session-resume, session-rebuild, tool-message). Set `CLAUDE_BRIDGE_TESTING_ALT_PROVIDER` and `CLAUDE_BRIDGE_TESTING_ALT_MODEL` in `.env.test` to any authenticated non-bridge provider/model used by the smoke and session-resume tests (for example, `google` and `gemini-2.5-flash`).
 
 ## Debugging
 
 Set `CLAUDE_BRIDGE_DEBUG=1` to enable debug output:
 
-- **Bridge log** at `~/.pi/agent/claude-bridge.log` — every provider call, session sync decision, tool result delivery, and CC's stderr. Override location with `CLAUDE_BRIDGE_DEBUG_PATH`.
+- **Bridge log** at `~/.pi/agent/claude-bridge.log` — every provider call, session sync decision, session-store load/append/replace, tool result delivery, and CC's stderr. Override location with `CLAUDE_BRIDGE_DEBUG_PATH`.
 - **Per-query Claude Code CLI logs** at `~/.pi/agent/cc-cli-logs/<timestamp>-<tag>-<seq>.log` — the CC subprocess's own debug stream, one file per `query()` call. The main `provider` query stays alive across compatible turns; `provider-child` identifies reentrant/subagent queries, while `askclaude` identifies sub-delegations. Useful when a resume fails or CC misbehaves internally — shows the CLI's own view of session loading, API requests, and tool calls.
 
-When filing a bug about a session-resume failure (e.g. "No conversation found"), the most useful attachments are the `syncResult:` lines from the bridge log plus the matching `cc-cli-logs/` file for the failing query.
+When filing a bug about a session-resume failure (e.g. "No conversation found"), the most useful attachments are the `syncResult:` and `session-store:` lines from the bridge log plus the matching `cc-cli-logs/` file for the failing query.
 
 ## Maintenance
 
