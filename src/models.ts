@@ -1,17 +1,10 @@
+import type { EffortLevel } from "@anthropic-ai/claude-agent-sdk";
+
 // Canonical selection + display order for the model picker.
 // `resolveModel` returns the first partial match, so `opus` resolves to the first-listed opus entry.
 // Extracted from index.ts so tests can import without activating the extension.
 
 export const MODEL_IDS_IN_ORDER = ["claude-fable-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-5", "claude-sonnet-4-6", "claude-haiku-4-5"];
-
-// Workaround for missing thinkingLevelMap in pi-ai (earendil-works/pi#6371).
-// Sonnet 5 and Sonnet 4.6 have no map, so getSupportedThinkingLevels hides
-// xhigh (it's opt-in). Both models' top effort tier is "max" with no real
-// xhigh (verified via CC supportedModels API), so xhigh→max matches opus-4-6.
-const DEFAULT_THINKING_LEVEL_MAPS: Record<string, Record<string, string>> = {
-	"claude-sonnet-5": { xhigh: "max" },
-	"claude-sonnet-4-6": { xhigh: "max" },
-};
 
 // Project pi-ai's model entries down to the fields pi's registerProvider expects,
 // and keep MODEL_IDS_IN_ORDER ordering. IDs missing from pi-ai are silently dropped.
@@ -20,15 +13,30 @@ export function buildModels<T extends { id: string; [key: string]: any }>(piAiMo
 	return MODEL_IDS_IN_ORDER
 		.map((id) => piAiModels.find((m) => m.id === id))
 		.filter((m) => m != null)
-		// Forward thinkingLevelMap so per-model overrides (e.g. opus-4-7 mapping
-		// xhigh→xhigh instead of xhigh→max) are visible to the effort lookup.
-		.map(({ id, name, reasoning, input, contextWindow, maxTokens, thinkingLevelMap }) => ({
+		// Forward Pi's per-model effort overrides to both provider and AskClaude calls.
+		.map(({ id, name, reasoning, input, cost, contextWindow, maxTokens, thinkingLevelMap }) => ({
 			id,
 			name,
-			reasoning, input, contextWindow, maxTokens,
-			thinkingLevelMap: thinkingLevelMap ?? DEFAULT_THINKING_LEVEL_MAPS[id],
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			reasoning, input, cost, contextWindow, maxTokens,
+			thinkingLevelMap,
 		}));
+}
+
+const REASONING_TO_EFFORT: Record<string, EffortLevel> = {
+	minimal: "low",
+	low: "low",
+	medium: "medium",
+	high: "high",
+	xhigh: "max",
+	max: "max",
+};
+
+export function resolveThinkingEffort(
+	model: { thinkingLevelMap?: Record<string, string | null> } | undefined,
+	reasoning: string | undefined,
+): EffortLevel | undefined {
+	if (!reasoning || reasoning === "off") return undefined;
+	return (model?.thinkingLevelMap?.[reasoning] as EffortLevel | undefined) ?? REASONING_TO_EFFORT[reasoning];
 }
 
 export type LongContextSettings = {

@@ -1,8 +1,8 @@
 import { calculateCost, StringEnum, type AssistantMessage, type AssistantMessageEventStream, type Context, type Model, type SimpleStreamOptions, type Tool } from "@earendil-works/pi-ai";
 import * as piAi from "@earendil-works/pi-ai";
-import { getModels } from "@earendil-works/pi-ai/compat";
+import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
 import { buildSessionContext, compact, keyHint, type CompactionEntry, type ExtensionAPI, type ExtensionUIContext } from "@earendil-works/pi-coding-agent";
-import { createSdkMcpServer, query, type EffortLevel, type SDKMessage, type SDKUserMessage, type SettingSource } from "@anthropic-ai/claude-agent-sdk";
+import { createSdkMcpServer, query, type SDKMessage, type SDKUserMessage, type SettingSource } from "@anthropic-ai/claude-agent-sdk";
 import type { Base64ImageSource, ContentBlockParam, MessageParam } from "@anthropic-ai/sdk/resources";
 import { Type } from "typebox";
 import { Text } from "@earendil-works/pi-tui";
@@ -11,16 +11,15 @@ import { appendFileSync, mkdirSync, realpathSync, statSync } from "fs";
 import { homedir } from "os";
 import { dirname, join } from "path";
 import { PROVIDER_ID, messageContentToText, convertPiMessages } from "./convert.js";
-import { applyLongContext, buildModels, claudeCodeModelId, type LongContextSettings, resolveModel as _resolveModel } from "./models.js";
-import { MCP_SERVER_NAME, MCP_TOOL_PREFIX, extractSkillsBlock } from "./skills.js";
+import { applyLongContext, buildModels, claudeCodeModelId, type LongContextSettings, resolveModel as _resolveModel, resolveThinkingEffort } from "./models.js";
+import { MCP_SERVER_NAME, MCP_TOOL_PREFIX } from "./skills.js";
 import { verifyWrittenSession as _verifyWrittenSession } from "./session-verify.js";
 import { extractAllToolResults as _extractAllToolResults, type McpResult } from "./extract-tool-results.js";
 import { QueryContext, ctx } from "./query-state.js";
 import { loadConfig, type Config } from "./config.js";
-import { extractAgentsAppend } from "./agents-md.js";
 import { jsonSchemaToZodShape } from "./typebox-to-zod.js";
 import { buildActionSummary, type ToolCallState } from "./askclaude-ui.js";
-import { rewritePiSystemPrompt } from "./system-prompt.js";
+import { buildClaudeSystemPrompt } from "./system-prompt.js";
 
 // Compat (#2): use factory if available (pi-ai ≥0.66), else fall back to constructor (gsd-pi etc.)
 const _piAi = piAi as any;
@@ -99,15 +98,13 @@ function diagDump(label: string, data: Record<string, unknown>) {
 
 // Global key to prevent re-registration of the provider across module reloads.
 //
-// Extensions like pi-subagents spawn a subagent and it loads this module
-// again. Without this guard, the subagent's call to registerProvider() would
-// overwrite the parent's `streamSimple` function reference in the shared
-// ModelRegistry. When the parent later delivers a tool result, it would call
-// the subagent's `streamSimple` (which has empty state) instead of its own.
+// Nested sessions can load this module again after their ModelRuntime has copied
+// the parent's provider registration. Re-registering with the child module's
+// `streamSimple` would replace the propagated parent function and break tool
+// result delivery because the child function has different module state.
 //
 // By storing the active streamSimple in a Symbol.for() global (shared across all
-// module instances), we ensure only the FIRST instance to register takes effect.
-// Subsequent instances wrap the stored function instead of overwriting it.
+// module instances), we ensure only the first module instance registers.
 //
 // On session_shutdown (including /reload), clearSession() resets this so a fresh
 // registration can occur for the next session.
@@ -117,8 +114,8 @@ const SDK_TO_PI_TOOL_NAME: Record<string, string> = {
 	read: "read", write: "write", edit: "edit", bash: "bash",
 };
 
-// MODELS is buildModels(getModels("anthropic")) — projection kept in models.js.
-const MODELS = buildModels(getModels("anthropic"));
+// Project Pi's public Anthropic catalog down to bridge provider metadata.
+const MODELS = buildModels(getBuiltinModels("anthropic"));
 let providerSettings: NonNullable<Config["provider"]> = {};
 let longContextSettings: LongContextSettings = { plan: "pro", longContextExtraUsage: false };
 
@@ -341,7 +338,12 @@ async function runIsolatedSummary(
 	try {
 		const promptText = extractIsolatedSummaryPrompt(context.messages);
 		const cwd = (options as { cwd?: string } | undefined)?.cwd ?? process.cwd();
-		const claudeExecutable = loadConfig(cwd).provider?.pathToClaudeCodeExecutable;
+		const compactProviderSettings = loadConfig(cwd).provider ?? {};
+		const compactSystemPromptMode = compactProviderSettings.systemPromptMode ?? "append";
+		const compactSettingSources: SettingSource[] | undefined = compactSystemPromptMode === "pi"
+			? compactProviderSettings.settingSources ?? []
+			: compactProviderSettings.settingSources;
+		const claudeExecutable = compactProviderSettings.pathToClaudeCodeExecutable;
 		const cliModel = claudeCodeModelId(model, longContextSettings);
 		debug(`compact summary: spawn model=${cliModel} registeredModel=${model.id} promptLen=${promptText.length}`);
 
@@ -352,10 +354,14 @@ async function runIsolatedSummary(
 				env: { ...process.env, DISABLE_AUTO_COMPACT: "1", CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" },
 				tools: [],
 				strictMcpConfig: true,
-				settingSources: [] as SettingSource[],
+				...(compactSettingSources ? { settingSources: compactSettingSources } : {}),
 				skills: [],
 				persistSession: false,
-				systemPrompt: context.systemPrompt,
+				systemPrompt: buildClaudeSystemPrompt(
+					context.systemPrompt,
+					compactSystemPromptMode,
+					compactProviderSettings.systemPromptReplacements,
+				),
 				model: cliModel,
 				maxTurns: 1,
 				...(claudeExecutable ? { pathToClaudeCodeExecutable: claudeExecutable } : {}),
@@ -761,13 +767,6 @@ function logServedContextWindow(label: string, message: SDKMessage, model: Model
 		debug(`${label}: served contextWindow=${v.contextWindow ?? "?"} maxOutputTokens=${v.maxOutputTokens ?? "?"} servedModel=${k} registered=${model.contextWindow}`);
 	}
 }
-
-// --- Effort level mapping ---
-// Pi reasoning levels → CC SDK effort levels
-
-const REASONING_TO_EFFORT: Record<string, EffortLevel> = {
-	minimal: "low", low: "low", medium: "medium", high: "high", xhigh: "max",
-};
 
 // --- Provider helpers: misc ---
 
@@ -1201,40 +1200,24 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 		: promptText;
 	const mcpServers = buildMcpServers(mcpTools, queryCtx);
 	const systemPromptMode = providerSettings.systemPromptMode ?? "append";
-	const rewrittenSystemPrompt = rewritePiSystemPrompt(context.systemPrompt);
-	const appendSystemPrompt = systemPromptMode === "append" && providerSettings.appendSystemPrompt !== false;
-	const agentsAppend = appendSystemPrompt ? extractAgentsAppend() : undefined;
-	const skillsAppend = appendSystemPrompt ? extractSkillsBlock(rewrittenSystemPrompt) : undefined;
-	const appendParts = [agentsAppend, skillsAppend].filter((part): part is string => Boolean(part));
-	const systemPromptAppend = appendParts.length > 0 ? appendParts.join("\n\n") : undefined;
-	const systemPrompt = systemPromptMode === "replace"
-		? rewrittenSystemPrompt
-		: {
-			type: "preset" as const,
-			preset: "claude_code" as const,
-			append: systemPromptAppend ? systemPromptAppend : undefined,
-		};
+	const systemPrompt = buildClaudeSystemPrompt(
+		context.systemPrompt,
+		systemPromptMode,
+		providerSettings.systemPromptReplacements,
+	);
 
 	// MCP auto-loading suppression: CC reads MCP servers from ~/.claude.json (top-level
 	// + per-project) and .mcp.json. Since pi executes tools (not CC), those are pure
 	// token overhead. --strict-mcp-config tells the binary to use ONLY mcpServers passed
 	// programmatically and ignore filesystem MCP entries — applied unconditionally because
 	// settingSources=undefined does NOT give isolation (the CC default loads all sources).
-	const settingSources: SettingSource[] | undefined = systemPromptMode === "replace"
+	const settingSources: SettingSource[] | undefined = systemPromptMode === "pi"
 		? providerSettings.settingSources ?? []
-		: appendSystemPrompt
-			? undefined
-			: providerSettings.settingSources ?? ["user", "project"];
+		: providerSettings.settingSources;
 	const strictMcpConfigEnabled = providerSettings.strictMcpConfig !== false;
 	const claudeExecutable = providerSettings.pathToClaudeCodeExecutable;
 
-	// Prefer the model's own thinkingLevelMap when present (pi-ai 0.72+ ships
-	// per-model overrides — e.g. opus-4-7 wants xhigh→xhigh, not xhigh→max).
-	// Fall back to our generic table for older pi-ai or unmapped levels.
-	const effort = options?.reasoning
-		? ((model as any).thinkingLevelMap?.[options.reasoning] as EffortLevel | undefined)
-			?? REASONING_TO_EFFORT[options.reasoning]
-		: undefined;
+	const effort = resolveThinkingEffort(model, options?.reasoning);
 
 	// cliModel is the actual id sent to Claude Code (may carry [1m]); model.id is the
 	// pi-registered id. Log cliModel so debug lines reflect what CC actually received.
@@ -1275,7 +1258,7 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 	debug("provider: fresh query",
 		`model=${cliModel} msgs=${context.messages.length} tools=${mcpTools.length}`,
 		`resume=${resumeSessionId?.slice(0, 8) ?? "none"} effort=${effort ?? "default"}`,
-		`systemPromptMode=${systemPromptMode} appendSys=${appendSystemPrompt} strictMcp=${strictMcpConfigEnabled}`,
+		`systemPromptMode=${systemPromptMode} strictMcp=${strictMcpConfigEnabled}`,
 		`prompt=${promptText.slice(0, 60)}${promptBlocks ? " [+images]" : ""}`);
 
 	// 3. Start SDK query and claim it for this context
@@ -1435,7 +1418,6 @@ async function promptAndWait(
 	signal?: AbortSignal,
 	options?: {
 		systemPrompt?: string;
-		appendSkills?: boolean;
 		onStreamUpdate?: (responseText: string) => void;
 		model?: string;
 		thinking?: string;
@@ -1470,23 +1452,19 @@ async function promptAndWait(
 	// Mode → disallowed tools
 	const disallowedTools = MODE_DISALLOWED_TOOLS[mode] ?? [];
 
-	// Skills append
 	const systemPromptMode = providerSettings.systemPromptMode ?? "append";
-	const rewrittenSystemPrompt = options?.systemPrompt ? rewritePiSystemPrompt(options.systemPrompt) : undefined;
-	const skillsBlock = systemPromptMode === "append" && options?.appendSkills !== false && rewrittenSystemPrompt
-		? extractSkillsBlock(rewrittenSystemPrompt) : undefined;
-	const systemPrompt = systemPromptMode === "replace" && rewrittenSystemPrompt
-		? rewrittenSystemPrompt
-		: skillsBlock
-			? { type: "preset" as const, preset: "claude_code" as const, append: skillsBlock }
-			: undefined;
-	const settingSources: SettingSource[] = systemPromptMode === "replace"
+	const systemPrompt = options?.systemPrompt
+		? buildClaudeSystemPrompt(
+			options.systemPrompt,
+			systemPromptMode,
+			providerSettings.systemPromptReplacements,
+		)
+		: undefined;
+	const settingSources: SettingSource[] | undefined = systemPromptMode === "pi"
 		? providerSettings.settingSources ?? []
-		: ["user", "project"];
+		: providerSettings.settingSources;
 
-	// Effort
-	const effort = options?.thinking && options.thinking !== "off"
-		? REASONING_TO_EFFORT[options.thinking] : undefined;
+	const effort = resolveThinkingEffort(model, options?.thinking);
 
 	const claudeExecutable = providerSettings.pathToClaudeCodeExecutable;
 
@@ -1499,7 +1477,7 @@ async function promptAndWait(
 	debug("askClaude:",
 		`mode=${mode} model=${modelId} cliModel=${cliModel} effort=${effort ?? "default"}`,
 		`isolated=${options?.isolated ?? false} resume=${resumeSessionId?.slice(0, 8) ?? "none"}`,
-		`systemPromptMode=${systemPromptMode} skills=${Boolean(skillsBlock)} promptLen=${prompt.length}`);
+		`systemPromptMode=${systemPromptMode} promptLen=${prompt.length}`);
 
 	const sdkQuery = query({
 		prompt,
@@ -1510,7 +1488,7 @@ async function promptAndWait(
 			...(disallowedTools.length ? { disallowedTools } : {}),
 			...(effort ? { effort } : {}),
 			...(systemPrompt ? { systemPrompt } : {}),
-			settingSources,
+			...(settingSources ? { settingSources } : {}),
 			extraArgs,
 			...(resumeSessionId ? { resume: resumeSessionId } : {}),
 			...(options?.isolated ? { persistSession: false } : {}),
@@ -1693,9 +1671,9 @@ export default function (pi: ExtensionAPI) {
 
 	// --- Provider ---
 	//
-	// Guard against re-registration when the module is loaded multiple times
-	// (e.g., when spawning subagents). The shared ModelRegistry would otherwise
-	// overwrite the parent's streamSimple, breaking tool result delivery.
+	// Guard against re-registration when the module is loaded multiple times.
+	// A nested runtime receives the parent's provider registration before loading
+	// this module; replacing its streamSimple would break tool-result delivery.
 	// See ACTIVE_STREAM_SIMPLE_KEY for the full mechanism.
 
 	const g = globalThis as Record<symbol, any>;
@@ -1711,10 +1689,9 @@ export default function (pi: ExtensionAPI) {
 			streamSimple: streamClaudeAgentSdk as any,
 		});
 	} else {
-		// Subsequent instance (subagent session): skip registration entirely.
-		// The subagent already has access to claude-bridge models via the shared
-		// ModelRegistry from the parent's registration. Calls to those models
-		// route through the parent's streamSimple via reentrant QueryContexts.
+		// Subsequent instance: retain the provider registration propagated into
+		// the nested runtime. Calls route through the parent's streamSimple and
+		// its reentrant QueryContexts.
 		debug(`provider: skipping re-registration, parent instance active (module=${moduleInstanceId})`);
 	}
 
@@ -1735,7 +1712,7 @@ export default function (pi: ExtensionAPI) {
 			prompt: Type.String({ description: "The question or task for Claude Code. By default Claude sees the full conversation history. Don't research up front, let Claude explore." }),
 			mode: Type.Optional(StringEnum(modeValues, { description: modeDesc })),
 			model: Type.Optional(Type.String({ description: 'Claude model (e.g. "opus", "sonnet", "haiku", or full ID). Defaults to "opus".' })),
-			thinking: Type.Optional(StringEnum(["off", "minimal", "low", "medium", "high", "xhigh"] as const, { description: "Thinking effort level. Omit to use Claude Code's default." })),
+			thinking: Type.Optional(StringEnum(["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const, { description: "Thinking effort level. Omit to use Claude Code's default." })),
 			isolated: Type.Optional(Type.Boolean({ description: "When true, Claude sees only this prompt (clean session). When false (default), Claude sees the full conversation history." })),
 		});
 		pi.registerTool<typeof askClaudeParams>({
@@ -1791,9 +1768,9 @@ export default function (pi: ExtensionAPI) {
 			async execute(_id, params, signal, onUpdate, ctx) {
 				// Guard: circular delegation
 				if (ctx.model?.baseUrl === "claude-bridge") {
-					debug("askClaude: blocked circular delegation (active provider is claude-bridge)");
+					debug("askClaude: blocked circular delegation (active model already uses Claude Code)");
 					return {
-						content: [{ type: "text" as const, text: "Error: AskClaude cannot be used when the active provider is claude-bridge — you're already running through Claude Code." }],
+						content: [{ type: "text" as const, text: "Error: AskClaude cannot be used when the active model already runs through Claude Code." }],
 						details: { error: true },
 					};
 				}
@@ -1816,7 +1793,6 @@ export default function (pi: ExtensionAPI) {
 				try {
 					const result = await promptAndWait(params.prompt, mode, toolCalls, signal, {
 						systemPrompt: ctx.getSystemPrompt(),
-						appendSkills: askConf?.appendSkills,
 						model: params.model,
 						thinking: params.thinking,
 						isolated,

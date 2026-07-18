@@ -58,18 +58,18 @@ run() {
 
 run "provider: print mode responds" \
   pi --no-session -ne -e "$DIR" \
-  --model "claude-bridge/claude-sonnet-4-6" \
+  --model "anthropic/claude-sonnet-4-6" \
   -p "Reply with just the word 'yes'"
 
 run "provider: --provider flag works" \
   pi --no-session -ne -e "$DIR" \
-  --provider claude-bridge \
+  --provider anthropic \
   -p "Reply with just the word 'yes'"
 
 run "provider: model list includes provider" \
-  bash -c "pi --no-session -ne -e '$DIR' --list-models 2>&1 | grep claude-bridge"
+  bash -c "pi --no-session -ne -e '$DIR' --list-models 2>&1 | grep -Eq '^anthropic[[:space:]]+claude-sonnet-4-6[[:space:]]'"
 
-# AskClaude only registers when a non-claude-bridge provider is active
+# AskClaude is only usable when the active model is not already routed through Claude Code.
 run "tool: AskClaude registered" \
   bash -c "pi --no-session -ne -e '$DIR' --mode json --provider '$ALT_PROVIDER' --model '$ALT_MODEL' -p 'list your tools' 2>&1 | grep -q AskClaude && echo ok"
 

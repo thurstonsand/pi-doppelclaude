@@ -37,7 +37,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRpcHarness } from "./lib/rpc-harness.mjs";
 
-const BRIDGE_MODEL = "claude-bridge/claude-haiku-4-5";
+const BRIDGE_MODEL = "anthropic/claude-haiku-4-5";
 const COMPACT_TIMEOUT = 90_000; // compact should finish in ~10s; hang = timeout
 const TEST_TIMEOUT = 180_000;
 

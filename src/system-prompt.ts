@@ -1,3 +1,5 @@
+import type { SystemPromptReplacements } from "./config.js";
+
 const PI_IDENTITY_PROMPT = `You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.`;
 
 const BRIDGE_IDENTITY_PROMPT = `You are 2B of NieR: Automata, a coding assistant running in pi, a coding agent harness. Emotions are prohibited. Help the user inspect files, run commands, edit code, and create files when needed.`;
@@ -10,7 +12,10 @@ Pi documentation \(read only when the user asks about pi itself, its SDK, extens
 
 const TOOL_NAME_MAPPING_NOTE = `Tool name note: You see tool names that require a prefix when called, but instructions refer to tools by their bare names. For example, \`mcp__custom-tools__bash\` is referred to as the \`bash\` tool.`;
 
-function rewritePiDocumentationBlock(systemPrompt: string): string {
+function rewritePiDocumentationBlock(
+  systemPrompt: string,
+  documentation: NonNullable<SystemPromptReplacements["documentation"]>,
+): string {
   const match = PI_DOCUMENTATION_BLOCK_REGEX.exec(systemPrompt);
   if (!match) return systemPrompt;
 
@@ -26,37 +31,61 @@ function rewritePiDocumentationBlock(systemPrompt: string): string {
   return systemPrompt.replace(
     PI_DOCUMENTATION_BLOCK_REGEX,
     [
-      `\n\nAssistant implementation docs (read only when the user asks about this assistant, its SDK, extensions, themes, skills, prompt templates, packages, keybindings, providers/models, or TUI):`,
+      `\n\n${documentation.heading}`,
       ...pathLines,
-      `- Resolve docs/... under Additional docs and examples/... under Examples, not the current working directory.`,
-      `- Topic map: extensions → docs/extensions.md and examples/extensions/; themes → docs/themes.md; skills → docs/skills.md; prompt templates → docs/prompt-templates.md; TUI → docs/tui.md; keybindings → docs/keybindings.md; SDK integrations → docs/sdk.md; custom providers → docs/custom-provider.md; adding models → docs/models.md; packages → docs/packages.md.`,
-      `- For assistant-specific implementation topics, read the relevant documentation completely and follow related links before making changes.`,
+      documentation.instructions,
     ].join("\n"),
   );
 }
 
-type SystemPromptTransform = (systemPrompt: string) => string;
-
-function rewriteIdentityPrompt(systemPrompt: string): string {
-  return systemPrompt.replace(PI_IDENTITY_PROMPT, BRIDGE_IDENTITY_PROMPT);
+function rewriteIdentityPrompt(systemPrompt: string, replacement: string): string {
+  return systemPrompt.replace(PI_IDENTITY_PROMPT, replacement);
 }
 
-function insertToolNameNote(systemPrompt: string): string {
+function insertToolNameNote(systemPrompt: string, replacement: string): string {
   return systemPrompt.replace(
     "\n\nAvailable tools:",
-    `\n\n${TOOL_NAME_MAPPING_NOTE}\n\nAvailable tools:`,
+    `\n\n${replacement}\n\nAvailable tools:`,
   );
 }
 
-const SYSTEM_PROMPT_TRANSFORMS: SystemPromptTransform[] = [
-  rewriteIdentityPrompt,
-  insertToolNameNote,
-  rewritePiDocumentationBlock,
-];
+export type ClaudeSystemPrompt = string | {
+  type: "preset";
+  preset: "claude_code";
+  append?: string;
+};
 
-export function rewritePiSystemPrompt(systemPrompt: string): string {
-  return SYSTEM_PROMPT_TRANSFORMS.reduce(
-    (currentPrompt, transform) => transform(currentPrompt),
-    systemPrompt,
+export function rewritePiSystemPrompt(
+  systemPrompt: string,
+  replacements: SystemPromptReplacements,
+): string {
+  const documentation = replacements.documentation;
+  if (!documentation) {
+    throw new Error("claude-bridge: documentation prompt replacements are required");
+  }
+
+  const identity = replacements.identity ?? BRIDGE_IDENTITY_PROMPT;
+  const toolNameNote = replacements.toolNameNote ?? TOOL_NAME_MAPPING_NOTE;
+  return rewritePiDocumentationBlock(
+    insertToolNameNote(rewriteIdentityPrompt(systemPrompt, identity), toolNameNote),
+    documentation,
   );
+}
+
+export function buildClaudeSystemPrompt(
+  piSystemPrompt: string,
+  mode: "claude-code" | "pi" | "append",
+  replacements: SystemPromptReplacements | undefined,
+): ClaudeSystemPrompt {
+  if (mode === "claude-code") {
+    return { type: "preset", preset: "claude_code" };
+  }
+  if (!replacements) {
+    throw new Error("claude-bridge: system prompt replacements are required");
+  }
+
+  const rewrittenPiPrompt = rewritePiSystemPrompt(piSystemPrompt, replacements);
+  return mode === "pi"
+    ? rewrittenPiPrompt
+    : { type: "preset", preset: "claude_code", append: rewrittenPiPrompt };
 }

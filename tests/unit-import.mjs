@@ -122,7 +122,7 @@ describe("thinking block filtering", () => {
 
 	it("Anthropic provider thinking with signature preserved", () => {
 		const msgs = [
-			{ role: "assistant", provider: "claude-bridge", content: [
+			{ role: "assistant", provider: "anthropic", content: [
 				{ type: "thinking", thinking: "reasoning...", thinkingSignature: "sig123" },
 				{ type: "text", text: "answer" },
 			]},
@@ -147,7 +147,7 @@ describe("thinking block filtering", () => {
 
 	it("Anthropic provider thinking WITHOUT signature → dropped", () => {
 		const msgs = [
-			{ role: "assistant", provider: "claude-bridge", content: [
+			{ role: "assistant", provider: "anthropic", content: [
 				{ type: "thinking", thinking: "no sig" },
 				{ type: "text", text: "answer" },
 			]},

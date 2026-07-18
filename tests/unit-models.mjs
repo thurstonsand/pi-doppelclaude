@@ -5,7 +5,8 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { MODEL_IDS_IN_ORDER, applyLongContext, buildModels, claudeCodeModelId, resolveClaudeCodeRuntimeModel, resolveModel } from "../src/models.js";
+import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
+import { MODEL_IDS_IN_ORDER, applyLongContext, buildModels, claudeCodeModelId, resolveClaudeCodeRuntimeModel, resolveModel, resolveThinkingEffort } from "../src/models.js";
 
 const PRO = { plan: "pro", longContextExtraUsage: false };
 const MAX = { plan: "max", longContextExtraUsage: false };
@@ -14,7 +15,8 @@ const EXTRA = { plan: "pro", longContextExtraUsage: true };
 // Simulated pi-ai registry entry — extra fields mimic the ones pi-ai exposes
 // that must not leak into the provider-registered MODELS array.
 const mockPiAiModel = (id) => ({
-	id, name: id, reasoning: true, input: ["text"], cost: { input: 1, output: 1 },
+	id, name: id, reasoning: true, input: ["text"],
+	cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1.25 },
 	contextWindow: 200000, maxTokens: 8000,
 	// Leaky fields that should be stripped by the projection:
 	baseUrl: "https://api.anthropic.com", api: "anthropic", provider: "anthropic",
@@ -47,10 +49,10 @@ describe("MODELS projection", () => {
 		assert.deepEqual(models.map((m) => m.id), ["claude-haiku-4-5"]);
 	});
 
-	it("zeros out cost regardless of pi-ai pricing", () => {
+	it("preserves API-equivalent pricing", () => {
 		const models = buildModels(MODEL_IDS_IN_ORDER.map(mockPiAiModel));
 		for (const m of models) {
-			assert.deepEqual(m.cost, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+			assert.deepEqual(m.cost, { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1.25 });
 		}
 	});
 
@@ -60,21 +62,32 @@ describe("MODELS projection", () => {
 		assert.ok(models.every((m) => !m.name.includes("1M")));
 	});
 
-	it("fills default thinkingLevelMap for sonnet-5 and sonnet-4-6 when pi-ai omits it", () => {
-		const models = buildModels(MODEL_IDS_IN_ORDER.map(mockPiAiModel));
-		assert.deepEqual(find(models, "claude-sonnet-5")?.thinkingLevelMap, { xhigh: "max" });
-		assert.deepEqual(find(models, "claude-sonnet-4-6")?.thinkingLevelMap, { xhigh: "max" });
+	it("preserves Pi's thinkingLevelMap without local model-specific fallbacks", () => {
+		const withMap = (id) => ({ ...mockPiAiModel(id), thinkingLevelMap: { xhigh: "xhigh", max: "max" } });
+		const models = buildModels([withMap("claude-sonnet-5"), mockPiAiModel("claude-sonnet-4-6")]);
+		assert.deepEqual(find(models, "claude-sonnet-5")?.thinkingLevelMap, { xhigh: "xhigh", max: "max" });
+		assert.equal(find(models, "claude-sonnet-4-6")?.thinkingLevelMap, undefined);
 	});
 
-	it("preserves pi-ai's thinkingLevelMap when present", () => {
-		const withMap = (id) => ({ ...mockPiAiModel(id), thinkingLevelMap: { xhigh: "xhigh" } });
-		const models = buildModels([withMap("claude-sonnet-5")]);
-		assert.deepEqual(find(models, "claude-sonnet-5")?.thinkingLevelMap, { xhigh: "xhigh" });
+	it("projects native Pi 0.80.10 Sonnet thinking levels", () => {
+		const models = buildModels(getBuiltinModels("anthropic"));
+		assert.deepEqual(find(models, "claude-sonnet-5")?.thinkingLevelMap, { xhigh: "xhigh", max: "max" });
+		assert.deepEqual(find(models, "claude-sonnet-4-6")?.thinkingLevelMap, { max: "max" });
+	});
+});
+
+describe("thinking effort", () => {
+	const models = buildModels(getBuiltinModels("anthropic"));
+
+	it("uses native per-model mappings before generic effort aliases", () => {
+		assert.equal(resolveThinkingEffort(find(models, "claude-sonnet-5"), "xhigh"), "xhigh");
+		assert.equal(resolveThinkingEffort(find(models, "claude-opus-4-6"), "xhigh"), "max");
 	});
 
-	it("haiku gets no default thinkingLevelMap (no effort support)", () => {
-		const models = buildModels(MODEL_IDS_IN_ORDER.map(mockPiAiModel));
-		assert.equal(find(models, "claude-haiku-4-5")?.thinkingLevelMap, undefined);
+	it("supports max and disables effort for off or omitted levels", () => {
+		assert.equal(resolveThinkingEffort(find(models, "claude-sonnet-5"), "max"), "max");
+		assert.equal(resolveThinkingEffort(find(models, "claude-sonnet-5"), "off"), undefined);
+		assert.equal(resolveThinkingEffort(find(models, "claude-sonnet-5"), undefined), undefined);
 	});
 });
 

@@ -26,12 +26,12 @@ describe("loadConfig", () => {
 			const configDir = join(cwd, CONFIG_DIR_NAME);
 			mkdirSync(configDir, { recursive: true });
 			writeFileSync(join(configDir, "claude-bridge.json"), JSON.stringify({
-				provider: { plan: "max" },
+				provider: { plan: "max", systemPromptMode: "claude-code" },
 				askClaude: { enabled: false },
 			}));
 
 			assert.deepEqual(loadConfig(cwd), {
-				provider: { plan: "max" },
+				provider: { plan: "max", systemPromptMode: "claude-code" },
 				askClaude: { enabled: false },
 			});
 		} finally {
@@ -47,7 +47,7 @@ describe("loadConfig", () => {
 			mkdirSync(globalDir, { recursive: true });
 			mkdirSync(projectDir, { recursive: true });
 			writeFileSync(join(globalDir, "claude-bridge.json"), JSON.stringify({
-				provider: { plan: "pro", strictMcpConfig: true },
+				provider: { plan: "pro", strictMcpConfig: true, systemPromptMode: "claude-code" },
 				askClaude: { enabled: true, defaultMode: "read" },
 			}));
 			writeFileSync(join(projectDir, "claude-bridge.json"), JSON.stringify({
@@ -56,11 +56,64 @@ describe("loadConfig", () => {
 			}));
 
 			assert.deepEqual(loadConfig(cwd), {
-				provider: { plan: "max", strictMcpConfig: true },
+				provider: { plan: "max", strictMcpConfig: true, systemPromptMode: "claude-code" },
 				askClaude: { enabled: false, defaultMode: "read" },
 			});
 		} finally {
 			rmSync(cwd, { recursive: true, force: true });
 		}
+	}));
+
+	it("requires custom documentation replacements whenever the Pi prompt is included", () => withTempHome((home) => {
+		const configDir = join(home, ".pi", "agent");
+		mkdirSync(configDir, { recursive: true });
+
+		const cwd = mkdtempSync(join(tmpdir(), "claude-bridge-project-"));
+		try {
+			for (const systemPromptMode of ["pi", "append"]) {
+				writeFileSync(join(configDir, "claude-bridge.json"), JSON.stringify({
+					provider: { systemPromptMode },
+				}));
+				assert.throws(
+					() => loadConfig(cwd),
+					/systemPromptReplacements\.documentation\.heading and \.instructions/,
+				);
+			}
+		} finally {
+			rmSync(cwd, { recursive: true, force: true });
+		}
+	}));
+
+	it("accepts custom documentation replacements when the Pi prompt is included", () => withTempHome((home) => {
+		const configDir = join(home, ".pi", "agent");
+		mkdirSync(configDir, { recursive: true });
+		writeFileSync(join(configDir, "claude-bridge.json"), JSON.stringify({
+			provider: {
+				systemPromptMode: "pi",
+				systemPromptReplacements: {
+					documentation: {
+						heading: "Custom documentation",
+						instructions: "Use these paths only when necessary.",
+					},
+				},
+			},
+		}));
+
+		const cwd = mkdtempSync(join(tmpdir(), "claude-bridge-project-"));
+		try {
+			assert.equal(loadConfig(cwd).provider.systemPromptReplacements.documentation.heading, "Custom documentation");
+		} finally {
+			rmSync(cwd, { recursive: true, force: true });
+		}
+	}));
+
+	it("rejects unknown and incorrectly typed settings", () => withTempHome((home) => {
+		const configDir = join(home, ".pi", "agent");
+		mkdirSync(configDir, { recursive: true });
+		writeFileSync(join(configDir, "claude-bridge.json"), JSON.stringify({
+			provider: { strictMcpConfig: "yes" },
+		}));
+
+		assert.throws(() => loadConfig(process.cwd()), /strictMcpConfig.*must be boolean/);
 	}));
 });

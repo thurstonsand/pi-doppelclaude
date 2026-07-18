@@ -1,5 +1,13 @@
 # Changelog
 
+## UNRELEASED
+
+- **Add: configurable Pi prompt modes and replacement prose** — `provider.systemPromptMode` now distinguishes Claude Code only, rewritten Pi only, and Claude Code with the rewritten Pi prompt appended. Modes that include Pi require custom documentation heading and instructions, and every query path applies the same replacements. Existing `"replace"` configs must use `"pi"`; the default `"append"` mode now requires replacements. Remove the redundant `appendSystemPrompt` and `appendSkills` settings; TypeBox validation rejects malformed or unknown bridge settings at startup.
+- **Add: API-equivalent cost reporting** — unconditionally preserve Anthropic catalog pricing so Pi's footer and cache-miss notices show reference prices for subscription-backed usage; no setting is required.
+- **Refactor: use Pi's public Anthropic model catalog** — replace the compatibility catalog import and local Sonnet thinking-level fallbacks with Pi 0.80.10's native per-model mappings. Provider and AskClaude calls now share the same effort resolution, including `max`.
+- **Bump: Pi 0.80.10** — update Pi development and peer dependency floors to the version supplying the canonical model metadata.
+- **Tests: use the fork's Anthropic provider ID** — update stale thinking-block fixtures and integration model selectors left behind when the fork replaced the `claude-bridge` provider ID.
+
 ## 0.6.2 — 2026-07-06
 
 - **Fix: Sonnet 5 and Fable 5 with 1M context** — bare model IDs (`claude-sonnet-5`, `claude-fable-5`) are 200K context. Must pass `[1m]` suffix for both, similar to Opus 4.8.
