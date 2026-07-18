@@ -10,6 +10,7 @@
 # assistant message append caused syncSharedSession to see 1 "missed" message.
 
 source "$(dirname "$0")/lib/bash-setup.sh"
+source "$(dirname "$0")/lib/timeout.sh"
 
 echo "=== cache-test.sh ==="
 

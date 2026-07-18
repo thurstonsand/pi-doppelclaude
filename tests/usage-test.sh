@@ -12,6 +12,7 @@
 #   turns: number of conversation turns (default: 10)
 
 source "$(dirname "$0")/lib/bash-setup.sh"
+source "$(dirname "$0")/lib/timeout.sh"
 
 echo "=== usage-test.sh ==="
 

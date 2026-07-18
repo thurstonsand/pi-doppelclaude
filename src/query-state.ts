@@ -14,15 +14,20 @@ export interface PendingToolCall {
 	resolve: (result: McpResult) => void;
 }
 
+export interface ActiveQuery {
+	interrupt(): Promise<void>;
+	close(): void;
+}
+
 export class QueryContext {
 	// Query-scoped (fully isolated per query)
-	activeQuery: unknown | null = null;
+	activeQuery: ActiveQuery | null = null;
 	currentPiStream: AssistantMessageEventStream | null = null;
+	fatalError: string | null = null;
 	latestCursor = 0;
 	pendingToolCalls = new Map<string, PendingToolCall>();
 	pendingResults = new Map<string, McpResult>();
 	turnToolCallIds: string[] = [];
-	nextHandlerIdx = 0;
 	deferredUserMessages: string[] = [];
 
 	// Per-turn (reset together)
@@ -47,8 +52,8 @@ export class QueryContext {
 		this.turnStarted = false;
 		this.turnSawStreamEvent = false;
 		this.turnSawToolCall = false;
-		// turnToolCallIds and nextHandlerIdx are NOT reset — they persist across
-		// tool-result delivery callbacks within the same assistant message.
+		// turnToolCallIds is not reset — it persists across tool-result delivery
+		// callbacks within the same assistant message.
 	}
 }
 

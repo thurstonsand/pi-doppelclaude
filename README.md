@@ -57,7 +57,6 @@ Config: `~/.pi/agent/claude-bridge.json` (global) or the project Pi config direc
   "askClaude": {
     "enabled": true,
     "allowFullMode": true,
-    "defaultIsolated": false,
     "description": "Custom tool description override"
   },
   "provider": {
@@ -72,8 +71,6 @@ Config: `~/.pi/agent/claude-bridge.json` (global) or the project Pi config direc
         "instructions": "Resolve documentation paths from the locations above and read relevant files completely."
       }
     },
-    "settingSources": [],
-    "strictMcpConfig": true,
     "pathToClaudeCodeExecutable": "/home/you/.nix-profile/bin/claude"
   }
 }
@@ -82,11 +79,8 @@ Config: `~/.pi/agent/claude-bridge.json` (global) or the project Pi config direc
 `askClaude`:
 
 - `enabled` — register the AskClaude tool (default `true`)
-- `name` — override the tool's pi-side name (default `"AskClaude"`)
-- `label` — override the TUI label (default `"Ask Claude Code"`)
 - `description` — override the tool description. Default when `allowFullMode: true`: _"Delegate to Claude Code for a second opinion or analysis (code review, architecture questions, debugging theories), or to autonomously handle a task. Defaults to read-only mode — use full mode when the user wants to delegate a task that requires changes. Prefer to handle straightforward tasks yourself."_
 - `defaultMode` — `"read"` (default), `"none"`, or `"full"`
-- `defaultIsolated` — start each call in a fresh session (default `false`)
 - `allowFullMode` — allow `mode: "full"`; set `false` to lock it out
 
 `provider`:
@@ -95,8 +89,7 @@ Config: `~/.pi/agent/claude-bridge.json` (global) or the project Pi config direc
 - `longContextExtraUsage` — set to `true` to enable 1M models that cost money through Extra Usage. It enables Sonnet 4.6 with 1M on every plan and Opus 4.6 with 1M on Pro. Not needed for Opus 4.7 or 4.8.
 - `systemPromptMode` — `"claude-code"` uses only Claude Code's preset, `"pi"` uses only the rewritten Pi system prompt, and `"append"` appends the rewritten Pi prompt to Claude Code's preset (default `"append"`).
 - `systemPromptReplacements` — replacement prose used whenever the Pi prompt is included (`"pi"` or `"append"`). `documentation.heading` and `documentation.instructions` are required and must be nonblank. `identity` and `toolNameNote` are optional overrides. Discovered installation paths are preserved between the custom heading and instructions.
-- `settingSources` — CC filesystem settings to load. Pi-only mode defaults to `[]`; other modes use the Claude Code default when omitted.
-- `strictMcpConfig` — block MCP servers from `~/.claude.json` / `.mcp.json` (default `true`). Cloud MCP (Gmail/Drive via claude.ai OAuth) is always blocked.
+- Claude Code filesystem settings are isolated in `"pi"` mode and use Claude Code defaults in `"claude-code"` and `"append"` modes. Filesystem and cloud MCP servers are always blocked, since pi is the tool-execution layer.
 - `pathToClaudeCodeExecutable` — path to the `claude` binary. Useful if your OS/filesystem has the SDK's bundled musl/glibc binaries in a place where they can't run. For example, with Nix you can set the binary to e.g. `"/home/you/.nix-profile/bin/claude"`.
 
 ### System prompt modes

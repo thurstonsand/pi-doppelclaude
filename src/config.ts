@@ -13,15 +13,12 @@ const strictObject = <T extends Record<string, TSchema>>(properties: T) =>
 
 const ASK_CLAUDE_CONFIG_SCHEMA = strictObject({
 	enabled: Type.Optional(Type.Boolean()),
-	name: Type.Optional(Type.String()),
-	label: Type.Optional(Type.String()),
 	description: Type.Optional(Type.String()),
 	defaultMode: Type.Optional(Type.Union([
 		Type.Literal("full"),
 		Type.Literal("read"),
 		Type.Literal("none"),
 	])),
-	defaultIsolated: Type.Optional(Type.Boolean()),
 	allowFullMode: Type.Optional(Type.Boolean()),
 });
 
@@ -43,12 +40,6 @@ const PROVIDER_CONFIG_SCHEMA = strictObject({
 		Type.Literal("append"),
 	])),
 	systemPromptReplacements: Type.Optional(SYSTEM_PROMPT_REPLACEMENTS_SCHEMA),
-	settingSources: Type.Optional(Type.Array(Type.Union([
-		Type.Literal("user"),
-		Type.Literal("project"),
-		Type.Literal("local"),
-	]))),
-	strictMcpConfig: Type.Optional(Type.Boolean()),
 	pathToClaudeCodeExecutable: Type.Optional(Type.String()),
 	plan: Type.Optional(Type.Union([Type.Literal("pro"), Type.Literal("max")])),
 	longContextExtraUsage: Type.Optional(Type.Boolean()),

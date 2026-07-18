@@ -4,6 +4,7 @@
 # Requires: CLAUDE_BRIDGE_TESTING_ALT_PROVIDER / CLAUDE_BRIDGE_TESTING_ALT_MODEL
 
 source "$(dirname "$0")/lib/bash-setup.sh"
+source "$(dirname "$0")/lib/timeout.sh"
 
 echo "=== smoke-test.sh ==="
 
@@ -67,7 +68,7 @@ run "provider: --provider flag works" \
   -p "Reply with just the word 'yes'"
 
 run "provider: model list includes provider" \
-  bash -c "pi --no-session -ne -e '$DIR' --list-models 2>&1 | grep -Eq '^anthropic[[:space:]]+claude-sonnet-4-6[[:space:]]'"
+  bash -c "pi --no-session -ne -e '$DIR' --list-models 2>&1 | grep -Eq '^anthropic[[:space:]]+claude-sonnet-4-6[[:space:]]' && echo ok"
 
 # AskClaude is only usable when the active model is not already routed through Claude Code.
 run "tool: AskClaude registered" \

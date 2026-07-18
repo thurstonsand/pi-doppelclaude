@@ -47,7 +47,7 @@ describe("loadConfig", () => {
 			mkdirSync(globalDir, { recursive: true });
 			mkdirSync(projectDir, { recursive: true });
 			writeFileSync(join(globalDir, "claude-bridge.json"), JSON.stringify({
-				provider: { plan: "pro", strictMcpConfig: true, systemPromptMode: "claude-code" },
+				provider: { plan: "pro", systemPromptMode: "claude-code" },
 				askClaude: { enabled: true, defaultMode: "read" },
 			}));
 			writeFileSync(join(projectDir, "claude-bridge.json"), JSON.stringify({
@@ -56,7 +56,7 @@ describe("loadConfig", () => {
 			}));
 
 			assert.deepEqual(loadConfig(cwd), {
-				provider: { plan: "max", strictMcpConfig: true, systemPromptMode: "claude-code" },
+				provider: { plan: "max", systemPromptMode: "claude-code" },
 				askClaude: { enabled: false, defaultMode: "read" },
 			});
 		} finally {
@@ -107,13 +107,19 @@ describe("loadConfig", () => {
 		}
 	}));
 
-	it("rejects unknown and incorrectly typed settings", () => withTempHome((home) => {
+	it("rejects removed settings", () => withTempHome((home) => {
 		const configDir = join(home, ".pi", "agent");
 		mkdirSync(configDir, { recursive: true });
-		writeFileSync(join(configDir, "claude-bridge.json"), JSON.stringify({
-			provider: { strictMcpConfig: "yes" },
-		}));
 
-		assert.throws(() => loadConfig(process.cwd()), /strictMcpConfig.*must be boolean/);
+		for (const removedConfig of [
+			{ provider: { strictMcpConfig: true } },
+			{ provider: { settingSources: [] } },
+			{ askClaude: { name: "Claude" } },
+			{ askClaude: { label: "Claude" } },
+			{ askClaude: { defaultIsolated: true } },
+		]) {
+			writeFileSync(join(configDir, "claude-bridge.json"), JSON.stringify(removedConfig));
+			assert.throws(() => loadConfig(process.cwd()), /must not have additional properties/);
+		}
 	}));
 });

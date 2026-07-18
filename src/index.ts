@@ -1,10 +1,10 @@
-import { calculateCost, StringEnum, type AssistantMessage, type AssistantMessageEventStream, type Context, type Model, type SimpleStreamOptions, type Tool } from "@earendil-works/pi-ai";
-import * as piAi from "@earendil-works/pi-ai";
+import { calculateCost, createAssistantMessageEventStream, StringEnum, type AssistantMessage, type AssistantMessageEventStream, type Context, type Model, type SimpleStreamOptions, type Tool } from "@earendil-works/pi-ai";
 import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
 import { buildSessionContext, compact, keyHint, type CompactionEntry, type ExtensionAPI, type ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { createSdkMcpServer, query, type SDKMessage, type SDKUserMessage, type SettingSource } from "@anthropic-ai/claude-agent-sdk";
 import type { Base64ImageSource, ContentBlockParam, MessageParam } from "@anthropic-ai/sdk/resources";
 import { Type } from "typebox";
+import { Value } from "typebox/value";
 import { Text } from "@earendil-works/pi-tui";
 import { createSession, deleteSession, repairToolPairing } from "cc-session-io";
 import { appendFileSync, mkdirSync, realpathSync, statSync } from "fs";
@@ -20,13 +20,6 @@ import { loadConfig, type Config } from "./config.js";
 import { jsonSchemaToZodShape } from "./typebox-to-zod.js";
 import { buildActionSummary, type ToolCallState } from "./askclaude-ui.js";
 import { buildClaudeSystemPrompt } from "./system-prompt.js";
-
-// Compat (#2): use factory if available (pi-ai ≥0.66), else fall back to constructor (gsd-pi etc.)
-const _piAi = piAi as any;
-const newAssistantMessageEventStream: () => AssistantMessageEventStream =
-	typeof _piAi.createAssistantMessageEventStream === "function"
-		? _piAi.createAssistantMessageEventStream
-		: () => new _piAi.AssistantMessageEventStream();
 
 // --- Debug logging ---
 // CLAUDE_BRIDGE_DEBUG=1 enables debug logging to ~/.pi/agent/claude-bridge.log
@@ -109,6 +102,7 @@ function diagDump(label: string, data: Record<string, unknown>) {
 // On session_shutdown (including /reload), clearSession() resets this so a fresh
 // registration can occur for the next session.
 const ACTIVE_STREAM_SIMPLE_KEY = Symbol.for("claude-bridge:activeStreamSimple");
+const BRIDGE_CLIENT_APP = "pi-claude-bridge/0.6.2";
 
 const SDK_TO_PI_TOOL_NAME: Record<string, string> = {
 	read: "read", write: "write", edit: "edit", bash: "bash",
@@ -117,6 +111,7 @@ const SDK_TO_PI_TOOL_NAME: Record<string, string> = {
 // Project Pi's public Anthropic catalog down to bridge provider metadata.
 const MODELS = buildModels(getBuiltinModels("anthropic"));
 let providerSettings: NonNullable<Config["provider"]> = {};
+// TODO(phase 2): derive plan and served context windows from live-query accountInfo/modelUsage.
 let longContextSettings: LongContextSettings = { plan: "pro", longContextExtraUsage: false };
 
 function resolveModel(input: string) {
@@ -310,13 +305,25 @@ function extractIsolatedSummaryPrompt(messages: Context["messages"]): string {
 
 function resultErrorText(message: SDKMessage): string {
 	const result = message as SDKMessage & { subtype?: string; errors?: unknown; error?: unknown };
-	if (Array.isArray(result.errors)) return result.errors.map(String).join("\n");
+	if (Array.isArray(result.errors) && result.errors.length > 0) return result.errors.map(String).join("\n");
 	if (typeof result.error === "string") return result.error;
-	return `Claude Code summary failed: ${result.subtype ?? "unknown result"}`;
+	return `Claude Code failed: ${result.subtype ?? "unknown result"}`;
+}
+
+function settingSourcesFor(systemPromptMode: string): SettingSource[] | undefined {
+	return systemPromptMode === "pi" ? [] : undefined;
+}
+
+function sdkChildEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
+	return {
+		...process.env,
+		CLAUDE_AGENT_SDK_CLIENT_APP: BRIDGE_CLIENT_APP,
+		...extra,
+	};
 }
 
 function isolatedStreamFn(model: Model<any>, context: Context, options?: SimpleStreamOptions): AssistantMessageEventStream {
-	const stream = newAssistantMessageEventStream();
+	const stream = createAssistantMessageEventStream();
 	void runIsolatedSummary(model, context, options, stream);
 	return stream;
 }
@@ -340,9 +347,7 @@ async function runIsolatedSummary(
 		const cwd = (options as { cwd?: string } | undefined)?.cwd ?? process.cwd();
 		const compactProviderSettings = loadConfig(cwd).provider ?? {};
 		const compactSystemPromptMode = compactProviderSettings.systemPromptMode ?? "append";
-		const compactSettingSources: SettingSource[] | undefined = compactSystemPromptMode === "pi"
-			? compactProviderSettings.settingSources ?? []
-			: compactProviderSettings.settingSources;
+		const compactSettingSources = settingSourcesFor(compactSystemPromptMode);
 		const claudeExecutable = compactProviderSettings.pathToClaudeCodeExecutable;
 		const cliModel = claudeCodeModelId(model, longContextSettings);
 		debug(`compact summary: spawn model=${cliModel} registeredModel=${model.id} promptLen=${promptText.length}`);
@@ -351,7 +356,7 @@ async function runIsolatedSummary(
 			prompt: promptText,
 			options: {
 				cwd,
-				env: { ...process.env, DISABLE_AUTO_COMPACT: "1", CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" },
+				env: sdkChildEnv({ DISABLE_AUTO_COMPACT: "1", CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" }),
 				tools: [],
 				strictMcpConfig: true,
 				...(compactSettingSources ? { settingSources: compactSettingSources } : {}),
@@ -613,6 +618,10 @@ export const __test = {
 		return sharedSession;
 	},
 	syncSharedSession,
+	consumeQuery,
+	finalizeCurrentStream,
+	createMcpToolHandler,
+	streamClaudeAgentSdk,
 };
 
 // --- Provider helpers: tool name mapping ---
@@ -705,32 +714,51 @@ function resolveMcpTools(context: Context, excludeToolName?: string): {
 	return { mcpTools, customToolNameToSdk, customToolNameToPi };
 }
 
+const MCP_HANDLER_EXTRA_SCHEMA = Type.Object({
+	_meta: Type.Object({
+		"claudecode/toolUseId": Type.String(),
+	}),
+});
+
+function failMcpBridge(queryCtx: QueryContext): void {
+	const message = "Claude bridge incompatible with this Claude Code version: CLI no longer sends claudecode/toolUseId in MCP tool metadata";
+	debug(`provider: fatal MCP bridge error: ${message}`);
+	piUI?.notify(message, "error");
+	queryCtx.fatalError = message;
+	emitTerminalError(queryCtx, "error", message);
+	try { queryCtx.activeQuery?.close(); } catch {}
+}
+
+function createMcpToolHandler(toolName: string, queryCtx: QueryContext) {
+	return async (_args: unknown, extra: unknown): Promise<McpResult> => {
+		if (!Value.Check(MCP_HANDLER_EXTRA_SCHEMA, extra)) {
+			failMcpBridge(queryCtx);
+			// Never return a tool result after a fatal bridge error; the closed query must remain terminal.
+			return new Promise<McpResult>(() => {});
+		}
+		const toolCallId = extra._meta["claudecode/toolUseId"];
+		if (queryCtx.pendingResults.has(toolCallId)) {
+			const result = queryCtx.pendingResults.get(toolCallId)!;
+			queryCtx.pendingResults.delete(toolCallId);
+			debug(`mcp handler: ${toolName} [${toolCallId}] → resolved from queue (${queryCtx.pendingResults.size} remaining)`);
+			return result;
+		}
+		debug(`mcp handler: ${toolName} [${toolCallId}] → waiting`);
+		return new Promise<McpResult>((resolve) => {
+			queryCtx.pendingToolCalls.set(toolCallId, { toolName, resolve });
+		});
+	};
+}
+
 // Creates an MCP server that bridges pi tools to the SDK. Each tool handler
-// blocks on a Promise until pi delivers the tool result via streamSimple.
-// Handlers are assigned toolCallIds from turnToolCallIds (populated when the SDK
-// emits tool_use blocks). Results are matched by ID, not position.
-// Handlers close over the captured `queryCtx`, ensuring they operate on the
-// correct query's state while multiple queries run concurrently.
+// blocks on a Promise until pi delivers the matching tool result.
 function buildMcpServers(tools: Tool[], queryCtx: QueryContext): Record<string, ReturnType<typeof createSdkMcpServer>> | undefined {
 	if (!tools.length) return undefined;
 	const mcpTools = tools.map((tool) => ({
 		name: tool.name,
 		description: tool.description,
 		inputSchema: jsonSchemaToZodShape(tool.parameters),
-		handler: async () => {
-			const toolCallId = queryCtx.turnToolCallIds[queryCtx.nextHandlerIdx++];
-			if (!toolCallId) debug(`WARNING: mcp handler ${tool.name} has no toolCallId (idx=${queryCtx.nextHandlerIdx - 1}, available=${queryCtx.turnToolCallIds.length})`);
-			if (toolCallId && queryCtx.pendingResults.has(toolCallId)) {
-				const result = queryCtx.pendingResults.get(toolCallId)!;
-				queryCtx.pendingResults.delete(toolCallId);
-				debug(`mcp handler: ${tool.name} [${toolCallId}] → resolved from queue (${queryCtx.pendingResults.size} remaining)`);
-				return result;
-			}
-			debug(`mcp handler: ${tool.name} [${toolCallId}] → waiting`);
-			return new Promise<McpResult>((resolve) => {
-				queryCtx.pendingToolCalls.set(toolCallId, { toolName: tool.name, resolve });
-			});
-		},
+		handler: createMcpToolHandler(tool.name, queryCtx),
 	}));
 	const server = createSdkMcpServer({ name: MCP_SERVER_NAME, version: "1.0.0", tools: mcpTools });
 	return { [MCP_SERVER_NAME]: server };
@@ -819,15 +847,32 @@ function ensureTurnStarted(c: QueryContext): void {
 	}
 }
 
-function finalizeCurrentStream(c: QueryContext, stopReason?: string): void {
-	if (!c.currentPiStream || !c.turnOutput) return;
-	debug(`provider: finalizeCurrentStream called, stopReason=${stopReason}, turnOutput=${JSON.stringify({stopReason: c.turnOutput!.stopReason, error: c.turnOutput!.errorMessage})}`);
-	if (!c.turnStarted) ensureTurnStarted(c);
-	const reason = stopReason === "length" ? "length" : "stop";
+function emitTerminalError(c: QueryContext, reason: "aborted" | "error", message: string): void {
+	if (!c.turnOutput) return;
+	c.turnOutput.stopReason = reason;
+	c.turnOutput.errorMessage = message;
+	if (!c.currentPiStream) return;
+	ensureTurnStarted(c);
 	const stream = c.currentPiStream;
-	stream!.push({ type: "done", reason, message: c.turnOutput });
+	stream.push({ type: "error", reason, error: c.turnOutput });
 	markStreamComplete(stream);
-	stream!.end();
+	stream.end();
+	c.currentPiStream = null;
+}
+
+function finalizeCurrentStream(c: QueryContext): void {
+	if (!c.currentPiStream || !c.turnOutput) return;
+	debug(`provider: finalizeCurrentStream called, turnOutput=${JSON.stringify({stopReason: c.turnOutput.stopReason, error: c.turnOutput.errorMessage})}`);
+	if (c.turnOutput.stopReason === "error") {
+		emitTerminalError(c, "error", c.turnOutput.errorMessage ?? "Query failed");
+		return;
+	}
+	if (!c.turnStarted) ensureTurnStarted(c);
+	const stream = c.currentPiStream;
+	const reason = c.turnOutput.stopReason === "length" ? "length" : "stop";
+	stream.push({ type: "done", reason, message: c.turnOutput });
+	markStreamComplete(stream);
+	stream.end();
 	c.currentPiStream = null;
 }
 
@@ -845,7 +890,6 @@ function processStreamEvent(
 
 	if (event?.type === "message_start") {
 		c.turnToolCallIds = [];
-		c.nextHandlerIdx = 0;
 		if (event.message?.usage) updateUsage(c.turnOutput, event.message.usage, model);
 		return;
 	}
@@ -955,7 +999,6 @@ function processAssistantMessage(message: SDKMessage, model: Model<any>, customT
 	const assistantMsg = (message as any).message;
 	if (!assistantMsg?.content) return;
 	c.turnToolCallIds = [];
-	c.nextHandlerIdx = 0;
 	debug(`processAssistantMessage fallback: ${assistantMsg.content.length} blocks, types=${assistantMsg.content.map((b: any) => b.type).join(",")}`);
 	for (const block of assistantMsg.content) {
 		if (block.type === "text" && block.text) {
@@ -1030,7 +1073,10 @@ async function consumeQuery(
 				break;
 			case "result":
 				logServedContextWindow("result", message, model);
-				if (!queryCtx.turnSawStreamEvent && message.subtype === "success") {
+				if (message.subtype !== "success") {
+					queryCtx.turnOutput.stopReason = "error";
+					queryCtx.turnOutput.errorMessage = resultErrorText(message);
+				} else if (!queryCtx.turnSawStreamEvent) {
 					ensureTurnStarted(queryCtx);
 					const text = message.result || "";
 					queryCtx.turnBlocks.push({ type: "text", text });
@@ -1073,7 +1119,7 @@ async function consumeQuery(
 /** Provider entry point. Pi calls this for each new prompt and each tool result.
  *  Two cases: tool result delivery (active query) or fresh query. */
 function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: SimpleStreamOptions): AssistantMessageEventStream {
-	const stream = newAssistantMessageEventStream();
+	const stream = createAssistantMessageEventStream();
 
 	// DEBUG: trace followUp message triggering
 	const lastMsgRole = context.messages[context.messages.length - 1]?.role;
@@ -1093,6 +1139,10 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 	// handlers. Results that arrive before their handler get queued in pendingResults.
 	if (resultCtx) {
 		claimCurrentPiStream(stream, "tool-result", resultCtx);
+		if (resultCtx.fatalError) {
+			emitTerminalError(resultCtx, "error", resultCtx.fatalError);
+			return stream;
+		}
 		resultCtx.resetTurnState(model);
 		debug(`provider: tool results, ${allResults.length} results, ${resultCtx.pendingToolCalls.size} waiting handlers, ctx.msgs=${context.messages.length}`);
 		for (const result of allResults) {
@@ -1145,12 +1195,15 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 	if (lastMsg?.role === "toolResult") {
 		debug(`provider: orphaned tool result after abort, emitting end_turn`);
 		if (sharedSession) sharedSession.cursor = context.messages.length;
-		const c = ctx();  // capture current context for the microtask
+		const c = ctx();
+		claimCurrentPiStream(stream, "orphan-tool-result", c);
+		if (c.fatalError) {
+			emitTerminalError(c, "error", c.fatalError);
+			return stream;
+		}
 		queueMicrotask(() => {
 			c.resetTurnState(model);
-			stream.push({ type: "done", reason: "stop", message: c.turnOutput });
-			markStreamComplete(stream);
-			stream.end();
+			finalizeCurrentStream(c);
 		});
 		return stream;
 	}
@@ -1169,6 +1222,7 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 	queryCtx.pendingToolCalls.clear();
 	queryCtx.pendingResults.clear();
 	queryCtx.deferredUserMessages = [];
+	queryCtx.fatalError = null;
 	queryCtx.resetTurnState(model);
 	queryCtx.latestCursor = 0;
 
@@ -1211,10 +1265,7 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 	// token overhead. --strict-mcp-config tells the binary to use ONLY mcpServers passed
 	// programmatically and ignore filesystem MCP entries — applied unconditionally because
 	// settingSources=undefined does NOT give isolation (the CC default loads all sources).
-	const settingSources: SettingSource[] | undefined = systemPromptMode === "pi"
-		? providerSettings.settingSources ?? []
-		: providerSettings.settingSources;
-	const strictMcpConfigEnabled = providerSettings.strictMcpConfig !== false;
+	const settingSources = settingSourcesFor(systemPromptMode);
 	const claudeExecutable = providerSettings.pathToClaudeCodeExecutable;
 
 	const effort = resolveThinkingEffort(model, options?.reasoning);
@@ -1223,7 +1274,6 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 	// pi-registered id. Log cliModel so debug lines reflect what CC actually received.
 	const cliModel = claudeCodeModelId(model, longContextSettings);
 	const extraArgs: Record<string, string | null> = { model: cliModel };
-	if (strictMcpConfigEnabled) extraArgs["strict-mcp-config"] = null;
 	// Opus 4.7 defaults thinking.display to "omitted" (empty thinking text in stream).
 	// Force summarized so thinking_delta events arrive. See anthropics/claude-agent-sdk-python#830.
 	if (effort) extraArgs["thinking-display"] = "summarized";
@@ -1238,13 +1288,15 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 	// also autocompact would double-flush the prompt cache and races pi's
 	// threshold with CC's, including CC's anti-thrashing guard (issue #8).
 	// Manual /compact in CC still works (we never invoke it).
-	const childEnv = { ...process.env, ENABLE_CLAUDEAI_MCP_SERVERS: "0", DISABLE_AUTO_COMPACT: "1" };
+	const queryEnv = sdkChildEnv({ ENABLE_CLAUDEAI_MCP_SERVERS: "0", DISABLE_AUTO_COMPACT: "1" });
 	const queryOptions: NonNullable<Parameters<typeof query>[0]["options"]> = {
 		cwd,
-		env: childEnv,
+		env: queryEnv,
 		tools: [],
 		permissionMode: "bypassPermissions",
+		allowDangerouslySkipPermissions: true,
 		includePartialMessages: true,
+		strictMcpConfig: true,
 		systemPrompt,
 		extraArgs,
 		...(effort ? { effort } : {}),
@@ -1258,7 +1310,7 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 	debug("provider: fresh query",
 		`model=${cliModel} msgs=${context.messages.length} tools=${mcpTools.length}`,
 		`resume=${resumeSessionId?.slice(0, 8) ?? "none"} effort=${effort ?? "default"}`,
-		`systemPromptMode=${systemPromptMode} strictMcp=${strictMcpConfigEnabled}`,
+		`systemPromptMode=${systemPromptMode} strictMcp=true`,
 		`prompt=${promptText.slice(0, 60)}${promptBlocks ? " [+images]" : ""}`);
 
 	// 3. Start SDK query and claim it for this context
@@ -1300,15 +1352,7 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 				if (sharedSession) sharedSession = { ...sharedSession, needsRebuild: true, forceRotate: true };
 				queryCtx.deferredUserMessages = [];
 				debug(`provider: abort detected, marked sharedSession needsRebuild + forceRotate`);
-				if (queryCtx.turnOutput) {
-					queryCtx.turnOutput.stopReason = "aborted";
-					queryCtx.turnOutput.errorMessage = "Operation aborted";
-				}
-				const stream = queryCtx.currentPiStream;
-				stream?.push({ type: "error", reason: "aborted", error: queryCtx.turnOutput! });
-				markStreamComplete(stream);
-				stream?.end();
-				queryCtx.currentPiStream = null;
+				emitTerminalError(queryCtx, "aborted", "Operation aborted");
 				return;
 			}
 
@@ -1366,7 +1410,7 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 				debug("provider: clearing activeQuery before final stream completion");
 				queryCtx.activeQuery = null;
 			}
-			finalizeCurrentStream(queryCtx, queryCtx.turnOutput?.stopReason);
+			finalizeCurrentStream(queryCtx);
 		})
 		.catch((error) => {
 			debug(`provider: query error, model=${cliModel}, aborted=${Boolean(options?.signal?.aborted)}, error=`, error);
@@ -1376,10 +1420,8 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 				sharedSession = null;
 			}
 			queryCtx.deferredUserMessages = [];
-			if (queryCtx.turnOutput) {
-				queryCtx.turnOutput.stopReason = options?.signal?.aborted ? "aborted" : "error";
-				queryCtx.turnOutput.errorMessage = error instanceof Error ? error.message : String(error);
-			}
+			const reason = options?.signal?.aborted ? "aborted" : "error";
+			const message = error instanceof Error ? error.message : String(error);
 			if (!isReentrant && queryCtx.activeQuery === sdkQuery) {
 				for (const pending of queryCtx.pendingToolCalls.values()) { pending.resolve({ content: [{ type: "text", text: "Query ended" }] }); }
 				queryCtx.pendingToolCalls.clear();
@@ -1387,11 +1429,7 @@ function streamClaudeAgentSdk(model: Model<any>, context: Context, options?: Sim
 				debug("provider: clearing activeQuery before error stream completion");
 				queryCtx.activeQuery = null;
 			}
-			const stream = queryCtx.currentPiStream;
-			stream?.push({ type: "error", reason: (queryCtx.turnOutput?.stopReason ?? "error") as "aborted" | "error", error: queryCtx.turnOutput! });
-			markStreamComplete(stream);
-			stream?.end();
-			queryCtx.currentPiStream = null;
+			emitTerminalError(queryCtx, reason, message);
 		})
 		.finally(() => {
 			if (options?.signal) options.signal.removeEventListener("abort", onAbort);
@@ -1460,18 +1498,13 @@ async function promptAndWait(
 			providerSettings.systemPromptReplacements,
 		)
 		: undefined;
-	const settingSources: SettingSource[] | undefined = systemPromptMode === "pi"
-		? providerSettings.settingSources ?? []
-		: providerSettings.settingSources;
+	const settingSources = settingSourcesFor(systemPromptMode);
 
 	const effort = resolveThinkingEffort(model, options?.thinking);
 
 	const claudeExecutable = providerSettings.pathToClaudeCodeExecutable;
 
-	const extraArgs: Record<string, string | null> = {
-		"strict-mcp-config": null,
-		model: cliModel,
-	};
+	const extraArgs: Record<string, string | null> = { model: cliModel };
 	if (effort) extraArgs["thinking-display"] = "summarized";
 
 	debug("askClaude:",
@@ -1483,8 +1516,10 @@ async function promptAndWait(
 		prompt,
 		options: {
 			cwd,
-			env: { ...process.env, ENABLE_CLAUDEAI_MCP_SERVERS: "0", DISABLE_AUTO_COMPACT: "1" },
+			env: sdkChildEnv({ ENABLE_CLAUDEAI_MCP_SERVERS: "0", DISABLE_AUTO_COMPACT: "1" }),
 			permissionMode: "bypassPermissions",
+			allowDangerouslySkipPermissions: true,
+			strictMcpConfig: true,
 			...(disallowedTools.length ? { disallowedTools } : {}),
 			...(effort ? { effort } : {}),
 			...(systemPrompt ? { systemPrompt } : {}),
@@ -1510,6 +1545,7 @@ async function promptAndWait(
 	let sdkMessageCount = 0;
 	let textDeltaCount = 0;
 	let resultSubtype: string | undefined;
+	let resultError: string | undefined;
 
 	try {
 		for await (const message of sdkQuery) {
@@ -1550,6 +1586,7 @@ async function promptAndWait(
 				}
 				case "result": {
 					resultSubtype = message.subtype;
+					if (message.subtype !== "success") resultError = resultErrorText(message);
 					const r = message as any;
 					if (r.usage) {
 						debug(`askClaude: result usage: in=${r.usage.input_tokens} out=${r.usage.output_tokens} cacheRead=${r.usage.cache_read_input_tokens ?? 0} cacheWrite=${r.usage.cache_creation_input_tokens ?? 0} turns=${r.num_turns ?? "?"}`);
@@ -1562,6 +1599,7 @@ async function promptAndWait(
 			}
 		}
 
+		if (resultError) throw new Error(resultError);
 		const stopReason = wasAborted ? "cancelled" : "stop";
 		debug(`askClaude: done`,
 			`stopReason=${stopReason} resultSubtype=${resultSubtype ?? "none"}`,
@@ -1582,7 +1620,7 @@ const DEFAULT_TOOL_DESCRIPTION = "Delegate to Claude Code for a second opinion o
 const PREVIEW_MAX_CHARS = 1000;
 const PREVIEW_MAX_LINES = 6;
 
-let askClaudeToolName = "AskClaude";
+const askClaudeToolName = "AskClaude";
 
 export default function (pi: ExtensionAPI) {
 	// Disable non-essential Claude Code traffic (update checks, MCP registry, telemetry)
@@ -1700,8 +1738,6 @@ export default function (pi: ExtensionAPI) {
 	const askConf = config.askClaude;
 	const allowFull = askConf?.allowFullMode !== false;
 	const defaultMode = askConf?.defaultMode ?? "read";
-	const defaultIsolated = askConf?.defaultIsolated ?? false;
-	askClaudeToolName = askConf?.name ?? "AskClaude";
 
 	const modeValues = allowFull ? ["read", "full", "none"] as const : ["read", "none"] as const;
 	let modeDesc = `"read" (default): questions about the codebase — review, analysis, explain. "none": general knowledge only (no file access).`;
@@ -1716,8 +1752,8 @@ export default function (pi: ExtensionAPI) {
 			isolated: Type.Optional(Type.Boolean({ description: "When true, Claude sees only this prompt (clean session). When false (default), Claude sees the full conversation history." })),
 		});
 		pi.registerTool<typeof askClaudeParams>({
-			name: askConf?.name ?? "AskClaude",
-			label: askConf?.label ?? "Ask Claude Code",
+			name: "AskClaude",
+			label: "Ask Claude Code",
 			description: askConf?.description ?? (allowFull ? DEFAULT_TOOL_DESCRIPTION_FULL : DEFAULT_TOOL_DESCRIPTION),
 			parameters: askClaudeParams,
 			renderCall(args, theme) {
@@ -1776,7 +1812,7 @@ export default function (pi: ExtensionAPI) {
 				}
 
 				const mode = (params.mode ?? defaultMode) as "full" | "read" | "none";
-				const isolated = params.isolated ?? defaultIsolated;
+				const isolated = params.isolated ?? false;
 				const toolCalls = new Map<string, ToolCallState>();
 				const start = Date.now();
 

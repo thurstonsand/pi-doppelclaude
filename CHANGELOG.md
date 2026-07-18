@@ -2,6 +2,9 @@
 
 ## UNRELEASED
 
+- **Fix: surface Agent SDK and MCP bridge failures** — propagate in-band Claude Code result errors to pi and AskClaude, match parallel MCP calls by their native `tool_use_id`, and fail the provider immediately if Claude Code omits the required MCP metadata. Shell integration tests now use a portable macOS-compatible timeout helper.
+- **Refactor: align query options with the Agent SDK contract** — explicitly authorize bypass permissions, use typed strict MCP isolation everywhere, derive setting sources from the system prompt mode, identify bridge requests in the SDK User-Agent, and remove the obsolete pi-ai stream compatibility shim.
+- **Remove: fringe bridge configuration overrides** — hard-code AskClaude's name, label, and shared-session default, and remove `provider.strictMcpConfig`, `provider.settingSources`, `askClaude.name`, `askClaude.label`, and `askClaude.defaultIsolated`.
 - **Add: configurable Pi prompt modes and replacement prose** — `provider.systemPromptMode` now distinguishes Claude Code only, rewritten Pi only, and Claude Code with the rewritten Pi prompt appended. Modes that include Pi require custom documentation heading and instructions, and every query path applies the same replacements. Existing `"replace"` configs must use `"pi"`; the default `"append"` mode now requires replacements. Remove the redundant `appendSystemPrompt` and `appendSkills` settings; TypeBox validation rejects malformed or unknown bridge settings at startup.
 - **Add: API-equivalent cost reporting** — unconditionally preserve Anthropic catalog pricing so Pi's footer and cache-miss notices show reference prices for subscription-backed usage; no setting is required.
 - **Refactor: use Pi's public Anthropic model catalog** — replace the compatibility catalog import and local Sonnet thinking-level fallbacks with Pi 0.80.10's native per-model mappings. Provider and AskClaude calls now share the same effort resolution, including `max`.

@@ -4,6 +4,7 @@
 # Requires: pi CLI, Claude Code (for Agent SDK subprocess), jq.
 
 source "$(dirname "$0")/lib/bash-setup.sh"
+source "$(dirname "$0")/lib/timeout.sh"
 
 echo "=== multi-turn-test.sh ==="
 

@@ -9,7 +9,10 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { extractAllToolResults as _extractAllToolResults } from "../src/extract-tool-results.js";
+import { __test } from "../src/index.js";
+import { QueryContext, ctx, resetStack } from "../src/query-state.js";
 
 // Test wrapper: real extract returns { results, stopIdx }; tests only want results.
 // Also unwraps converted content so assertions can check the original string.
@@ -69,6 +72,56 @@ function createBridge() {
 		},
 	};
 }
+
+describe("production MCP handlers", () => {
+	it("matches parallel calls to the same tool by ID when results resolve out of order", async () => {
+		const queryCtx = new QueryContext();
+		const handler = __test.createMcpToolHandler("read", queryCtx);
+		const first = handler({}, { _meta: { "claudecode/toolUseId": "tool-1" } });
+		const second = handler({}, { _meta: { "claudecode/toolUseId": "tool-2" } });
+
+		queryCtx.pendingToolCalls.get("tool-2").resolve({ toolCallId: "tool-2", content: [{ type: "text", text: "second" }] });
+		queryCtx.pendingToolCalls.delete("tool-2");
+		queryCtx.pendingToolCalls.get("tool-1").resolve({ toolCallId: "tool-1", content: [{ type: "text", text: "first" }] });
+		queryCtx.pendingToolCalls.delete("tool-1");
+
+		assert.equal((await second).content[0].text, "second");
+		assert.equal((await first).content[0].text, "first");
+	});
+
+	it("preserves a metadata failure until pi claims the orphaned tool-result stream", async () => {
+		resetStack();
+		const queryCtx = ctx();
+		let closeCount = 0;
+		queryCtx.activeQuery = {
+			async interrupt() {},
+			close() { closeCount++; },
+		};
+		queryCtx.resetTurnState({ api: "claude-bridge", provider: "anthropic", id: "test" });
+		const handler = __test.createMcpToolHandler("read", queryCtx);
+
+		void handler({}, {});
+
+		assert.equal(closeCount, 1);
+		assert.equal(queryCtx.currentPiStream, null);
+		assert.match(queryCtx.fatalError, /no longer sends claudecode\/toolUseId/);
+
+		queryCtx.activeQuery = null;
+		const stream = __test.streamClaudeAgentSdk(
+			{ api: "claude-bridge", provider: "anthropic", id: "test" },
+			{
+				systemPrompt: "",
+				messages: [{ role: "toolResult", toolCallId: "tool-1", content: [{ type: "text", text: "result" }], isError: false }],
+				tools: [],
+			},
+		);
+		const events = [];
+		for await (const event of stream) events.push(event);
+		assert.equal(queryCtx.currentPiStream, null);
+		assert.equal(events.at(-1).type, "error");
+		assert.match(events.at(-1).error.errorMessage, /no longer sends claudecode\/toolUseId/);
+	});
+});
 
 // --- Scenario A: results arrive before handlers ---
 
