@@ -2,7 +2,7 @@
   "name": "pi-claude-bridge",
   "version": "0.6.2",
   "private": false,
-  "description": "Pi extension that uses Claude Code (via Agent SDK) as a model provider and adds an AskClaude tool.",
+  "description": "Pi extension that uses Claude Code (via Agent SDK) as a model provider.",
   "keywords": [
     "pi-package",
     "pi",
@@ -26,6 +26,8 @@
     "assets"
   ],
   "scripts": {
+    "lint": "npm run typecheck && npm run lint:shell",
+    "lint:shell": "shellcheck -x -P SCRIPTDIR tests/*.sh tests/lib/*.sh",
     "test:unit": "node --import tsx --test tests/unit-*.mjs",
     "test": "set -a && [ -f .env.test ] && . .env.test; set +a && npm run test:unit && tests/int-smoke.sh && tests/int-multi-turn.sh && tests/int-cache.sh && node --import tsx --test tests/int-*.mjs",
     "test:usage": "tests/usage-test.sh",
@@ -41,13 +43,11 @@
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": ">=0.80.10",
-    "@earendil-works/pi-coding-agent": ">=0.80.10",
-    "@earendil-works/pi-tui": ">=0.80.10"
+    "@earendil-works/pi-coding-agent": ">=0.80.10"
   },
   "devDependencies": {
     "@earendil-works/pi-ai": "^0.80.10",
     "@earendil-works/pi-coding-agent": "^0.80.10",
-    "@earendil-works/pi-tui": "^0.80.10",
     "@types/node": "^24.13.2",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3"

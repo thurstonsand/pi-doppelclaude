@@ -3,10 +3,34 @@
  * Provides spawn, send, event waiting, and text collection utilities.
  */
 import { spawn } from "node:child_process";
-import { createWriteStream, existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { copyFileSync, createWriteStream, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { StringDecoder } from "node:string_decoder";
+
+// Isolate Pi's agent dir so a developer's real ~/.pi/agent/claude-bridge.json
+// (which may still hold a now-rejected askClaude block) cannot break tests.
+// Pi provider credentials are copied into the sandbox so alt-provider auth still
+// works; Claude Code's own auth (~/.claude / $CLAUDE_CONFIG_DIR) is unaffected.
+function isolateAgentDir(name, logdir, customAgentDir) {
+	const realDir = process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
+	const sandbox = join(logdir, `agent-${name}`);
+	rmSync(sandbox, { recursive: true, force: true });
+	mkdirSync(sandbox, { recursive: true });
+	for (const file of ["auth.json", "models.json", "models-store.json"]) {
+		const src = join(realDir, file);
+		if (existsSync(src)) copyFileSync(src, join(sandbox, file));
+	}
+	if (customAgentDir) {
+		for (const file of ["settings.json", "auth.json", "models.json", "models-store.json"]) {
+			const src = join(customAgentDir, file);
+			if (existsSync(src)) copyFileSync(src, join(sandbox, file));
+		}
+	}
+	writeFileSync(join(sandbox, "claude-bridge.json"), '{"provider":{"systemPromptMode":"claude-code"}}\n');
+	return sandbox;
+}
 
 const DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -33,6 +57,7 @@ export function createRpcHarness(opts) {
 
 	const RPC_LOG = `${LOGDIR}/${name}.log`;
 	const DEBUG_LOG = `${LOGDIR}/${name}-debug.log`;
+	const AGENT_DIR = isolateAgentDir(name, LOGDIR, env.PI_CODING_AGENT_DIR);
 
 	// Strip any local node_modules from PATH so we use the globally-installed `pi`.
 	const cleanPath = process.env.PATH.split(":").filter((p) => !p.includes("node_modules")).join(":");
@@ -52,7 +77,7 @@ export function createRpcHarness(opts) {
 		pi = spawn("pi", spawnArgs, {
 			cwd,
 			stdio: ["pipe", "pipe", "pipe"],
-			env: { ...process.env, PATH: cleanPath, CLAUDE_BRIDGE_DEBUG: "1", CLAUDE_BRIDGE_DEBUG_PATH: DEBUG_LOG, ...env },
+			env: { ...process.env, ...env, PATH: cleanPath, PI_CODING_AGENT_DIR: AGENT_DIR, CLAUDE_BRIDGE_DEBUG: "1", CLAUDE_BRIDGE_DEBUG_PATH: DEBUG_LOG },
 		});
 
 		pi.stderr.on("data", (d) => rpcLog.write(d));

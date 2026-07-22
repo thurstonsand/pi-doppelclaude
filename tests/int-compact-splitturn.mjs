@@ -9,8 +9,8 @@
 //       generateTurnPrefixSummary(...), // streamFn call #2, sees stale activeQuery
 //   ]);
 //
-// Both go through the bridge's streamClaudeAgentSdk, gated on one
-// module-global ctx().activeQuery slot. Call #2 sees #1's activeQuery (cleared
+// Both go through the bridge's streamClaudeAgentSdk, gated on the runtime's
+// root-context activeQuery slot. Call #2 sees #1's activeQuery (cleared
 // in .finally, which runs after finalizeCurrentStream resumes pi's
 // await stream.result() in a microtask), takes the tool-result-delivery
 // branch, orphans its stream, and stream.result() hangs forever — compaction

@@ -8,7 +8,7 @@ Do **not** auto-commit.
 
 Maintain an entry in the `## UNRELEASED` section at the top of `CHANGELOG.md` for every significant change, using the existing format:
 
-```
+```md
 - **Tag: summary** — detail
 ```
 

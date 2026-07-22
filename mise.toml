@@ -1,0 +1,28 @@
+min_version = "2026.7.4"
+
+[hooks]
+enter = "mise bootstrap --yes --quiet"
+
+[tools]
+hk = "1.50.0"
+node = "24"
+shellcheck = "0.11.0"
+
+[tasks.bootstrap]
+description = "Install development dependencies and git hooks"
+run = [
+    "npm ci --quiet --no-fund --no-audit",
+    "hk install --mise --quiet",
+    "mkdir -p .mise && touch .mise/bootstrap",
+]
+sources = ["mise.toml", "hk.pkl", "package.json", "package-lock.json"]
+outputs = ["node_modules/.package-lock.json", ".mise/bootstrap"]
+quiet = true
+
+[tasks.lint]
+description = "Run TypeScript and shell checks"
+run = "npm run lint"
+
+[tasks.test]
+description = "Run the test suite"
+run = "npm test"

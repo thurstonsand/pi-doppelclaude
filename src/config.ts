@@ -1,26 +1,14 @@
-// User-facing extension config from ~/.pi/agent/claude-bridge.json and the
-// project Pi config directory, with project settings overriding global settings.
+// User-facing extension config from Pi's agent directory (claude-bridge.json)
+// and the project Pi config directory, with project settings overriding global.
 
-import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
+import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { existsSync, readFileSync } from "fs";
-import { homedir } from "os";
 import { join } from "path";
 import { type Static, Type, type TSchema } from "typebox";
 import { Value } from "typebox/value";
 
 const strictObject = <T extends Record<string, TSchema>>(properties: T) =>
 	Type.Object(properties, { additionalProperties: false });
-
-const ASK_CLAUDE_CONFIG_SCHEMA = strictObject({
-	enabled: Type.Optional(Type.Boolean()),
-	description: Type.Optional(Type.String()),
-	defaultMode: Type.Optional(Type.Union([
-		Type.Literal("full"),
-		Type.Literal("read"),
-		Type.Literal("none"),
-	])),
-	allowFullMode: Type.Optional(Type.Boolean()),
-});
 
 const DOCUMENTATION_REPLACEMENT_SCHEMA = strictObject({
 	heading: Type.String({ minLength: 1 }),
@@ -46,7 +34,6 @@ const PROVIDER_CONFIG_SCHEMA = strictObject({
 });
 
 const CONFIG_SCHEMA = strictObject({
-	askClaude: Type.Optional(ASK_CLAUDE_CONFIG_SCHEMA),
 	provider: Type.Optional(PROVIDER_CONFIG_SCHEMA),
 });
 
@@ -92,7 +79,6 @@ function mergeConfig(global: Config, project: Config): Config {
 		: undefined;
 
 	return {
-		askClaude: { ...global.askClaude, ...project.askClaude },
 		provider: {
 			...global.provider,
 			...project.provider,
@@ -119,7 +105,7 @@ function validateConfig(config: Config): void {
 }
 
 export function loadConfig(cwd: string): Config {
-	const global = parseConfigFile(join(homedir(), ".pi", "agent", "claude-bridge.json"));
+	const global = parseConfigFile(join(getAgentDir(), "claude-bridge.json"));
 	const project = parseConfigFile(join(cwd, CONFIG_DIR_NAME, "claude-bridge.json"));
 	const config = mergeConfig(global, project);
 	validateConfig(config);

@@ -21,29 +21,16 @@
 - **AskUserQuestion pi shim** (main provider only): CC never sees
   AskUserQuestion (it's in `DISALLOWED_BUILTIN_TOOLS`), so it can't ask the
   user questions interactively. Port a pi-native version using `ctx.ui.custom()`
-  for an option picker with free-text fallback. Not applicable to AskClaude
-  subagents (can't interact with user). See `fractary/pi-claude-code`
+  for an option picker with free-text fallback. See `fractary/pi-claude-code`
   `AskUserQuestion.ts` for reference.
 
 - **PlanMode pi shim** (main provider only): Similarly, EnterPlanMode/
   ExitPlanMode are blocked. A pi-native plan mode could use
   `pi.setActiveTools()` to restrict to read-only tools, block destructive bash
-  via `tool_call` event, and surface plan approval through pi's TUI. Not
-  applicable to AskClaude subagents. See `fractary/pi-claude-code`
-  `PlanMode.ts`.
+  via `tool_call` event, and surface plan approval through pi's TUI. See
+  `fractary/pi-claude-code` `PlanMode.ts`.
 
 ## Testing Gaps
-
-- **`int-session-resume` Turn 8 flake (low priority)**: The isolated-AskClaude
-  assertion fails intermittently (~1-in-5). The alt provider invokes AskClaude
-  with a verbatim prompt in some runs (test passes — isolated CC correctly
-  returns "UNKNOWN") but may embed the secret word into the prompt in others
-  (test fails — but the leak is in the calling model, not in our isolation).
-  We confirmed the verbatim case from logs; the failing case wasn't captured
-  before the next run overwrote the log. Either pin the alt model to one with
-  strict prompt fidelity, or instrument the test to assert on the AskClaude
-  prompt args (not just the response) so we can distinguish "calling model
-  embedded the answer" from a real bridge-side context leak.
 
 - **Structured diagnostics for tests**: Tests grep debug-log strings to verify
   internal state. The `syncResult:` marker added on `simplify-session-sync`

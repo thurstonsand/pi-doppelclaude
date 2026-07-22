@@ -1,4 +1,5 @@
 node_modules/
+.mise/
 .claude/
 .test-output/
 eli/.DS_Store

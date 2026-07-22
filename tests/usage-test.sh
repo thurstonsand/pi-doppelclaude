@@ -59,7 +59,7 @@ build_prompts() {
   PROMPTS=()
   PROMPTS+=("Read package.json and explain what this project does based on its dependencies, scripts, and metadata. Be thorough.")
   PROMPTS+=("Write a detailed summary of what you just learned to $tmpfile")
-  PROMPTS+=("Read README.md and explain the architecture — how does the provider work, what is AskClaude, how do they interact?")
+  PROMPTS+=("Read README.md and explain the architecture — how does the provider work, how are pi tools bridged to Claude Code?")
   PROMPTS+=("Read tsconfig.json and explain all the compiler options and why they might have been chosen.")
   PROMPTS+=("What are the tradeoffs of using the Agent SDK as a provider vs direct API access? Think through caching, latency, token overhead.")
   PROMPTS+=("Read $tmpfile back and compare it to what you now know. What did you miss in the first summary?")
@@ -81,11 +81,12 @@ extract_pi_metrics() {
 
   while IFS= read -r line; do
     turn=$((turn + 1))
-    local input=$(echo "$line" | jq -r '.input')
-    local cache_read=$(echo "$line" | jq -r '.cacheRead')
-    local cache_write=$(echo "$line" | jq -r '.cacheWrite')
-    local output=$(echo "$line" | jq -r '.output')
-    local cost=$(echo "$line" | jq -r '.cost.total // 0')
+    local input cache_read cache_write output cost
+    input=$(echo "$line" | jq -r '.input')
+    cache_read=$(echo "$line" | jq -r '.cacheRead')
+    cache_write=$(echo "$line" | jq -r '.cacheWrite')
+    output=$(echo "$line" | jq -r '.output')
+    cost=$(echo "$line" | jq -r '.cost.total // 0')
 
     printf "%-6s  %8s  %8s  %8s  %8s  \$%s\n" "$turn" "$input" "$cache_read" "$cache_write" "$output" "$cost"
 
@@ -190,7 +191,6 @@ build_prompts "$TMPFILE_B"
 PROMPT_ARGS=()
 for p in "${PROMPTS[@]}"; do PROMPT_ARGS+=(-p "$p"); done
 
-LOGFILE_B="$LOGDIR/usage-test-direct.ndjson"
 echo ""
 echo "Running Claude Code direct conversation..."
 
@@ -271,6 +271,8 @@ echo "=========================================="
 echo "  Comparison"
 echo "=========================================="
 
+# Phase 2 replaces the dynamic metric exports and this comparison with typed data.
+# shellcheck disable=SC2153
 python3 -c "
 a_input, a_cr, a_cw, a_output, a_cost = $A_INPUT, $A_CACHE_READ, $A_CACHE_WRITE, $A_OUTPUT, $A_COST
 b_input, b_cr, b_cw, b_output, b_cost = $TOTAL_B_INPUT, $TOTAL_B_CACHE_READ, $TOTAL_B_CACHE_WRITE, $TOTAL_B_OUTPUT, $TOTAL_B_COST

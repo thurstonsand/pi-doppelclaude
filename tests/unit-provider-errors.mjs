@@ -1,8 +1,13 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
-import { __test } from "../src/index.js";
+import { createBridgeRuntime } from "../src/bridge-runtime.js";
 import { QueryContext } from "../src/query-state.js";
+
+const runtime = createBridgeRuntime({
+	providerSettings: {},
+	longContextSettings: { plan: "pro", longContextExtraUsage: false },
+});
 
 const fakeModel = {
 	api: "claude-bridge",
@@ -33,11 +38,11 @@ describe("provider SDK result errors", () => {
 		queryCtx.resetTurnState(fakeModel);
 		const stream = queryCtx.currentPiStream;
 
-		await __test.consumeQuery(sdkQuery, new Map(), fakeModel, queryCtx, {
+		await runtime.test.consumeQuery(sdkQuery, new Map(), fakeModel, queryCtx, {
 			onResult() {},
 			onSessionId() {},
 		});
-		__test.finalizeCurrentStream(queryCtx);
+		runtime.test.finalizeCurrentStream(queryCtx);
 
 		const events = await collect(stream);
 		assert.equal(events.at(-1).type, "error");

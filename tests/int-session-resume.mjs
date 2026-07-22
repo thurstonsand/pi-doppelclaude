@@ -4,16 +4,13 @@
 // preserves conversation context (all messages are flattened into
 // each query, so "missed" messages are automatically included).
 //
-// Also tests AskClaude shared mode (sees conversation history) vs
-// isolated mode (clean slate).
-//
 // Requires: pi CLI, Claude Code (for Agent SDK subprocess).
 // Requires: CLAUDE_BRIDGE_TESTING_ALT_PROVIDER and CLAUDE_BRIDGE_TESTING_ALT_MODEL
 // naming any authenticated non-bridge model available to pi.
 
 console.log("=== session-resume-test.mjs ===");
 
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRpcHarness, requireEnv } from "./lib/rpc-harness.mjs";
@@ -32,7 +29,6 @@ const WORD_C = `gamma${Math.random().toString(36).slice(2, 6)}`;
 const TEST_CWD_PREFIX = join(tmpdir(), "pi-claude-bridge-session-resume-");
 const TEST_CWD = mkdtempSync(TEST_CWD_PREFIX);
 mkdirSync(join(TEST_CWD, ".pi"));
-writeFileSync(join(TEST_CWD, ".pi", "claude-bridge.json"), '{"askClaude":{"enabled":true}}\n');
 
 // Use harness but with custom args - start on non-provider model
 const harness = createRpcHarness({
@@ -44,9 +40,6 @@ const harness = createRpcHarness({
 
 const { startAndWait, stop, send, addListener, collectText, DEBUG_LOG, RPC_LOG } = harness;
 
-let lastToolResult = null;
-
-// Custom waitForIdle that captures last tool result (harness doesn't do this)
 function waitForIdle(timeout = TIMEOUT) {
 	return new Promise((resolve, reject) => {
 		const timer = setTimeout(() => reject(new Error("Timeout waiting for idle")), timeout);
@@ -54,12 +47,6 @@ function waitForIdle(timeout = TIMEOUT) {
 			if (msg.type === "agent_end") {
 				clearTimeout(timer);
 				remove();
-				// Extract last tool result text for assertion
-				const toolResults = msg.messages?.filter((m) => m.role === "toolResult") ?? [];
-				if (toolResults.length > 0) {
-					const last = toolResults[toolResults.length - 1];
-					lastToolResult = last.content?.map((c) => c.text ?? "").join("") ?? "";
-				}
 				resolve(msg);
 			}
 		});
@@ -146,27 +133,6 @@ try {
   if (!lower6.includes(WORD_B)) throw new Error(`Turn 6 response missing '${WORD_B}': ${text6}`);
   if (!lower6.includes(WORD_C)) throw new Error(`Turn 6 response missing '${WORD_C}': ${text6}`);
 
-  // Turn 7: AskClaude shared mode — should see WORD_C which was only told to the non-provider model
-  console.log(`Switching to ${OTHER_PROVIDER}/${OTHER_MODEL}...`);
-  await send({ type: "set_model", provider: OTHER_PROVIDER, modelId: OTHER_MODEL });
-
-
-  console.log("Turn 7: AskClaude shared mode (should see non-provider context)...");
-  const text7 = await promptAndWait(
-    'Use the AskClaude tool with prompt="What was the third word mentioned earlier? Reply with just the word."'
-  );
-  console.log(`  AskClaude result: ${(lastToolResult || "").slice(0, 120)}`);
-  if (!lastToolResult?.toLowerCase().includes(WORD_C)) throw new Error(`Turn 7 AskClaude tool result missing '${WORD_C}': ${lastToolResult}`);
-
-  // Turn 8: AskClaude isolated mode — should NOT see conversation history
-  console.log("Turn 8: AskClaude isolated mode (should not see context)...");
-  lastToolResult = null;
-  const text8 = await promptAndWait(
-    'Use the AskClaude tool with prompt="What was the third word mentioned earlier? If you don\'t know, say UNKNOWN." and isolated=true'
-  );
-  console.log(`  AskClaude result: ${(lastToolResult || "").slice(0, 120)}`);
-  if (lastToolResult?.toLowerCase().includes(WORD_C)) throw new Error(`Turn 8 isolated AskClaude should not know '${WORD_C}': ${lastToolResult}`);
-
   // SessionStore writer revisions fence late post-abort mirror appends, so the
   // session UUID remains stable across normal rebuilds and abort recovery.
   const debugLog = readFileSync(DEBUG_LOG, "utf8");
@@ -187,7 +153,7 @@ try {
   console.log(`FAIL: ${e.message}\n${e.stack}`);
   console.log(`  RPC log:    ${RPC_LOG}`);
   console.log(`  Debug log:  ${DEBUG_LOG}`);
-  console.log(`  CC CLI:     .test-output/cc-cli-logs/  (look for *-askclaude-*.log near the failing turn)`);
+  console.log(`  CC CLI:     .test-output/cc-cli-logs/  (look for *-provider-*.log near the failing turn)`);
   console.log(`  Note: logs are overwritten on next test run — copy them now if you need to investigate.`);
 } finally {
   await stop();

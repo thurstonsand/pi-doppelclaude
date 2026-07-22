@@ -13,7 +13,7 @@ export function buildModels<T extends { id: string; [key: string]: any }>(piAiMo
 	return MODEL_IDS_IN_ORDER
 		.map((id) => piAiModels.find((m) => m.id === id))
 		.filter((m) => m != null)
-		// Forward Pi's per-model effort overrides to both provider and AskClaude calls.
+		// Forward Pi's per-model effort overrides to provider calls.
 		.map(({ id, name, reasoning, input, cost, contextWindow, maxTokens, thinkingLevelMap }) => ({
 			id,
 			name,

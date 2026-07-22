@@ -1,4 +1,11 @@
+import type { SettingSource } from "@anthropic-ai/claude-agent-sdk";
 import type { SystemPromptReplacements } from "./config.js";
+
+// "pi" mode isolates Claude Code's filesystem settings ([] = no setting sources);
+// every other mode keeps Claude Code's defaults (undefined).
+export function settingSourcesFor(systemPromptMode: string): SettingSource[] | undefined {
+	return systemPromptMode === "pi" ? [] : undefined;
+}
 
 const PI_IDENTITY_PROMPT = `You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.`;
 

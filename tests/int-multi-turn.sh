@@ -22,7 +22,8 @@ trap kill_descendants EXIT
 run_json() {
   local name="$1"; shift
   local assertion="$1"; shift
-  local slug=$(echo "$name" | tr ' :,' '-' | tr -cd '[:alnum:]-')
+  local slug
+  slug=$(echo "$name" | tr ' :,' '-' | tr -cd '[:alnum:]-')
   local logfile="$LOGDIR/$slug.ndjson"
   printf "%-50s " "$name"
   if timeout "$TIMEOUT" "$@" > "$logfile" 2>"$logfile.err"; then

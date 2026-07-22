@@ -2,17 +2,11 @@ import { calculateCost, type AssistantMessage, type AssistantMessageEventStream,
 import { type SDKMessage, query } from "@anthropic-ai/claude-agent-sdk";
 import type { QueryContext } from "./query-state.js";
 import { mapSdkToolArgsToPi, mapSdkToolNameToPi } from "./convert.js";
+import { logServedContextWindow, resultErrorText } from "./sdk-result.js";
 
 interface ProviderStreamDependencies {
 	debug(...args: unknown[]): void;
 	notify?(message: string, level: "warning"): void;
-}
-
-export function resultErrorText(message: SDKMessage): string {
-	const result = message as SDKMessage & { subtype?: string; errors?: unknown; error?: unknown };
-	if (Array.isArray(result.errors) && result.errors.length > 0) return result.errors.map(String).join("\n");
-	if (typeof result.error === "string") return result.error;
-	return `Claude Code failed: ${result.subtype ?? "unknown result"}`;
 }
 
 export function createProviderStreamRuntime(dependencies: ProviderStreamDependencies) {
@@ -34,20 +28,6 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
 		const cachePct = promptTokens > 0 ? Math.round(output.usage.cacheRead / promptTokens * 100) : 0;
 		const reasoningText = reasoning != null ? ` reasoning=${reasoning}` : "";
 		debug(`usage: in=${output.usage.input} out=${output.usage.output} cacheRead=${output.usage.cacheRead} cacheWrite=${output.usage.cacheWrite} total=${output.usage.totalTokens}${reasoningText} cachePct=${cachePct}% model=${model.id}`);
-	}
-
-	// Log the *served* context window reported by an SDK result message
-	// (modelUsage[id].contextWindow), which can differ from the window pi
-	// registered (model.contextWindow) when the runtime entitlement doesn't
-	// match the docs — e.g. bare Opus served 200K on Pro, or [1m] not honored.
-	// The result message's modelUsage is otherwise discarded; this makes the
-	// gap observable. See issue #18.
-	function logServedContextWindow(label: string, message: SDKMessage, model: Model<any>): void {
-		const modelUsage = (message as any).modelUsage as Record<string, { contextWindow?: number; maxOutputTokens?: number }> | undefined;
-		if (!modelUsage) return;
-		for (const [k, v] of Object.entries(modelUsage)) {
-			debug(`${label}: served contextWindow=${v.contextWindow ?? "?"} maxOutputTokens=${v.maxOutputTokens ?? "?"} servedModel=${k} registered=${model.contextWindow}`);
-		}
 	}
 
 	// --- Provider helpers: misc ---
@@ -78,7 +58,7 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
 	//
 	// Note: resetTurnState clears turnSawStreamEvent while the generator may still
 	// have queued messages from the previous turn. This is safe because step 3 nulls
-	// currentPiStream, so any leftover messages hit the `!ctx().currentPiStream` guard
+	// currentPiStream, so any leftover messages hit the `!queryCtx.currentPiStream` guard
 	// in consumeQuery and are skipped before resetTurnState runs.
 
 	const completedStreams = new WeakSet<object>();
@@ -340,7 +320,7 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
 					processAssistantMessage(message, currentModel, customToolNameToPi, queryCtx);
 					break;
 				case "result":
-					logServedContextWindow("result", message, currentModel);
+					logServedContextWindow(debug, "result", message, currentModel);
 					if (message.subtype !== "success") {
 						queryCtx.turnOutput.stopReason = "error";
 						queryCtx.turnOutput.errorMessage = resultErrorText(message);
@@ -385,6 +365,5 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
 		emitTerminalError,
 		finalizeCurrentStream,
 		consumeQuery,
-		logServedContextWindow,
 	};
 }

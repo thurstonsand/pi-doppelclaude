@@ -6,15 +6,21 @@ import { join } from "node:path";
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import { loadConfig } from "../src/config.js";
 
+// Pin both HOME and PI_CODING_AGENT_DIR so loadConfig's global path (getAgentDir)
+// resolves to <home>/.pi/agent regardless of the developer's ambient PI_CODING_AGENT_DIR.
 function withTempHome(fn) {
 	const oldHome = process.env.HOME;
+	const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
 	const home = mkdtempSync(join(tmpdir(), "claude-bridge-home-"));
 	try {
 		process.env.HOME = home;
+		process.env.PI_CODING_AGENT_DIR = join(home, ".pi", "agent");
 		return fn(home);
 	} finally {
 		if (oldHome === undefined) delete process.env.HOME;
 		else process.env.HOME = oldHome;
+		if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
 		rmSync(home, { recursive: true, force: true });
 	}
 }
@@ -27,12 +33,10 @@ describe("loadConfig", () => {
 			mkdirSync(configDir, { recursive: true });
 			writeFileSync(join(configDir, "claude-bridge.json"), JSON.stringify({
 				provider: { plan: "max", systemPromptMode: "claude-code" },
-				askClaude: { enabled: false },
 			}));
 
 			assert.deepEqual(loadConfig(cwd), {
 				provider: { plan: "max", systemPromptMode: "claude-code" },
-				askClaude: { enabled: false },
 			});
 		} finally {
 			rmSync(cwd, { recursive: true, force: true });
@@ -48,16 +52,13 @@ describe("loadConfig", () => {
 			mkdirSync(projectDir, { recursive: true });
 			writeFileSync(join(globalDir, "claude-bridge.json"), JSON.stringify({
 				provider: { plan: "pro", systemPromptMode: "claude-code" },
-				askClaude: { enabled: true, defaultMode: "read" },
 			}));
 			writeFileSync(join(projectDir, "claude-bridge.json"), JSON.stringify({
 				provider: { plan: "max" },
-				askClaude: { enabled: false },
 			}));
 
 			assert.deepEqual(loadConfig(cwd), {
 				provider: { plan: "max", systemPromptMode: "claude-code" },
-				askClaude: { enabled: false, defaultMode: "read" },
 			});
 		} finally {
 			rmSync(cwd, { recursive: true, force: true });
@@ -114,9 +115,8 @@ describe("loadConfig", () => {
 		for (const removedConfig of [
 			{ provider: { strictMcpConfig: true } },
 			{ provider: { settingSources: [] } },
-			{ askClaude: { name: "Claude" } },
-			{ askClaude: { label: "Claude" } },
-			{ askClaude: { defaultIsolated: true } },
+			{ askClaude: { enabled: true } },
+			{ askClaude: { defaultMode: "read" } },
 		]) {
 			writeFileSync(join(configDir, "claude-bridge.json"), JSON.stringify(removedConfig));
 			assert.throws(() => loadConfig(process.cwd()), /must not have additional properties/);

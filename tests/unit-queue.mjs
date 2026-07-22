@@ -4,15 +4,21 @@
  *
  * extractAllToolResults is imported from the real module. `createBridge` below
  * is a test model of the queue pattern — the production implementation inlines
- * the same state machine in MCP handlers + provider callbacks (index.ts).
+ * the same state machine in MCP handlers + provider callbacks (bridge-runtime.ts).
  * A future ToolResultBridge refactor would let this test import the real class.
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { extractAllToolResults as _extractAllToolResults } from "../src/extract-tool-results.js";
-import { __test } from "../src/index.js";
-import { QueryContext, ctx, resetStack } from "../src/query-state.js";
+import { createBridgeRuntime } from "../src/bridge-runtime.js";
+import { QueryContext } from "../src/query-state.js";
+
+function makeRuntime() {
+	return createBridgeRuntime({
+		providerSettings: {},
+		longContextSettings: { plan: "pro", longContextExtraUsage: false },
+	});
+}
 
 // Test wrapper: real extract returns { results, stopIdx }; tests only want results.
 // Also unwraps converted content so assertions can check the original string.
@@ -76,7 +82,7 @@ function createBridge() {
 describe("production MCP handlers", () => {
 	it("matches parallel calls to the same tool by ID when results resolve out of order", async () => {
 		const queryCtx = new QueryContext();
-		const handler = __test.createMcpToolHandler("read", queryCtx);
+		const handler = makeRuntime().test.createMcpToolHandler("read", queryCtx);
 		const first = handler({}, { _meta: { "claudecode/toolUseId": "tool-1" } });
 		const second = handler({}, { _meta: { "claudecode/toolUseId": "tool-2" } });
 
@@ -90,15 +96,15 @@ describe("production MCP handlers", () => {
 	});
 
 	it("preserves a metadata failure until pi claims the orphaned tool-result stream", async () => {
-		resetStack();
-		const queryCtx = ctx();
+		const runtime = makeRuntime();
+		const queryCtx = runtime.test.rootContext;
 		let closeCount = 0;
 		queryCtx.activeQuery = {
 			async interrupt() {},
 			close() { closeCount++; },
 		};
 		queryCtx.resetTurnState({ api: "claude-bridge", provider: "anthropic", id: "test" });
-		const handler = __test.createMcpToolHandler("read", queryCtx);
+		const handler = runtime.test.createMcpToolHandler("read", queryCtx);
 
 		void handler({}, {});
 
@@ -107,7 +113,7 @@ describe("production MCP handlers", () => {
 		assert.match(queryCtx.fatalError, /no longer sends claudecode\/toolUseId/);
 
 		queryCtx.activeQuery = null;
-		const stream = __test.streamClaudeAgentSdk(
+		const stream = runtime.test.streamClaudeAgentSdk(
 			{ api: "claude-bridge", provider: "anthropic", id: "test" },
 			{
 				systemPrompt: "",
