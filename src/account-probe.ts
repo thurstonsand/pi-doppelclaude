@@ -1,5 +1,5 @@
 import { query, type AccountInfo, type Options } from "@anthropic-ai/claude-agent-sdk";
-import type { Config } from "./config.js";
+import type { ProviderSettings } from "./settings.js";
 import { errorMessage } from "./debug.js";
 
 interface AccountQuery {
@@ -8,7 +8,7 @@ interface AccountQuery {
 }
 
 interface AccountProbeDependencies {
-	providerSettings: NonNullable<Config["provider"]>;
+	providerSettings: ProviderSettings;
 	queryFactory(request: { prompt: AsyncIterable<never>; options?: Options }): AccountQuery;
 }
 
@@ -71,6 +71,6 @@ export function createAccountProbe(dependencies: AccountProbeDependencies): Acco
 	};
 }
 
-export function createDefaultAccountProbe(providerSettings: NonNullable<Config["provider"]>): AccountProbe {
+export function createDefaultAccountProbe(providerSettings: ProviderSettings): AccountProbe {
 	return createAccountProbe({ providerSettings, queryFactory: query });
 }

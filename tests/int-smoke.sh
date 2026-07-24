@@ -94,7 +94,7 @@ printf '%s\\n' "\$*" >> "$CLAUDE_SPAWN_LOG"
 exec "$CLAUDE_EXECUTABLE" "\$@"
 EOF
 chmod +x "$CLAUDE_WRAPPER"
-printf '{"provider":{"systemPromptMode":"claude-code","pathToClaudeCodeExecutable":"%s"}}\n' "$CLAUDE_WRAPPER" > "$PI_CODING_AGENT_DIR/claude-bridge.json"
+printf '{"claudeBridge":{"provider":{"systemPromptMode":"claude-code","pathToClaudeCodeExecutable":"%s"}}}\n' "$CLAUDE_WRAPPER" > "$PI_CODING_AGENT_DIR/settings.json"
 
 run "provider: rejected model emits terminal error before model spawn" \
   bash -c "if pi --no-session -ne -e '$DIR' --model 'anthropic-agent-sdk/claude-future-9-9' -p yes >'$LOGDIR/rejected-model.out' 2>&1; then exit 1; fi; grep -q 'Unsupported Anthropic Agent SDK model' '$LOGDIR/rejected-model.out' && ! grep -q -- '--model' '$CLAUDE_SPAWN_LOG' && echo ok"

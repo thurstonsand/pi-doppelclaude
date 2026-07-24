@@ -133,9 +133,18 @@ try {
   if (!lower6.includes(WORD_B)) throw new Error(`Turn 6 response missing '${WORD_B}': ${text6}`);
   if (!lower6.includes(WORD_C)) throw new Error(`Turn 6 response missing '${WORD_C}': ${text6}`);
 
+  const debugLog = readFileSync(DEBUG_LOG, "utf8");
+  const providerSwitchClose = debugLog.indexOf("provider: closing query (provider switch)");
+  const switchBackRebuild = debugLog.indexOf("syncResult: path=rebuild", providerSwitchClose);
+  const switchBackSpawn = debugLog.indexOf("provider: fresh streaming query", providerSwitchClose);
+  if (providerSwitchClose === -1) throw new Error("switching away did not close the persistent provider query");
+  if (switchBackRebuild < providerSwitchClose || switchBackSpawn < switchBackRebuild) {
+    throw new Error("switching back did not rebuild history before spawning a fresh provider query");
+  }
+  console.log("  provider switch closed the old query and rebuilt before respawn");
+
   // SessionStore writer revisions fence late post-abort mirror appends, so the
   // session UUID remains stable across normal rebuilds and abort recovery.
-  const debugLog = readFileSync(DEBUG_LOG, "utf8");
   const sessionIds = new Set();
   for (const match of debugLog.matchAll(/syncResult: path=(reuse|rebuild) sessionId=([a-f0-9-]+)/g)) {
     sessionIds.add(match[2]);

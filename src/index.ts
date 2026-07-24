@@ -4,21 +4,22 @@ import { createDefaultAccountProbe } from "./account-probe.js";
 import { createBridgeRuntime } from "./bridge-runtime.js";
 import { acquireBridgeOwner } from "./bridge-owner.js";
 import { createCompaction } from "./compaction.js";
-import { loadConfig } from "./config.js";
-import { debug, errorMessage, moduleInstanceId } from "./debug.js";
+import { configureDebug, debug, errorMessage, moduleInstanceId } from "./debug.js";
 import { PROVIDER_ID } from "./models.js";
 import { createAnthropicAgentSdkProvider } from "./provider.js";
+import { loadBridgeSettings } from "./settings.js";
 
 export default function (pi: ExtensionAPI) {
 	process.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1";
 
-	const config = loadConfig(process.cwd());
-	debug("loadConfig:", JSON.stringify(config));
-	const providerSettings = config.provider ?? {};
+	const settings = loadBridgeSettings(process.cwd());
+	configureDebug(settings.debug);
+	debug("loadSettings:", JSON.stringify(settings));
+	const { provider: providerSettings } = settings;
 
 	const compaction = createCompaction({
 		queryFactory: query,
-		loadProviderSettings: (cwd) => loadConfig(cwd).provider ?? {},
+		loadProviderSettings: (cwd) => loadBridgeSettings(cwd).provider,
 		loadRetryPolicy: (cwd, projectTrusted) =>
 			SettingsManager.create(cwd, getAgentDir(), { projectTrusted }).getRetrySettings(),
 	});

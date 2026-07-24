@@ -1,5 +1,5 @@
 import type { SettingSource } from "@anthropic-ai/claude-agent-sdk";
-import type { SystemPromptReplacements } from "./config.js";
+import type { SystemPromptReplacements } from "./settings.js";
 
 // "pi" mode isolates Claude Code's filesystem settings ([] = no setting sources);
 // every other mode keeps Claude Code's defaults (undefined).

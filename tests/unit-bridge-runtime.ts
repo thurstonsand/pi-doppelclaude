@@ -15,7 +15,7 @@ import type { SessionStoreWriter } from "../src/session-store.js";
 
 function makeRuntime() {
 	return createBridgeRuntime({
-		providerSettings: {},
+		providerSettings: { systemPromptMode: "claude-code" },
 	});
 }
 

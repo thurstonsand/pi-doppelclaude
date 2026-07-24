@@ -11,7 +11,7 @@ __clean_path() {
 
 # Setup standard test environment.
 # Usage: setup_test_env "test-name"
-# Sets: DIR, LOGDIR, LOGFILE (if specified), DEBUG_LOG, and exports CLAUDE_BRIDGE_DEBUG
+# Sets: DIR, LOGDIR, LOGFILE (if specified), DEBUG_LOG, and debug environment overrides
 setup_test_env() {
 	local name="$1"
 	local log_suffix="${2:-.log}"  # optional: suffix for logfile, or "none" for no logfile
@@ -24,8 +24,7 @@ setup_test_env() {
 	DEBUG_LOG="$LOGDIR/${name}-debug.log"
 	export CLAUDE_BRIDGE_DEBUG_PATH="$DEBUG_LOG"
 
-	# Isolate Pi's agent dir so a developer's real ~/.pi/agent/claude-bridge.json
-	# (which may still hold a now-rejected askClaude block) cannot break tests.
+	# Isolate Pi's agent dir so developer settings cannot alter test behavior.
 	# Pi provider credentials are copied into the sandbox; Claude Code's own auth
 	# (~/.claude / $CLAUDE_CONFIG_DIR) is unaffected by PI_CODING_AGENT_DIR.
 	local real_agent_dir="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
@@ -36,7 +35,7 @@ setup_test_env() {
 	for f in auth.json models.json models-store.json; do
 		if [[ -f "$real_agent_dir/$f" ]]; then cp "$real_agent_dir/$f" "$sandbox_agent_dir/$f"; fi
 	done
-	printf '{"provider":{"systemPromptMode":"claude-code"}}\n' > "$sandbox_agent_dir/claude-bridge.json"
+	printf '{"claudeBridge":{"provider":{"systemPromptMode":"claude-code"}}}\n' > "$sandbox_agent_dir/settings.json"
 	export PI_CODING_AGENT_DIR="$sandbox_agent_dir"
 
 	if [[ "$log_suffix" != "none" ]]; then

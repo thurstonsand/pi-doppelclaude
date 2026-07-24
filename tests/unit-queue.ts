@@ -33,7 +33,7 @@ type QueueDelivery = QueueResult | QueueFallback;
 
 function makeRuntime() {
 	return createBridgeRuntime({
-		providerSettings: {},
+		providerSettings: { systemPromptMode: "claude-code" },
 	});
 }
 

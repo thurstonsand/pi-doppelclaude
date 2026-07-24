@@ -3,16 +3,15 @@
  * Provides spawn, send, event waiting, and text collection utilities.
  */
 import { spawn, type ChildProcess } from "node:child_process";
-import { copyFileSync, createWriteStream, existsSync, mkdirSync, rmSync, writeFileSync, type WriteStream } from "node:fs";
+import { copyFileSync, createWriteStream, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, type WriteStream } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { StringDecoder } from "node:string_decoder";
 import type { AssistantMessageEvent, Usage } from "@earendil-works/pi-ai";
 
-// Isolate Pi's agent dir so a developer's real ~/.pi/agent/claude-bridge.json
-// (which may still hold a now-rejected askClaude block) cannot break tests.
-// Pi provider credentials are copied into the sandbox so alt-provider auth still
+// Isolate Pi's agent dir so developer settings cannot alter test behavior. Pi
+// provider credentials are copied into the sandbox so alt-provider auth still
 // works; Claude Code's own auth (~/.claude / $CLAUDE_CONFIG_DIR) is unaffected.
 export interface RpcMessage {
 	type: string;
@@ -170,7 +169,14 @@ export function isolateAgentDir(name: string, logdir: string, customAgentDir?: s
 			if (existsSync(src)) copyFileSync(src, join(sandbox, file));
 		}
 	}
-	writeFileSync(join(sandbox, "claude-bridge.json"), '{"provider":{"systemPromptMode":"claude-code"}}\n');
+	const settingsPath = join(sandbox, "settings.json");
+	const settings = existsSync(settingsPath)
+		? JSON.parse(readFileSync(settingsPath, "utf8")) as Record<string, unknown>
+		: {};
+	writeFileSync(settingsPath, JSON.stringify({
+		...settings,
+		claudeBridge: { provider: { systemPromptMode: "claude-code" } },
+	}, null, 2));
 	return sandbox;
 }
 

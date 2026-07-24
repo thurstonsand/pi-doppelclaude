@@ -14,12 +14,11 @@ import { join } from "node:path";
 import type { Provider } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-// Isolate the bridge global config (so a developer's real askClaude config cannot
-// make loadConfig throw) and seed a valid claude-code prompt mode that needs no
-// documentation replacements.
+// Isolate the bridge settings and seed a valid claude-code prompt mode that
+// needs no documentation replacements.
 const agentDir = mkdtempSync(join(tmpdir(), "activation-ownership-agent-"));
 process.env.PI_CODING_AGENT_DIR = agentDir;
-writeFileSync(join(agentDir, "claude-bridge.json"), '{"provider":{"systemPromptMode":"claude-code"}}\n');
+writeFileSync(join(agentDir, "settings.json"), '{"claudeBridge":{"provider":{"systemPromptMode":"claude-code"}}}\n');
 
 const OWNER_KEY = Symbol.for("claude-bridge:owner");
 // The owner lives on globalThis under a symbol key; view it as a symbol-keyed

@@ -16,7 +16,7 @@ import { claudeCodeModelId, resolveThinkingEffort } from "./models.js";
 import { MCP_SERVER_NAME, MCP_TOOL_PREFIX } from "./skills.js";
 import { extractAllToolResults as _extractAllToolResults, type McpResult } from "./extract-tool-results.js";
 import { PushQueue, QueryContext } from "./query-state.js";
-import type { Config } from "./config.js";
+import type { ProviderSettings } from "./settings.js";
 import { jsonSchemaToZodShape } from "./typebox-to-zod.js";
 import { buildClaudeSystemPrompt, settingSourcesFor } from "./system-prompt.js";
 import { createProviderStreamRuntime } from "./provider-stream.js";
@@ -24,7 +24,7 @@ import { BridgeSessionStore } from "./session-store.js";
 import { debug, diagDump, errorMessage, makeCliDebugOptions, sdkChildEnv } from "./debug.js";
 
 interface BridgeRuntimeDependencies {
-	providerSettings: NonNullable<Config["provider"]>;
+	providerSettings: ProviderSettings;
 }
 
 interface SessionState {
@@ -501,7 +501,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
 		const syncPlan = planSharedSessionSync(context.messages);
 		const promptMessage = sdkUserMessage(context.messages);
 
-		const systemPromptMode = providerSettings.systemPromptMode ?? "append";
+		const systemPromptMode = providerSettings.systemPromptMode;
 		const systemPrompt = buildClaudeSystemPrompt(context.systemPrompt, systemPromptMode, providerSettings.systemPromptReplacements);
 		const settingSources = settingSourcesFor(systemPromptMode);
 		const claudeExecutable = providerSettings.pathToClaudeCodeExecutable;

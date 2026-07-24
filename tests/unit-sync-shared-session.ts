@@ -11,7 +11,7 @@ import type { Message as PiMessage } from "@earendil-works/pi-ai";
 import { createBridgeRuntime } from "../src/bridge-runtime.js";
 
 const { test } = createBridgeRuntime({
-	providerSettings: {},
+	providerSettings: { systemPromptMode: "claude-code" },
 });
 
 describe("shared session sync planning", () => {

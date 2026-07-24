@@ -5,7 +5,7 @@ import { createAccountProbe } from "../src/account-probe.js";
 
 function probeFor(account: unknown, onClose = () => {}, captureOptions = (_options: Options | undefined) => {}) {
 	return createAccountProbe({
-		providerSettings: { pathToClaudeCodeExecutable: "/configured/claude" },
+		providerSettings: { systemPromptMode: "claude-code", pathToClaudeCodeExecutable: "/configured/claude" },
 		queryFactory(request) {
 			captureOptions(request.options);
 			return {
@@ -66,7 +66,7 @@ describe("Claude Code account probe", () => {
 	it("turns control Query failures into actionable diagnostics", async () => {
 		let closes = 0;
 		const probe = createAccountProbe({
-			providerSettings: {},
+			providerSettings: { systemPromptMode: "claude-code" },
 			queryFactory() {
 				return {
 					accountInfo: async () => { throw new Error("control channel failed"); },

@@ -35,23 +35,31 @@ Behind the scenes, pi's tools are bridged to Claude Code but it should all work 
 
 **1M context:** Model metadata comes unchanged from Pi's canonical Anthropic catalog. When a model's final `contextWindow` exceeds 200K, the bridge requests Claude Code's `[1m]` variant. Claude Code remains responsible for subscription and Extra Usage authorization and surfaces any rejection directly.
 
+**Cost display:** Pi applies the canonical Anthropic API prices as an API-equivalent reference for token and cache usage. This does not mean the request was API-billed; Claude Code remains authoritative for subscription quota and Extra Usage charges.
+
 ## Configuration
 
-Config: `~/.pi/agent/claude-bridge.json` (global) or the project Pi config directory, usually `.pi/claude-bridge.json` (project; merged over global).
+Bridge configuration lives under the `claudeBridge` key in Pi's shared settings at `~/.pi/agent/settings.json`.
 
 ```json
 {
-  "provider": {
-    "systemPromptMode": "pi",
-    "systemPromptReplacements": {
-      "identity": "You are a coding assistant running through Claude Code.",
-      "toolNameNote": "Prefixed tool names correspond to the bare names used by these instructions.",
-      "documentation": {
-        "heading": "Implementation references:",
-        "instructions": "Resolve documentation paths from the locations above and read relevant files completely."
-      }
+  "claudeBridge": {
+    "provider": {
+      "systemPromptMode": "pi",
+      "systemPromptReplacements": {
+        "identity": "You are a coding assistant running through Claude Code.",
+        "toolNameNote": "Prefixed tool names correspond to the bare names used by these instructions.",
+        "documentation": {
+          "heading": "Implementation references:",
+          "instructions": "Resolve documentation paths from the locations above and read relevant files completely."
+        }
+      },
+      "pathToClaudeCodeExecutable": "/home/you/.nix-profile/bin/claude"
     },
-    "pathToClaudeCodeExecutable": "/home/you/.nix-profile/bin/claude"
+    "debug": {
+      "enabled": false,
+      "logPath": "/home/you/.pi/agent/claude-bridge.log"
+    }
   }
 }
 ```
@@ -171,9 +179,11 @@ The repository pins Node, ShellCheck, and hk through mise. After trusting the co
 
 ## Debugging
 
-Set `CLAUDE_BRIDGE_DEBUG=1` to enable debug output:
+Set `claudeBridge.debug.enabled` to `true` in Pi settings. `claudeBridge.debug.logPath` optionally changes the bridge log from its default at `~/.pi/agent/claude-bridge.log`.
 
-- **Bridge log** at `~/.pi/agent/claude-bridge.log` — every provider call, session sync decision, session-store load/append/replace, tool result delivery, and CC's stderr. Override location with `CLAUDE_BRIDGE_DEBUG_PATH`.
-- **Per-query Claude Code CLI logs** at `~/.pi/agent/cc-cli-logs/<timestamp>-<tag>-<seq>.log` — the CC subprocess's own debug stream, one file per `query()` call. The main `provider` query stays alive across compatible turns; `provider-child` identifies reentrant/subagent queries. Useful when a resume fails or CC misbehaves internally — shows the CLI's own view of session loading, API requests, and tool calls.
+`CLAUDE_BRIDGE_DEBUG=1` and `CLAUDE_BRIDGE_DEBUG_PATH` remain available for ephemeral debugging and tests. Environment values take precedence over global settings: `CLAUDE_BRIDGE_DEBUG=1` enables logging, `CLAUDE_BRIDGE_DEBUG=0` disables it, and `CLAUDE_BRIDGE_DEBUG_PATH` overrides `debug.logPath`. Setting a path alone does not enable logging.
+
+- **Bridge log** — every provider call, session sync decision, session-store load/append/replace, tool result delivery, and CC's stderr.
+- **Per-query Claude Code CLI logs** in `cc-cli-logs/` beside the bridge log — the CC subprocess's own debug stream, one file per `query()` call. The main `provider` query stays alive across compatible turns; `provider-child` identifies reentrant/subagent queries. Useful when a resume fails or CC misbehaves internally — shows the CLI's own view of session loading, API requests, and tool calls.
 
 When filing a bug about a session-resume failure (e.g. "No conversation found"), the most useful attachments are the `syncResult:` and `session-store:` lines from the bridge log plus the matching `cc-cli-logs/` file for the failing query.

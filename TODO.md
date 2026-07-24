@@ -39,6 +39,12 @@
   A proper diagnostic channel (NDJSON or dedicated diagLog entries) would be
   cleaner and resilient to log-format churn.
 
+## Downstream Integration
+
+- **pi-librarian nested runtimes**: Pass `ctx.modelRegistry.getRegisteredNativeProvider(providerId)` into each fresh `ModelRuntime` with `registerNativeProvider()` so nested calls retain the registered Provider object's runtime closure.
+
+- **pi-sessions nested runtimes**: Apply the same registered-native-Provider propagation when constructing fresh `ModelRuntime` instances.
+
 ## Deferred
 
 - **CC CLI debug log accumulation**: When `CLAUDE_BRIDGE_DEBUG=1`, every

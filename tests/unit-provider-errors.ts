@@ -6,7 +6,7 @@ import { createBridgeRuntime } from "../src/bridge-runtime.js";
 import { QueryContext } from "../src/query-state.js";
 
 const runtime = createBridgeRuntime({
-	providerSettings: {},
+	providerSettings: { systemPromptMode: "claude-code" },
 });
 
 // Minimal stand-in for pi-ai's Model; the stream path only reads api/provider/id/cost.

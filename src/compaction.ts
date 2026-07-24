@@ -9,7 +9,7 @@ import { createAssistantMessageEventStream, type AssistantMessage, type Assistan
 import { compact, type CompactionEntry, type CompactionResult, type SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent";
 import { type Options, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { messageContentToText } from "./convert.js";
-import type { Config } from "./config.js";
+import type { ProviderSettings } from "./settings.js";
 import { claudeCodeModelId } from "./models.js";
 import { buildClaudeSystemPrompt, settingSourcesFor } from "./system-prompt.js";
 import { debug, errorMessage, makeCliDebugOptions, sdkChildEnv } from "./debug.js";
@@ -23,7 +23,7 @@ interface IsolatedQuery extends AsyncIterable<SDKMessage> {
 
 interface CompactionDependencies {
 	queryFactory(request: { prompt: string; options?: Options }): IsolatedQuery;
-	loadProviderSettings(cwd: string): NonNullable<Config["provider"]>;
+	loadProviderSettings(cwd: string): ProviderSettings;
 	loadRetryPolicy(cwd: string, projectTrusted: boolean): RetryPolicy;
 }
 
@@ -97,7 +97,7 @@ export function createCompaction(dependencies: CompactionDependencies) {
 		try {
 			const promptText = extractIsolatedSummaryPrompt(context.messages);
 			const compactProviderSettings = loadProviderSettings(cwd);
-			const compactSystemPromptMode = compactProviderSettings.systemPromptMode ?? "append";
+			const compactSystemPromptMode = compactProviderSettings.systemPromptMode;
 			const compactSettingSources = settingSourcesFor(compactSystemPromptMode);
 			const claudeExecutable = compactProviderSettings.pathToClaudeCodeExecutable;
 			const cliModel = claudeCodeModelId(model);

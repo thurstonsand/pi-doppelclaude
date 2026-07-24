@@ -1,23 +1,24 @@
 // Bridge logging, diagnostics, child environment, and per-query SDK debug options.
-//
-// CLAUDE_BRIDGE_DEBUG=1 enables debug logging to ~/.pi/agent/claude-bridge.log.
 
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { appendFileSync, mkdirSync } from "fs";
 import { dirname, join } from "path";
+import type { BridgeSettings } from "./settings.js";
 
-export const DEBUG = process.env.CLAUDE_BRIDGE_DEBUG === "1";
-const DEBUG_LOG_PATH = process.env.CLAUDE_BRIDGE_DEBUG_PATH || join(getAgentDir(), "claude-bridge.log");
+export let DEBUG = false;
+let debugLogPath = join(getAgentDir(), "claude-bridge.log");
 const DIAG_LOG_PATH = join(getAgentDir(), "claude-bridge-diag.log");
 const BRIDGE_CLIENT_APP = "pi-claude-bridge/0.6.2";
 
-// Ensure log directories exist when debug is enabled
-if (DEBUG) {
+export function configureDebug(settings: BridgeSettings["debug"]): void {
+	DEBUG = settings.enabled;
+	debugLogPath = settings.logPath;
+	if (!DEBUG) return;
 	try {
-		mkdirSync(dirname(DEBUG_LOG_PATH), { recursive: true });
+		mkdirSync(dirname(debugLogPath), { recursive: true });
 		mkdirSync(dirname(DIAG_LOG_PATH), { recursive: true });
 	} catch {
-		// If directory creation fails, debug functions will throw on first use
+		// The first attempted write will preserve the filesystem error.
 	}
 }
 
@@ -33,7 +34,7 @@ export function debug(...args: unknown[]) {
 		return JSON.stringify(a);
 	};
 	const msg = args.map(fmt).join(" ");
-	appendFileSync(DEBUG_LOG_PATH, `[${ts}] [${moduleInstanceId}] ${msg}\n`);
+	appendFileSync(debugLogPath, `[${ts}] [${moduleInstanceId}] ${msg}\n`);
 }
 
 // Per-query CLI debug capture. When CLAUDE_BRIDGE_DEBUG=1, ask the Claude Code
@@ -47,7 +48,7 @@ export function makeCliDebugOptions(tag: string): { debug?: boolean; debugFile?:
 	if (!DEBUG) return {};
 	const seq = nextCliDebugSeq++;
 	const ts = new Date().toISOString().replace(/[:.]/g, "-");
-	const logDir = join(dirname(DEBUG_LOG_PATH), "cc-cli-logs");
+	const logDir = join(dirname(debugLogPath), "cc-cli-logs");
 	try { mkdirSync(logDir, { recursive: true }); } catch { /* ignore */ }
 	const debugFile = join(logDir, `${ts}-${tag}-${seq}.log`);
 	debug(`cli-debug: ${tag} #${seq} → ${debugFile}`);

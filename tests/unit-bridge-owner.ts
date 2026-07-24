@@ -10,7 +10,7 @@ afterEach(() => {
 });
 
 function makeOwner() {
-	const runtime = createBridgeRuntime({ providerSettings: {} });
+	const runtime = createBridgeRuntime({ providerSettings: { systemPromptMode: "claude-code" } });
 	const provider = createAnthropicAgentSdkProvider({ stream: runtime.stream, accountProbe: async () => true });
 	return { runtime, provider };
 }
