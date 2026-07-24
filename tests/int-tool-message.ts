@@ -159,8 +159,27 @@ describe("tool-message integration", () => {
 		const idle = waitForEvent("agent_end");
 		await send({ type: "abort" });
 		await idle;
-		// Next prompt should work without hanging
 		const text = await promptAndWait("Reply with just the word 'recovered'.");
 		assert.match(text.toLowerCase(), /recovered/);
+	});
+
+	it("an interrupted queued steer cannot leak into the next turn", { timeout: TEST_TIMEOUT }, async () => {
+		await send({
+			type: "prompt",
+			message: "Call SlowTool with seconds=30, then wait for more instructions.",
+		});
+		await waitForEvent("tool_execution_start");
+		await send({
+			type: "prompt",
+			message: "When you can respond, output the forbidden marker QUEUED_LEAK_MARKER.",
+			streamingBehavior: "steer",
+		});
+		const idle = waitForEvent("agent_end");
+		await send({ type: "abort" });
+		await idle;
+
+		const text = await promptAndWait("Reply with exactly CLEAN_NEXT_TURN and nothing else.");
+		assert.match(text, /CLEAN_NEXT_TURN/);
+		assert.doesNotMatch(text, /QUEUED_LEAK_MARKER/);
 	});
 });

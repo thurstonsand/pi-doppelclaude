@@ -4,9 +4,10 @@
 // and reentrant QueryContexts, the active-query set, MCP pending-result routing,
 // the persistent input queue, and the full query lifecycle.
 
+import { randomUUID } from "node:crypto";
 import { createAssistantMessageEventStream, type AssistantMessageEventStream, type Context, type Model, type SimpleStreamOptions, type Tool } from "@earendil-works/pi-ai";
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
-import { createSdkMcpServer, query, type Options, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import { createSdkMcpServer, query, type McpServerConfig, type Options, type Query, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { Base64ImageSource, ContentBlockParam, MessageParam } from "@anthropic-ai/sdk/resources";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
@@ -20,11 +21,14 @@ import type { ProviderSettings } from "./settings.js";
 import { jsonSchemaToZodShape } from "./typebox-to-zod.js";
 import { buildClaudeSystemPrompt, settingSourcesFor } from "./system-prompt.js";
 import { createProviderStreamRuntime } from "./provider-stream.js";
-import { BridgeSessionStore } from "./session-store.js";
+import { BridgeSessionStore, MalformedSessionTranscriptError } from "./session-store.js";
+import { awaitQueryInitialization, reconcileMcpServers } from "./sdk-signals.js";
 import { debug, diagDump, errorMessage, makeCliDebugOptions, sdkChildEnv } from "./debug.js";
 
-interface BridgeRuntimeDependencies {
+export interface BridgeRuntimeDependencies {
 	providerSettings: ProviderSettings;
+	queryFactory?(request: { prompt: AsyncIterable<SDKUserMessage>; options?: Options }): Query;
+	sessionStore?: BridgeSessionStore;
 }
 
 interface SessionState {
@@ -62,13 +66,36 @@ interface SyncPlan {
 	advanceCursor?: boolean;
 }
 
+interface FreshQueryRequest {
+	queryCtx: QueryContext;
+	syncPlan: SyncPlan;
+	cwd: string;
+	customToolNameToSdk: Map<string, string>;
+	customToolNameToPi: Map<string, string>;
+	model: Model<any>;
+	contextMessageCount: number;
+	isReentrant: boolean;
+	reusableRoot: boolean;
+	spawnSignature: string;
+	mcpSignature: string;
+	mcpTools: Tool[];
+	mcpServers: Record<string, McpServerConfig>;
+	cliModel: string;
+	promptMessage: SDKUserMessage;
+	queryOptions: Options;
+	attachAbort(): void;
+}
+
 type SessionDisposition = "rebuild" | "drop";
+
+export const SESSION_STORE_LOAD_TIMEOUT_MS = 15_000;
 
 export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
 	const { providerSettings } = dependencies;
+	const queryFactory = dependencies.queryFactory ?? query;
 
 	let sharedSession: SessionState | null = null;
-	const sessionStore = new BridgeSessionStore(debug);
+	const sessionStore = dependencies.sessionStore ?? new BridgeSessionStore(debug);
 	let piUI: ExtensionUIContext | null = null;
 	const activeQueryContexts = new Set<QueryContext>();
 	// The persistent (root) query context. Each runtime owns its own, so two
@@ -186,6 +213,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
 			type: "user",
 			message: { role: "user", content: blocks ?? text ?? "[continue]" } as MessageParam,
 			parent_tool_use_id: null,
+			uuid: randomUUID(),
 		};
 	}
 
@@ -350,8 +378,8 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
 
 	// Creates an MCP server that bridges pi tools to the SDK. Each tool handler
 	// blocks on a Promise until pi delivers the matching tool result.
-	function buildMcpServers(tools: Tool[], queryCtx: QueryContext): Record<string, ReturnType<typeof createSdkMcpServer>> | undefined {
-		if (!tools.length) return undefined;
+	function buildMcpServers(tools: Tool[], queryCtx: QueryContext): Record<string, McpServerConfig> {
+		if (!tools.length) return {};
 		const mcpTools = tools.map((tool) => ({
 			name: tool.name,
 			description: tool.description,
@@ -360,6 +388,10 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
 		}));
 		const server = createSdkMcpServer({ name: MCP_SERVER_NAME, version: "1.0.0", tools: mcpTools });
 		return { [MCP_SERVER_NAME]: server };
+	}
+
+	function mcpSignature(tools: Tool[]): string {
+		return JSON.stringify(tools.map((tool) => ({ name: tool.name, description: tool.description, parameters: tool.parameters })));
 	}
 
 	type QueryCloseMode = "drain" | "force";
@@ -378,7 +410,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
 		if (mode === "drain") {
 			debug("provider: waiting for natural query EOF before closing session-store writer");
 		} else {
-			storeWriter?.close();
+			storeWriter?.invalidate();
 			if (sharedSession) sharedSession = { ...sharedSession, needsRebuild: true };
 			try { activeQuery?.close(); } catch {}
 		}
@@ -390,7 +422,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
 		c.readyForInput = false;
 		activeQueryContexts.delete(c);
 		const completion = c.completion ?? Promise.resolve();
-		const closeCompletion = completion.finally(() => {
+		const finishClose = () => {
 			storeWriter?.close();
 			if (localSessionFragment) {
 				deleteSession(localSessionFragment.sessionId, localSessionFragment.cwd, localSessionFragment.claudeDir);
@@ -399,7 +431,8 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
 			if (c.sessionStoreWriter === storeWriter) c.sessionStoreWriter = null;
 			if (c.localSessionFragment === localSessionFragment) c.localSessionFragment = null;
 			if (c.closeCompletion === closeCompletion) c.closeCompletion = null;
-		});
+		};
+		const closeCompletion = completion.then(finishClose, finishClose);
 		c.closeCompletion = closeCompletion;
 		return closeCompletion;
 	}
@@ -423,6 +456,160 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
 		}
 		emitTerminalError(c, reason, message);
 		void closeQueryContext(c, message, "force");
+	}
+
+	function invalidResumeMaterialization(error: unknown): boolean {
+		if (error instanceof MalformedSessionTranscriptError) return true;
+		// SDK 0.3.219's resume materializer and Claude subprocess expose only plain Error messages.
+		return /SessionStore\.(?:load|listSubkeys)\(\) timed out|No conversation found|invalid (?:resume|transcript)|malformed (?:resume|transcript)/i.test(errorMessage(error));
+	}
+
+	function invalidateStoredSession(sessionId: string, reason: string): void {
+		sessionStore.delete(sessionId);
+		if (sharedSession?.sessionId === sessionId) sharedSession = { ...sharedSession, needsRebuild: true };
+		debug(`provider: invalidated session ${sessionId.slice(0, 8)} (${reason})`);
+	}
+
+	function settleInterruptedQuery(c: QueryContext): void {
+		if (!c.turnAborted || !c.turnInterruptReceiptReceived) return;
+		if (c.turnInterruptQueuedIds.length > 0) {
+			failQuery(c, "aborted", "Operation aborted; Claude retained queued input, so the session will rebuild", "rebuild");
+			return;
+		}
+		if (!c.turnResultVerdict) return;
+		if (!c.turnSawAbortedAssistant && c.turnResultVerdict.type !== "interrupted") {
+			failQuery(c, "aborted", "Operation aborted without complete Claude cancellation metadata; the session will rebuild", "rebuild");
+			return;
+		}
+		c.readyForInput = c.persistent;
+		c.turnAborted = false;
+		c.abortCleanup?.();
+		c.abortCleanup = null;
+		debug("provider: interrupted query is reusable after empty receipt and terminal abort metadata");
+	}
+
+	async function spawnFreshQuery(request: FreshQueryRequest): Promise<void> {
+		const {
+			queryCtx, syncPlan, cwd, customToolNameToSdk, customToolNameToPi, model,
+			contextMessageCount, isReentrant, reusableRoot, spawnSignature, mcpSignature,
+			mcpTools, mcpServers, cliModel, promptMessage, attachAbort,
+		} = request;
+		try {
+			if (queryCtx.closeCompletion) await queryCtx.closeCompletion;
+			if (queryCtx.activeQuery) {
+				await closeQueryContext(
+					queryCtx,
+					syncPlan.path === "reuse" ? "query options changed" : syncPlan.path,
+					reusableRoot ? "drain" : "force",
+				);
+			}
+			const syncResult = applySharedSessionSync(syncPlan, cwd, customToolNameToSdk, model.id);
+			queryCtx.pendingToolCalls.clear();
+			queryCtx.pendingResults.clear();
+			queryCtx.persistent = !isReentrant;
+			queryCtx.closing = false;
+			queryCtx.spawnSignature = spawnSignature;
+			queryCtx.mcpSignature = mcpSignature;
+			queryCtx.hasMcpServer = mcpTools.length > 0;
+			queryCtx.cliModel = cliModel;
+			queryCtx.modelUsageSnapshot = {};
+			const inputQueue = new PushQueue<SDKUserMessage>();
+			queryCtx.inputQueue = inputQueue;
+			const writerLabel = isReentrant ? "provider-child" : "provider";
+			const storeWriter = sessionStore.createWriter(writerLabel);
+			queryCtx.sessionStoreWriter = storeWriter;
+			const queryOptions: Options = {
+				...request.queryOptions,
+				sessionStore: storeWriter,
+				sessionStoreFlush: "batched",
+				loadTimeoutMs: SESSION_STORE_LOAD_TIMEOUT_MS,
+				...(mcpTools.length > 0 ? { mcpServers } : {}),
+				...(syncResult.sessionId ? { resume: syncResult.sessionId } : {}),
+			};
+			debug("provider: fresh streaming query", `model=${cliModel} msgs=${contextMessageCount} tools=${mcpTools.length}`,
+				`resume=${syncResult.sessionId?.slice(0, 8) ?? "none"} effort=${queryOptions.effort ?? "default"} persistent=${!isReentrant}`);
+
+			const sdkQuery = queryFactory({ prompt: inputQueue, options: queryOptions });
+			queryCtx.activeQuery = sdkQuery;
+			activeQueryContexts.add(queryCtx);
+			attachAbort();
+
+			const completion = consumeQuery(sdkQuery, customToolNameToPi, model, queryCtx, {
+				onResult(result) {
+					if (queryCtx.closing) return;
+					if (queryCtx.turnAborted) emitTerminalError(queryCtx, "aborted", "Operation aborted");
+					else {
+						queryCtx.abortCleanup?.();
+						queryCtx.abortCleanup = null;
+						finalizeCurrentStream(queryCtx);
+					}
+					const resultSessionId = result.session_id;
+					const sessionId = resultSessionId ?? sharedSession?.sessionId;
+					if (syncResult.preserveSharedSession && resultSessionId && resultSessionId !== sharedSession?.sessionId) {
+						sessionStore.delete(resultSessionId);
+						debug(`provider: deleted ephemeral reentrant session ${resultSessionId.slice(0, 8)}`);
+					} else if (!syncResult.preserveSharedSession && sessionId) {
+						sharedSession = { sessionId, cursor: queryCtx.latestCursor };
+						debug(`provider: turn complete, session=${sessionId.slice(0, 8)}, cursor=${queryCtx.latestCursor}, storedRecords=${sessionStore.entryCount(sessionId)}`);
+					}
+					const verdict = queryCtx.turnResultVerdict;
+					if (!verdict) {
+						failQuery(queryCtx, "error", "Claude result was not classified", "rebuild");
+					} else if (queryCtx.turnAborted) {
+						settleInterruptedQuery(queryCtx);
+					} else if (verdict.type === "interrupted") {
+						failQuery(queryCtx, "aborted", "Claude aborted the turn without an interrupt receipt; the session will rebuild", "rebuild");
+					} else if (verdict.type === "reusable") {
+						queryCtx.readyForInput = queryCtx.persistent;
+					} else {
+						queryCtx.readyForInput = false;
+						void closeQueryContext(queryCtx, `terminal result ${result.terminal_reason ?? result.subtype}`, "drain");
+					}
+					if (!queryCtx.persistent) void closeQueryContext(queryCtx, "reentrant turn complete", "drain");
+				},
+				onSessionId(sessionId) {
+					if (queryCtx.closing) {
+						if (!syncResult.sessionId) deleteSession(sessionId, cwd, process.env.CLAUDE_CONFIG_DIR);
+						return;
+					}
+					if (!syncResult.sessionId && !queryCtx.localSessionFragment) {
+						queryCtx.localSessionFragment = {
+							sessionId,
+							cwd,
+							...(process.env.CLAUDE_CONFIG_DIR ? { claudeDir: process.env.CLAUDE_CONFIG_DIR } : {}),
+						};
+					}
+					if (!syncResult.preserveSharedSession) sharedSession = { sessionId, cursor: queryCtx.latestCursor };
+				},
+				onMirrorError(message) {
+					invalidateStoredSession(message.key.sessionId, `mirror_error: ${message.error}`);
+					piUI?.notify(`Claude transcript mirror failed: ${message.error}`, "error");
+					if (!queryCtx.closing) failQuery(queryCtx, "error", `Claude transcript mirror failed: ${message.error}`, "rebuild");
+				},
+			});
+			queryCtx.completion = completion;
+			void completion.then(() => {
+				debug(`consumeQuery: query exited, closing=${queryCtx.closing} persistent=${queryCtx.persistent}`);
+				if (!queryCtx.closing && queryCtx.activeQuery === sdkQuery) {
+					failQuery(queryCtx, queryCtx.turnAborted ? "aborted" : "error", queryCtx.turnAborted ? "Operation aborted" : "Claude Code query ended unexpectedly", queryCtx.turnAborted ? "rebuild" : "drop");
+				}
+			}).catch((error) => {
+				debug("provider: query consumer error", error);
+				if (!queryCtx.closing) {
+					const invalidResume = Boolean(syncResult.sessionId && !queryCtx.turnResultVerdict && invalidResumeMaterialization(error));
+					if (syncResult.sessionId && invalidResume) invalidateStoredSession(syncResult.sessionId, errorMessage(error));
+					failQuery(queryCtx, queryCtx.turnAborted ? "aborted" : "error", queryCtx.turnAborted ? "Operation aborted" : errorMessage(error), queryCtx.turnAborted || invalidResume ? "rebuild" : "drop");
+				}
+			});
+			await awaitQueryInitialization(sdkQuery);
+			if (!queryCtx.closing) {
+				inputQueue.push(promptMessage);
+				if (isReentrant) inputQueue.end();
+			}
+		} catch (error) {
+			if (sharedSession && invalidResumeMaterialization(error)) invalidateStoredSession(sharedSession.sessionId, errorMessage(error));
+			failQuery(queryCtx, "error", errorMessage(error), sharedSession ? "rebuild" : "drop");
+		}
 	}
 
 	/** Provider entry point. Pi calls this for each new prompt and each tool result. */
@@ -512,8 +699,9 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
 		const spawnSignature = JSON.stringify({
 			cwd, systemPrompt, effort: effort ?? null, settingSources: settingSources ?? null,
 			claudeExecutable: claudeExecutable ?? null,
-			tools: mcpTools.map((tool) => ({ name: tool.name, description: tool.description, parameters: tool.parameters })),
 		});
+		const nextMcpSignature = mcpSignature(mcpTools);
+		const mcpServers = buildMcpServers(mcpTools, queryCtx);
 
 		const canPush = Boolean(
 			!isReentrant && queryCtx.activeQuery && queryCtx.persistent && queryCtx.readyForInput &&
@@ -522,20 +710,31 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
 
 		claimCurrentPiStream(stream, canPush ? "persistent-reuse" : "fresh-query", queryCtx);
 		queryCtx.activeModel = model;
-		queryCtx.resetTurnState(model);
+		queryCtx.beginCommand(model);
 		queryCtx.latestCursor = Math.max(queryCtx.latestCursor, context.messages.length);
 		queryCtx.fatalError = null;
 
 		const attachAbort = () => {
 			queryCtx.abortCleanup?.();
-			queryCtx.turnAborted = false;
 			if (!options?.signal) return;
 			let killTimer: ReturnType<typeof setTimeout> | undefined;
 			const onAbort = () => {
 				queryCtx.turnAborted = true;
+				queryCtx.readyForInput = false;
 				for (const pending of queryCtx.pendingToolCalls.values()) pending.resolve({ content: [{ type: "text", text: "Operation aborted" }] });
 				queryCtx.pendingToolCalls.clear();
-				void queryCtx.activeQuery?.interrupt().catch((error) => {
+				const activeQuery = queryCtx.activeQuery;
+				if (!activeQuery) {
+					failQuery(queryCtx, "aborted", "Operation aborted", "rebuild");
+					return;
+				}
+				void activeQuery.interrupt().then((receipt) => {
+					if (!queryCtx.turnAborted || queryCtx.closing) return;
+					queryCtx.turnInterruptReceiptReceived = true;
+					queryCtx.turnInterruptQueuedIds = receipt?.still_queued ?? ["unverified-queued-input"];
+					debug(`provider: interrupt receipt queued=${queryCtx.turnInterruptQueuedIds.length}`);
+					settleInterruptedQuery(queryCtx);
+				}).catch((error) => {
 					debug("provider: graceful interrupt failed", error);
 					failQuery(queryCtx, "aborted", "Operation aborted", "rebuild");
 				});
@@ -558,6 +757,12 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
 			attachAbort();
 			void (async () => {
 				try {
+					if (queryCtx.mcpSignature !== nextMcpSignature) {
+						debug(`provider: reconciling MCP tools without process replacement (${queryCtx.hasMcpServer ? "replace/remove" : "add"})`);
+						await reconcileMcpServers(queryCtx.activeQuery!, MCP_SERVER_NAME, queryCtx.hasMcpServer, mcpServers);
+						queryCtx.mcpSignature = nextMcpSignature;
+						queryCtx.hasMcpServer = mcpTools.length > 0;
+					}
 					if (queryCtx.cliModel !== cliModel) {
 						debug(`provider: persistent setModel ${queryCtx.cliModel} → ${cliModel}`);
 						await queryCtx.activeQuery!.setModel(cliModel);
@@ -566,99 +771,40 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
 					queryCtx.inputQueue!.push(promptMessage);
 					debug(`Case 3: pushed turn into persistent session ${sharedSession?.sessionId.slice(0, 8) ?? "unknown"}`);
 				} catch (error) {
-					if (!queryCtx.closing) failQuery(queryCtx, "error", errorMessage(error), "drop");
+					if (!queryCtx.closing) failQuery(queryCtx, "error", errorMessage(error), "rebuild");
 				}
 			})();
 			return stream;
 		}
 
-		void (async () => {
-			try {
-				if (queryCtx.activeQuery) await closeQueryContext(queryCtx, syncPlan.path === "reuse" ? "query options changed" : syncPlan.path, reusableRoot ? "drain" : "force");
-				const syncResult = applySharedSessionSync(syncPlan, cwd, customToolNameToSdk, model.id);
-				queryCtx.pendingToolCalls.clear();
-				queryCtx.pendingResults.clear();
-				queryCtx.persistent = !isReentrant;
-				queryCtx.closing = false;
-				queryCtx.spawnSignature = spawnSignature;
-				queryCtx.cliModel = cliModel;
-				const inputQueue = new PushQueue<SDKUserMessage>();
-				queryCtx.inputQueue = inputQueue;
-				inputQueue.push(promptMessage);
-				if (isReentrant) inputQueue.end();
-
-				const mcpServers = buildMcpServers(mcpTools, queryCtx);
-				const writerLabel = isReentrant ? "provider-child" : "provider";
-				const storeWriter = sessionStore.createWriter(writerLabel);
-				queryCtx.sessionStoreWriter = storeWriter;
-				const queryOptions: Options = {
-					cwd,
-					env: sdkChildEnv({ ENABLE_CLAUDEAI_MCP_SERVERS: "0", DISABLE_AUTO_COMPACT: "1" }),
-					tools: [], permissionMode: "bypassPermissions", allowDangerouslySkipPermissions: true,
-					includePartialMessages: true, strictMcpConfig: true, systemPrompt, model: cliModel, extraArgs,
-					sessionStore: storeWriter,
-					...(effort ? { effort } : {}), ...(settingSources ? { settingSources } : {}),
-					...(mcpServers ? { mcpServers } : {}), ...(syncResult.sessionId ? { resume: syncResult.sessionId } : {}),
-					...(claudeExecutable ? { pathToClaudeCodeExecutable: claudeExecutable } : {}),
-					...makeCliDebugOptions(isReentrant ? "provider-child" : "provider"),
-				};
-				debug("provider: fresh streaming query", `model=${cliModel} msgs=${context.messages.length} tools=${mcpTools.length}`,
-					`resume=${syncResult.sessionId?.slice(0, 8) ?? "none"} effort=${effort ?? "default"} persistent=${!isReentrant}`);
-
-				const sdkQuery = query({ prompt: inputQueue, options: queryOptions });
-				queryCtx.activeQuery = sdkQuery;
-				activeQueryContexts.add(queryCtx);
-				attachAbort();
-
-				queryCtx.completion = consumeQuery(sdkQuery, customToolNameToPi, model, queryCtx, {
-					onResult(result) {
-						if (queryCtx.closing) return;
-						queryCtx.abortCleanup?.();
-						queryCtx.abortCleanup = null;
-						if (queryCtx.turnAborted) emitTerminalError(queryCtx, "aborted", "Operation aborted");
-						else finalizeCurrentStream(queryCtx);
-						queryCtx.readyForInput = queryCtx.persistent;
-						queryCtx.turnAborted = false;
-						const resultSessionId = (result as { session_id?: string }).session_id;
-						const sessionId = resultSessionId ?? sharedSession?.sessionId;
-						if (syncResult.preserveSharedSession && resultSessionId && resultSessionId !== sharedSession?.sessionId) {
-							sessionStore.delete(resultSessionId);
-							debug(`provider: deleted ephemeral reentrant session ${resultSessionId.slice(0, 8)}`);
-						} else if (!syncResult.preserveSharedSession && sessionId) {
-							sharedSession = { sessionId, cursor: queryCtx.latestCursor };
-							debug(`provider: turn complete, session=${sessionId.slice(0, 8)}, cursor=${queryCtx.latestCursor}, storedRecords=${sessionStore.entryCount(sessionId)}`);
-						}
-						if (!queryCtx.persistent) void closeQueryContext(queryCtx, "reentrant turn complete", "drain");
-					},
-					onSessionId(sessionId) {
-						if (queryCtx.closing) {
-							if (!syncResult.sessionId) deleteSession(sessionId, cwd, process.env.CLAUDE_CONFIG_DIR);
-							return;
-						}
-						if (!syncResult.sessionId && !queryCtx.localSessionFragment) {
-							queryCtx.localSessionFragment = {
-								sessionId,
-								cwd,
-								...(process.env.CLAUDE_CONFIG_DIR ? { claudeDir: process.env.CLAUDE_CONFIG_DIR } : {}),
-							};
-						}
-						if (!syncResult.preserveSharedSession) sharedSession = { sessionId, cursor: queryCtx.latestCursor };
-					},
-				}).then(() => {
-					debug(`consumeQuery: query exited, closing=${queryCtx.closing} persistent=${queryCtx.persistent}`);
-					if (!queryCtx.closing && queryCtx.activeQuery === sdkQuery) {
-						failQuery(queryCtx, queryCtx.turnAborted ? "aborted" : "error", queryCtx.turnAborted ? "Operation aborted" : "Claude Code query ended unexpectedly", queryCtx.turnAborted ? "rebuild" : "drop");
-					}
-				}).catch((error) => {
-					debug("provider: query consumer error", error);
-					if (!queryCtx.closing) {
-						failQuery(queryCtx, queryCtx.turnAborted ? "aborted" : "error", queryCtx.turnAborted ? "Operation aborted" : errorMessage(error), queryCtx.turnAborted ? "rebuild" : "drop");
-					}
-				});
-			} catch (error) {
-				failQuery(queryCtx, "error", errorMessage(error), "drop");
-			}
-		})();
+		const queryOptions: Options = {
+			cwd,
+			env: sdkChildEnv({ ENABLE_CLAUDEAI_MCP_SERVERS: "0", DISABLE_AUTO_COMPACT: "1" }),
+			tools: [], permissionMode: "bypassPermissions", allowDangerouslySkipPermissions: true,
+			includePartialMessages: true, strictMcpConfig: true, systemPrompt, model: cliModel, extraArgs,
+			...(effort ? { effort } : {}), ...(settingSources ? { settingSources } : {}),
+			...(claudeExecutable ? { pathToClaudeCodeExecutable: claudeExecutable } : {}),
+			...makeCliDebugOptions(isReentrant ? "provider-child" : "provider"),
+		};
+		void spawnFreshQuery({
+			queryCtx,
+			syncPlan,
+			cwd,
+			customToolNameToSdk,
+			customToolNameToPi,
+			model,
+			contextMessageCount: context.messages.length,
+			isReentrant,
+			reusableRoot,
+			spawnSignature,
+			mcpSignature: nextMcpSignature,
+			mcpTools,
+			mcpServers,
+			cliModel,
+			promptMessage,
+			queryOptions,
+			attachAbort,
+		});
 		return stream;
 	}
 
@@ -728,6 +874,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
 			consumeQuery,
 			finalizeCurrentStream,
 			closeQueryContext,
+			settleInterruptedQuery,
 			createMcpToolHandler,
 			streamClaudeAgentSdk,
 		},

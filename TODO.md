@@ -47,6 +47,8 @@
 
 ## Deferred
 
+- **Claude Opus 5 catalog enablement**: Pi 0.82.0's published `pi-ai` Anthropic catalog still has no `claude-opus-5`, so adding the ID would make `buildModels()` fail under both the installed Pi 0.81.1 and current 0.82.0. Once a published Pi release contains canonical Opus 5 metadata, raise both Pi peer and development dependency floors to that first containing version, add `claude-opus-5` after Fable in `MODEL_IDS_IN_ORDER`, and authenticate a Claude Code context-window smoke. Add it to `BARE_ONE_M_MODEL_IDS` only if the bare ID serves the catalog's 1M window; otherwise leave the set unchanged so `claudeCodeModelId()` supplies `[1m]` when `contextWindow > 200_000`.
+
 - **CC CLI debug log accumulation**: When `CLAUDE_BRIDGE_DEBUG=1`, every
   `query()` call writes a new file under `~/.pi/agent/cc-cli-logs/`. These
   accumulate indefinitely.

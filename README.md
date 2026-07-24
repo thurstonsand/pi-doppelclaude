@@ -35,7 +35,7 @@ Behind the scenes, pi's tools are bridged to Claude Code but it should all work 
 
 **1M context:** Model metadata comes unchanged from Pi's canonical Anthropic catalog. When a model's final `contextWindow` exceeds 200K, the bridge requests Claude Code's `[1m]` variant. Claude Code remains responsible for subscription and Extra Usage authorization and surfaces any rejection directly.
 
-**Cost display:** Pi applies the canonical Anthropic API prices as an API-equivalent reference for token and cache usage. This does not mean the request was API-billed; Claude Code remains authoritative for subscription quota and Extra Usage charges.
+**Cost display:** Pi applies the canonical Anthropic API prices as an API-equivalent reference for token and cache usage. Accounting follows the concrete models in Claude Code's terminal `modelUsage`, so a fallback turn is priced from the served model while retaining the selected Pi model as the message identity. This does not mean the request was API-billed; Claude Code remains authoritative for subscription quota and Extra Usage charges. Structured subscription-limit warnings include the available limit bucket, utilization, reset, and Extra Usage eligibility.
 
 ## Configuration
 
@@ -183,7 +183,7 @@ Set `claudeBridge.debug.enabled` to `true` in Pi settings. `claudeBridge.debug.l
 
 `CLAUDE_BRIDGE_DEBUG=1` and `CLAUDE_BRIDGE_DEBUG_PATH` remain available for ephemeral debugging and tests. Environment values take precedence over global settings: `CLAUDE_BRIDGE_DEBUG=1` enables logging, `CLAUDE_BRIDGE_DEBUG=0` disables it, and `CLAUDE_BRIDGE_DEBUG_PATH` overrides `debug.logPath`. Setting a path alone does not enable logging.
 
-- **Bridge log** — every provider call, session sync decision, session-store load/append/replace, tool result delivery, and CC's stderr.
+- **Bridge log** — every provider call, session sync decision, live MCP reconciliation, served-model usage/fallback, session-store load/append/replace/invalidation, tool result delivery, and CC's stderr. A mirror failure or invalid resume is terminal for that turn; the next request rebuilds the Claude transcript from Pi's complete history instead of resuming partial state.
 - **Per-query Claude Code CLI logs** in `cc-cli-logs/` beside the bridge log — the CC subprocess's own debug stream, one file per `query()` call. The main `provider` query stays alive across compatible turns; `provider-child` identifies reentrant/subagent queries. Useful when a resume fails or CC misbehaves internally — shows the CLI's own view of session loading, API requests, and tool calls.
 
 When filing a bug about a session-resume failure (e.g. "No conversation found"), the most useful attachments are the `syncResult:` and `session-store:` lines from the bridge log plus the matching `cc-cli-logs/` file for the failing query.

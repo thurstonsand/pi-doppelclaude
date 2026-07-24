@@ -1,9 +1,10 @@
-import { type AssistantMessage, type AssistantMessageEventStream, type Model } from "@earendil-works/pi-ai";
-import { type Query, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import { type AssistantMessageEventStream, type Model } from "@earendil-works/pi-ai";
+import { type Query, type SDKAssistantMessage, type SDKMessage, type SDKMirrorErrorMessage, type SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { QueryContext } from "./query-state.js";
 import { mapSdkToolArgsToPi, mapSdkToolNameToPi } from "./convert.js";
 import { logServedContextWindow, resultErrorText } from "./sdk-result.js";
-import { applySdkUsage, debugSdkUsage, type SdkUsage } from "./sdk-usage.js";
+import { applySdkUsage, debugSdkUsage, diffSdkModelUsage, reconcileSdkModelUsage } from "./sdk-usage.js";
+import { apiStatusFailure, assistantApiFailure, classifyResult, formatRateLimitMessage } from "./sdk-signals.js";
 
 interface ProviderStreamDependencies {
 	debug(...args: unknown[]): void;
@@ -12,11 +13,6 @@ interface ProviderStreamDependencies {
 
 export function createProviderStreamRuntime(dependencies: ProviderStreamDependencies) {
 	const { debug, notify } = dependencies;
-
-	function updateUsage(output: AssistantMessage, usage: SdkUsage, model: Model<any>): void {
-		applySdkUsage(output, usage, model);
-		debugSdkUsage(debug, output, model);
-	}
 
 	// --- Provider helpers: misc ---
 
@@ -112,7 +108,7 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
 
 		if (event?.type === "message_start") {
 			c.turnToolCallIds = [];
-			if (event.message?.usage) updateUsage(c.turnOutput, event.message.usage, model);
+			if (event.message?.usage && c.turnOutput) applySdkUsage(c.turnOutput, event.message.usage, model);
 			return;
 		}
 
@@ -184,7 +180,7 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
 
 		if (event?.type === "message_delta") {
 			c.turnOutput.stopReason = mapStopReason(event.delta?.stop_reason);
-			if (event.usage) updateUsage(c.turnOutput, event.usage, model);
+			if (event.usage) applySdkUsage(c.turnOutput, event.usage, model);
 			return;
 		}
 
@@ -216,9 +212,11 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
 	// arrives before any stream_events, this is the primary content path. Must maintain
 	// the same stream lifecycle as processStreamEvent — including ending the stream on
 	// tool_use to prevent deadlock with the MCP handler.
-	function processAssistantMessage(message: SDKMessage, model: Model<any>, customToolNameToPi: Map<string, string>, c: QueryContext): void {
+	function processAssistantMessage(message: SDKAssistantMessage, model: Model<any>, customToolNameToPi: Map<string, string>, c: QueryContext): void {
+		if (message.aborted) c.turnSawAbortedAssistant = true;
+		c.turnApiFailure ??= assistantApiFailure(message.error);
 		if (c.turnSawStreamEvent) return;
-		const assistantMsg = (message as any).message;
+		const assistantMsg = message.message;
 		if (!assistantMsg?.content) return;
 		c.turnToolCallIds = [];
 		debug(`processAssistantMessage fallback: ${assistantMsg.content.length} blocks, types=${assistantMsg.content.map((b: any) => b.type).join(",")}`);
@@ -241,7 +239,7 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
 				ensureTurnStarted(c);
 				c.turnSawToolCall = true;
 				c.turnToolCallIds.push(block.id);
-				const mappedArgs = mapSdkToolArgsToPi(mapSdkToolNameToPi(block.name, customToolNameToPi), block.input);
+				const mappedArgs = mapSdkToolArgsToPi(mapSdkToolNameToPi(block.name, customToolNameToPi), block.input as Record<string, unknown>);
 				c.turnBlocks.push({
 					type: "toolCall", id: block.id,
 					name: mapSdkToolNameToPi(block.name, customToolNameToPi),
@@ -255,7 +253,7 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
 				debug("processAssistantMessage: unhandled block type", block.type);
 			}
 		}
-		if (assistantMsg.usage && c.turnOutput) updateUsage(c.turnOutput, assistantMsg.usage, model);
+		if (assistantMsg.usage && c.turnOutput) applySdkUsage(c.turnOutput, assistantMsg.usage, model);
 
 		// End the stream on tool_use, same as processStreamEvent's message_stop handler.
 		if (c.turnSawToolCall && c.currentPiStream && c.turnOutput) {
@@ -274,8 +272,52 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
 	 *  whichever path handles it first (processStreamEvent or processAssistantMessage),
 	 *  and the MCP handler blocks the generator until pi delivers the tool result. */
 	interface QueryConsumerHooks {
-		onResult(message: SDKMessage): void;
+		onResult(message: SDKResultMessage): void;
 		onSessionId(sessionId: string): void;
+		onMirrorError?(message: SDKMirrorErrorMessage): void;
+	}
+
+	function processResultMessage(message: SDKResultMessage, currentModel: Model<any>, queryCtx: QueryContext): void {
+		logServedContextWindow(debug, "result", message, currentModel);
+		const modelUsage = diffSdkModelUsage(message.modelUsage, queryCtx.modelUsageSnapshot);
+		queryCtx.modelUsageSnapshot = structuredClone(message.modelUsage);
+		for (const [rawModel, usage] of Object.entries(modelUsage)) {
+			debug(`usage: servedModel=${usage.canonicalModel ?? rawModel} rawModel=${rawModel} provider=${usage.provider ?? "unknown"} input=${usage.inputTokens} output=${usage.outputTokens} cacheRead=${usage.cacheReadInputTokens} cacheWrite=${usage.cacheCreationInputTokens} costUSD=${usage.costUSD}`);
+		}
+
+		const statusFailure = message.subtype === "success" ? apiStatusFailure(message.api_error_status) : null;
+		const structuredFailure = queryCtx.turnRateLimitRejection ?? queryCtx.turnApiFailure ?? statusFailure;
+		const detail = message.subtype !== "success" || message.is_error ? resultErrorText(message) : null;
+		queryCtx.turnResultVerdict = classifyResult(message, structuredFailure, detail);
+		const verdict = queryCtx.turnResultVerdict;
+		if (!queryCtx.turnOutput) return;
+
+		const accounting = reconcileSdkModelUsage(queryCtx.commandOutputs, modelUsage, currentModel);
+		debugSdkUsage(debug, queryCtx.turnOutput, currentModel);
+		debug(`usage: served=${accounting.servedModels.join(",") || "none"} sdkCostUSD=${accounting.costUSD}`);
+		if (accounting.fallbackModels.length > 0) {
+			const fallback = `Claude served ${accounting.fallbackModels.join(", ")} instead of requested ${currentModel.id}; usage priced from served model`;
+			debug(`usage: fallback ${fallback}`);
+			notify?.(fallback, "warning");
+		}
+		if (accounting.unknownModels.length > 0) {
+			debug(`usage: no Pi catalog pricing for served model(s): ${accounting.unknownModels.join(", ")}; preserving SDK total cost`);
+		}
+
+		if (verdict.type !== "reusable") {
+			queryCtx.turnOutput.stopReason = "error";
+			queryCtx.turnOutput.errorMessage = verdict.message;
+			return;
+		}
+		if (!queryCtx.turnSawStreamEvent) {
+			ensureTurnStarted(queryCtx);
+			const text = message.subtype === "success" ? message.result : "";
+			queryCtx.turnBlocks.push({ type: "text", text });
+			const index = queryCtx.turnBlocks.length - 1;
+			queryCtx.currentPiStream?.push({ type: "text_start", contentIndex: index, partial: queryCtx.turnOutput });
+			queryCtx.currentPiStream?.push({ type: "text_delta", contentIndex: index, delta: text, partial: queryCtx.turnOutput });
+			queryCtx.currentPiStream?.push({ type: "text_end", contentIndex: index, content: text, partial: queryCtx.turnOutput });
+		}
 	}
 
 	async function consumeQuery(
@@ -288,58 +330,48 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
 		let capturedSessionId: string | undefined;
 
 		for await (const message of sdkQuery) {
-			if (message.type === "system") {
-				const systemMessage = message as any;
-				if (systemMessage.subtype === "init" && systemMessage.session_id) {
-					capturedSessionId = systemMessage.session_id;
-					hooks.onSessionId(capturedSessionId!);
-				} else if (systemMessage.subtype === "mirror_error") {
-					debug("consumeQuery: sessionStore mirror_error", systemMessage.error, systemMessage.key);
-				}
-			}
-			if (!queryCtx.currentPiStream || !queryCtx.turnOutput) continue;
-
 			const currentModel = queryCtx.activeModel ?? model;
 			switch (message.type) {
-				case "stream_event":
-					processStreamEvent(message, customToolNameToPi, currentModel, queryCtx);
+				case "system":
+					switch (message.subtype) {
+						case "init":
+							capturedSessionId = message.session_id;
+							hooks.onSessionId(capturedSessionId);
+							break;
+						case "mirror_error":
+							debug("consumeQuery: sessionStore mirror_error", message.error, message.key);
+							hooks.onMirrorError?.(message);
+							break;
+						case "api_retry": {
+							const failure = apiStatusFailure(message.error_status) ?? assistantApiFailure(message.error);
+							if (failure) notify?.(`${failure}; retrying attempt ${message.attempt}/${message.max_retries}`, "warning");
+							break;
+						}
+					}
 					break;
+				case "rate_limit_event": {
+					const rateLimitMessage = formatRateLimitMessage(message.rate_limit_info);
+					debug("consumeQuery: rate_limit_event", JSON.stringify(message.rate_limit_info).slice(0, 300));
+					if (message.rate_limit_info.status === "rejected") queryCtx.turnRateLimitRejection = rateLimitMessage;
+					if (message.rate_limit_info.status !== "allowed") notify?.(rateLimitMessage, "warning");
+					break;
+				}
 				case "assistant":
 					processAssistantMessage(message, currentModel, customToolNameToPi, queryCtx);
 					break;
 				case "result":
-					logServedContextWindow(debug, "result", message, currentModel);
-					if (message.subtype !== "success") {
-						queryCtx.turnOutput.stopReason = "error";
-						queryCtx.turnOutput.errorMessage = resultErrorText(message);
-					} else if (!queryCtx.turnSawStreamEvent) {
-						ensureTurnStarted(queryCtx);
-						const text = message.result || "";
-						queryCtx.turnBlocks.push({ type: "text", text });
-						const idx = queryCtx.turnBlocks.length - 1;
-						queryCtx.currentPiStream?.push({ type: "text_start", contentIndex: idx, partial: queryCtx.turnOutput });
-						queryCtx.currentPiStream?.push({ type: "text_delta", contentIndex: idx, delta: text, partial: queryCtx.turnOutput });
-						queryCtx.currentPiStream?.push({ type: "text_end", contentIndex: idx, content: text, partial: queryCtx.turnOutput });
-					}
+					processResultMessage(message, currentModel, queryCtx);
 					hooks.onResult(message);
 					break;
-				case "system":
+				case "stream_event":
+					processStreamEvent(message, customToolNameToPi, currentModel, queryCtx);
 					break;
 				case "user":
-					break; // SDK echo of user prompt — not needed
-				case "rate_limit_event": {
-					const info = (message as any).rate_limit_info;
-					debug("consumeQuery: rate_limit_event", JSON.stringify(info).slice(0, 300));
-					if (info?.status === "rejected") {
-						const resetsAt = info.resetsAt ? new Date(info.resetsAt).toLocaleTimeString() : "unknown";
-						notify?.(`Claude rate limited (${info.rateLimitType ?? "unknown"}) — resets at ${resetsAt}`, "warning");
-					} else if (info?.status === "allowed_warning") {
-						notify?.(`Claude rate limit warning: ${Math.round(info.utilization ?? 0)}% used (${info.rateLimitType ?? ""})`, "warning");
-					}
 					break;
-				}
 				default:
-					debug("consumeQuery: unhandled SDK message type", message.type);
+					if (queryCtx.currentPiStream && queryCtx.turnOutput) {
+						debug("consumeQuery: unhandled SDK message type", message.type);
+					}
 					break;
 			}
 		}

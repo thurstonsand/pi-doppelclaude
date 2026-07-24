@@ -75,14 +75,21 @@ describe("bridge runtime isolation", () => {
 		query.close = () => { forceClosed = true; };
 		context.activeQuery = query;
 		context.inputQueue = new PushQueue();
+		let writerClosed = false;
+		const writer = Object.create(null) as SessionStoreWriter;
+		writer.close = () => { writerClosed = true; };
+		writer.invalidate = () => { throw new Error("drain must not invalidate the writer"); };
+		context.sessionStoreWriter = writer;
 		let finishQuery: () => void;
 		context.completion = new Promise<void>((resolve) => { finishQuery = resolve; });
 
 		const closing = runtime.test.closeQueryContext(context, "completed", "drain");
 		assert.equal(forceClosed, false);
+		assert.equal(writerClosed, false, "writer closed before natural EOF");
 		finishQuery!();
 		await closing;
 		assert.equal(forceClosed, false);
+		assert.equal(writerClosed, true, "writer did not close after natural EOF");
 	});
 
 	it("force-closes and fences unsafe queries before their consumer exits", async () => {
@@ -96,6 +103,7 @@ describe("bridge runtime isolation", () => {
 		context.inputQueue = new PushQueue();
 		const writer = Object.create(null) as SessionStoreWriter;
 		writer.close = () => { writerClosed = true; };
+		writer.invalidate = () => { writerClosed = true; };
 		context.sessionStoreWriter = writer;
 		let finishQuery: () => void;
 		context.completion = new Promise<void>((resolve) => { finishQuery = resolve; });
@@ -107,5 +115,34 @@ describe("bridge runtime isolation", () => {
 		assert.equal(runtime.test.getSharedSession().needsRebuild, true);
 		finishQuery!();
 		await closing;
+	});
+
+	it("reuses an interrupted query only after an empty receipt and terminal abort metadata", () => {
+		const runtime = makeRuntime();
+		const context = runtime.test.rootContext;
+		context.persistent = true;
+		context.turnAborted = true;
+		context.turnInterruptReceiptReceived = true;
+		context.turnInterruptQueuedIds = [];
+		context.turnSawAbortedAssistant = true;
+		context.turnResultVerdict = { type: "interrupted", message: "Claude query ended with aborted_streaming" };
+
+		runtime.test.settleInterruptedQuery(context);
+		assert.equal(context.readyForInput, true);
+		assert.equal(context.turnAborted, false);
+	});
+
+	it("forces rebuild when an interrupt receipt retains queued input", () => {
+		const runtime = makeRuntime();
+		const context = runtime.test.rootContext;
+		context.persistent = true;
+		context.turnAborted = true;
+		context.turnInterruptReceiptReceived = true;
+		context.turnInterruptQueuedIds = ["queued-follow-up"];
+		runtime.test.setSharedSession({ sessionId: "11111111-1111-4111-8111-111111111111", cursor: 1 });
+
+		runtime.test.settleInterruptedQuery(context);
+		assert.equal(context.readyForInput, false);
+		assert.equal(runtime.test.getSharedSession().needsRebuild, true);
 	});
 });

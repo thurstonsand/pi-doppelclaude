@@ -1,6 +1,9 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { BridgeSessionStore } from "../src/session-store.js";
+import { query, type SessionStore, type SessionStoreEntry } from "@anthropic-ai/claude-agent-sdk";
+import { SESSION_STORE_LOAD_TIMEOUT_MS } from "../src/bridge-runtime.js";
+import { PushQueue } from "../src/query-state.js";
+import { BridgeSessionStore, MalformedSessionTranscriptError } from "../src/session-store.js";
 
 const key = (sessionId: string, subpath?: string) => ({ projectKey: "ignored-project-scope", sessionId, ...(subpath ? { subpath } : {}) });
 
@@ -58,6 +61,47 @@ describe("BridgeSessionStore", () => {
 		writer.close();
 		await writer.append(key("s1"), [{ type: "assistant", uuid: "after" }]);
 		assert.deepEqual(store.load("s1").map((entry) => entry.uuid), ["before"]);
+	});
+
+	it("invalidates a forced writer revision before replacement", async () => {
+		const store = new BridgeSessionStore();
+		const oldWriter = store.createWriter("forced");
+		await oldWriter.append(key("s1"), [{ type: "user", uuid: "before" }]);
+		oldWriter.invalidate();
+		await oldWriter.append(key("s1"), [{ type: "assistant", uuid: "late" }]);
+
+		const nextWriter = store.createWriter("replacement");
+		await nextWriter.append(key("s1"), [{ type: "assistant", uuid: "current" }]);
+		assert.deepEqual(store.load("s1").map((entry) => entry.uuid), ["before", "current"]);
+	});
+
+	it("rejects malformed transcript entries at the adapter edge", async () => {
+		const store = new BridgeSessionStore();
+		const writer = store.createWriter("malformed");
+		await assert.rejects(
+			() => writer.append(key("s1"), [{ uuid: "missing-type" } as SessionStoreEntry]),
+			(error) => error instanceof MalformedSessionTranscriptError && /Malformed SessionStore transcript entry/.test(error.message),
+		);
+	});
+
+	it("configures a finite load timeout and the SDK rejects a stalled load", async () => {
+		assert.ok(Number.isFinite(SESSION_STORE_LOAD_TIMEOUT_MS));
+		assert.ok(SESSION_STORE_LOAD_TIMEOUT_MS > 0);
+		const stalledStore: SessionStore = {
+			append: async () => {},
+			load: async () => new Promise<SessionStoreEntry[] | null>(() => {}),
+		};
+		const prompt = new PushQueue<any>();
+		const sdkQuery = query({
+			prompt,
+			options: {
+				resume: "11111111-1111-4111-8111-111111111111",
+				sessionStore: stalledStore,
+				loadTimeoutMs: 5,
+			},
+		});
+		await assert.rejects(() => sdkQuery.next(), /SessionStore\.load\(\) timed out after 5ms/);
+		sdkQuery.close();
 	});
 
 	it("keeps subagent transcripts separate and deletes them with the session", async () => {

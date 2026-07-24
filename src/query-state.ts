@@ -8,6 +8,8 @@
 
 import type { AssistantMessage, AssistantMessageEventStream, Model } from "@earendil-works/pi-ai";
 import type { Query, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { ResultVerdict } from "./sdk-signals.js";
+import type { SdkModelUsage } from "./sdk-usage.js";
 import type { McpResult } from "./extract-tool-results.js";
 import type { SessionStoreWriter } from "./session-store.js";
 
@@ -72,13 +74,23 @@ export class QueryContext {
 	persistent = false;
 	closing = false;
 	spawnSignature: string | null = null;
+	mcpSignature: string | null = null;
+	hasMcpServer = false;
 	cliModel: string | null = null;
+	modelUsageSnapshot: SdkModelUsage = {};
+	commandOutputs: AssistantMessage[] = [];
 	activeModel: Model<any> | null = null;
 	abortCleanup: (() => void) | null = null;
 	completion: Promise<void> | null = null;
 	closeCompletion: Promise<void> | null = null;
 	localSessionFragment: LocalSessionFragment | null = null;
 	turnAborted = false;
+	turnSawAbortedAssistant = false;
+	turnInterruptReceiptReceived = false;
+	turnInterruptQueuedIds: string[] = [];
+	turnResultVerdict: ResultVerdict | null = null;
+	turnApiFailure: string | null = null;
+	turnRateLimitRejection: string | null = null;
 	pendingToolCalls = new Map<string, PendingToolCall>();
 	pendingResults = new Map<string, McpResult>();
 	turnToolCallIds: string[] = [];
@@ -94,6 +106,11 @@ export class QueryContext {
 		return this.turnOutput.content;
 	}
 
+	beginCommand(model: Model<any>): void {
+		this.commandOutputs = [];
+		this.resetTurnState(model);
+	}
+
 	resetTurnState(model: Model<any>): void {
 		this.turnOutput = {
 			role: "assistant", content: [],
@@ -102,9 +119,17 @@ export class QueryContext {
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
 			stopReason: "stop", timestamp: Date.now(),
 		};
+		this.commandOutputs.push(this.turnOutput);
 		this.turnStarted = false;
 		this.turnSawStreamEvent = false;
 		this.turnSawToolCall = false;
+		this.turnAborted = false;
+		this.turnSawAbortedAssistant = false;
+		this.turnInterruptReceiptReceived = false;
+		this.turnInterruptQueuedIds = [];
+		this.turnResultVerdict = null;
+		this.turnApiFailure = null;
+		this.turnRateLimitRejection = null;
 		this.readyForInput = false;
 		// turnToolCallIds is not reset — it persists across tool-result delivery
 		// callbacks within the same assistant message.

@@ -7,11 +7,25 @@ interface StoredTranscript {
 
 export interface SessionStoreWriter extends SessionStore {
 	close(): void;
+	invalidate(): void;
 }
 
 type TranscriptEntry = { type: string; uuid?: string; timestamp?: string };
 
+export class MalformedSessionTranscriptError extends Error {}
+
 function cloneEntries(entries: readonly TranscriptEntry[]): SessionStoreEntry[] {
+	for (const [index, entry] of entries.entries()) {
+		if (typeof entry !== "object" || entry === null || typeof entry.type !== "string" || entry.type.length === 0) {
+			throw new MalformedSessionTranscriptError(`Malformed SessionStore transcript entry at index ${index}: expected a nonempty string type`);
+		}
+		if (entry.uuid !== undefined && typeof entry.uuid !== "string") {
+			throw new MalformedSessionTranscriptError(`Malformed SessionStore transcript entry at index ${index}: uuid must be a string`);
+		}
+		if (entry.timestamp !== undefined && typeof entry.timestamp !== "string") {
+			throw new MalformedSessionTranscriptError(`Malformed SessionStore transcript entry at index ${index}: timestamp must be a string`);
+		}
+	}
 	return structuredClone([...entries]) as SessionStoreEntry[];
 }
 
@@ -36,6 +50,20 @@ export class BridgeSessionStore {
 			return current;
 		};
 
+		const close = () => {
+			if (!open) return;
+			open = false;
+			this.debug(`session-store: closed writer=${label}`);
+		};
+		const invalidate = () => {
+			if (!open) return;
+			open = false;
+			for (const sessionId of revisions.keys()) {
+				this.revisions.set(sessionId, (this.revisions.get(sessionId) ?? 0) + 1);
+			}
+			this.debug(`session-store: invalidated writer=${label}`);
+		};
+
 		return {
 			append: async (key, entries) => {
 				const writerRevision = bindRevision(key.sessionId);
@@ -56,11 +84,8 @@ export class BridgeSessionStore {
 			listSessions: async () => this.listSessions(),
 			delete: async (key) => this.delete(key.sessionId),
 			listSubkeys: async (key) => this.listSubkeys(key.sessionId),
-			close: () => {
-				if (!open) return;
-				open = false;
-				this.debug(`session-store: closed writer=${label}`);
-			},
+			close,
+			invalidate,
 		};
 	}
 

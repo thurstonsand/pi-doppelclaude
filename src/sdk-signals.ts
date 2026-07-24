@@ -1,0 +1,115 @@
+import type {
+	McpServerConfig,
+	McpSetServersResult,
+	Query,
+	SDKAssistantMessageError,
+	SDKRateLimitInfo,
+	SDKResultMessage,
+} from "@anthropic-ai/claude-agent-sdk";
+
+function assertMcpResult(action: string, result: McpSetServersResult, expectedServer: string, expectedField: "added" | "removed"): void {
+	const errors = Object.entries(result.errors);
+	if (errors.length > 0) {
+		throw new Error(`Claude MCP ${action} failed: ${errors.map(([name, error]) => `${name}: ${error}`).join("; ")}`);
+	}
+	if (!result[expectedField].includes(expectedServer)) {
+		throw new Error(`Claude MCP ${action} did not confirm ${expectedServer}`);
+	}
+}
+
+export async function reconcileMcpServers(
+	sdkQuery: Query,
+	serverName: string,
+	hadServer: boolean,
+	servers: Record<string, McpServerConfig>,
+): Promise<void> {
+	const hasServer = Object.hasOwn(servers, serverName);
+	if (hadServer) {
+		const removed = await sdkQuery.setMcpServers({});
+		assertMcpResult("removal", removed, serverName, "removed");
+	}
+	if (hasServer) {
+		const added = await sdkQuery.setMcpServers(servers);
+		assertMcpResult("addition", added, serverName, "added");
+	}
+}
+
+export async function awaitQueryInitialization(sdkQuery: Query): Promise<void> {
+	await sdkQuery.initializationResult();
+}
+
+function resetText(resetsAt: number | undefined): string | null {
+	if (resetsAt === undefined) return null;
+	const reset = new Date(resetsAt < 1_000_000_000_000 ? resetsAt * 1000 : resetsAt);
+	return Number.isNaN(reset.valueOf()) ? String(resetsAt) : reset.toISOString();
+}
+
+function limitName(type: SDKRateLimitInfo["rateLimitType"]): string {
+	switch (type) {
+		case "five_hour": return "5-hour limit";
+		case "seven_day": return "weekly limit";
+		case "seven_day_opus": return "Opus weekly limit";
+		case "seven_day_sonnet": return "Sonnet weekly limit";
+		case "seven_day_overage_included": return "weekly included-usage limit";
+		case "overage": return "Extra Usage limit";
+		case undefined: return "usage limit";
+	}
+}
+
+export function formatRateLimitMessage(info: SDKRateLimitInfo): string {
+	const parts = [`Claude ${limitName(info.rateLimitType)}`];
+	if (info.status === "allowed_warning") parts.push("warning");
+	else if (info.status === "rejected") parts.push("rejected");
+	if (info.utilization !== undefined) parts.push(`${Math.round(info.utilization)}% used`);
+	const reset = resetText(info.resetsAt);
+	if (reset) parts.push(`resets ${reset}`);
+	if (info.errorCode === "credits_required") {
+		parts.push(info.canUserPurchaseCredits ? "Extra Usage credits can be purchased" : "Extra Usage credits required");
+	}
+	if (info.overageDisabledReason) parts.push(`Extra Usage unavailable: ${info.overageDisabledReason.replaceAll("_", " ")}`);
+	return parts.join(" — ");
+}
+
+export function assistantApiFailure(error: SDKAssistantMessageError | undefined): string | null {
+	switch (error) {
+		case "rate_limit": return "Claude API rate limit (HTTP 429)";
+		case "overloaded": return "Claude API overloaded (HTTP 529)";
+		default: return null;
+	}
+}
+
+export function apiStatusFailure(status: number | null | undefined): string | null {
+	if (status === 429) return "Claude API rate limit (HTTP 429)";
+	if (status === 529) return "Claude API overloaded (HTTP 529)";
+	return null;
+}
+
+export type ResultVerdict =
+	| { type: "reusable" }
+	| { type: "interrupted"; message: string }
+	| { type: "terminal"; message: string };
+
+function combineFailure(primary: string | null, detail: string | null): string | null {
+	if (!primary) return detail;
+	if (!detail || detail === primary) return primary;
+	return `${primary}: ${detail}`;
+}
+
+export function classifyResult(
+	result: SDKResultMessage,
+	structuredFailure: string | null,
+	detail: string | null,
+): ResultVerdict {
+	const failure = combineFailure(structuredFailure, detail);
+	if (result.terminal_reason === "aborted_streaming" || result.terminal_reason === "aborted_tools") {
+		return { type: "interrupted", message: failure ?? `Claude query ended with ${result.terminal_reason}` };
+	}
+	if (result.subtype === "success" && !result.is_error && !failure &&
+		(result.terminal_reason === undefined || result.terminal_reason === "completed")) {
+		return { type: "reusable" };
+	}
+	return {
+		type: "terminal",
+		message: failure ?? `Claude query ended with ${result.terminal_reason ?? result.subtype}`,
+	};
+}
