@@ -6,15 +6,15 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
-import { MODEL_IDS_IN_ORDER, applyLongContext, buildModels, claudeCodeModelId, resolveClaudeCodeRuntimeModel, resolveModel, resolveThinkingEffort } from "../src/models.js";
+import { MODEL_IDS_IN_ORDER, applyLongContext, buildModels, claudeCodeModelId, resolveClaudeCodeRuntimeModel, resolveModel, resolveThinkingEffort, type LongContextSettings } from "../src/models.js";
 
-const PRO = { plan: "pro", longContextExtraUsage: false };
-const MAX = { plan: "max", longContextExtraUsage: false };
-const EXTRA = { plan: "pro", longContextExtraUsage: true };
+const PRO: LongContextSettings = { plan: "pro", longContextExtraUsage: false };
+const MAX: LongContextSettings = { plan: "max", longContextExtraUsage: false };
+const EXTRA: LongContextSettings = { plan: "pro", longContextExtraUsage: true };
 
 // Simulated pi-ai registry entry — extra fields mimic the ones pi-ai exposes
 // that must not leak into the provider-registered MODELS array.
-const mockPiAiModel = (id) => ({
+const mockPiAiModel = (id: string) => ({
 	id, name: id, reasoning: true, input: ["text"],
 	cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1.25 },
 	contextWindow: 200000, maxTokens: 8000,
@@ -23,18 +23,21 @@ const mockPiAiModel = (id) => ({
 	headers: { "x-api-key": "LEAK" },
 });
 
-const oneM = (id) => ({ ...mockPiAiModel(id), contextWindow: 1000000 });
+const oneM = (id: string) => ({ ...mockPiAiModel(id), contextWindow: 1000000 });
 
-const find = (models, id) => models.find((m) => m.id === id);
+const find = <T extends { id: string }>(models: T[], id: string): T | undefined => models.find((m) => m.id === id);
 
 describe("MODELS projection", () => {
 	it("strips baseUrl/api/provider/headers", () => {
 		const models = buildModels(MODEL_IDS_IN_ORDER.map(mockPiAiModel));
 		for (const m of models) {
-			assert.equal(m.baseUrl, undefined);
-			assert.equal(m.api, undefined);
-			assert.equal(m.provider, undefined);
-			assert.equal(m.headers, undefined);
+			// The projected model type no longer declares these leaky pi-ai fields;
+			// probe the raw record to prove the projection stripped them.
+			const raw = m as Record<string, unknown>;
+			assert.equal(raw.baseUrl, undefined);
+			assert.equal(raw.api, undefined);
+			assert.equal(raw.provider, undefined);
+			assert.equal(raw.headers, undefined);
 		}
 	});
 
@@ -63,7 +66,7 @@ describe("MODELS projection", () => {
 	});
 
 	it("preserves Pi's thinkingLevelMap without local model-specific fallbacks", () => {
-		const withMap = (id) => ({ ...mockPiAiModel(id), thinkingLevelMap: { xhigh: "xhigh", max: "max" } });
+		const withMap = (id: string) => ({ ...mockPiAiModel(id), thinkingLevelMap: { xhigh: "xhigh", max: "max" } });
 		const models = buildModels([withMap("claude-sonnet-5"), mockPiAiModel("claude-sonnet-4-6")]);
 		assert.deepEqual(find(models, "claude-sonnet-5")?.thinkingLevelMap, { xhigh: "xhigh", max: "max" });
 		assert.equal(find(models, "claude-sonnet-4-6")?.thinkingLevelMap, undefined);

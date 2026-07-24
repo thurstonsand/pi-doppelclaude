@@ -4,9 +4,11 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import type { Model } from "@earendil-works/pi-ai";
 import { PushQueue, QueryContext } from "../src/query-state.js";
 
-const fakeModel = { api: "anthropic", provider: "anthropic", id: "test-model" };
+// Minimal stand-in for pi-ai's Model; resetTurnState only records identity here.
+const fakeModel = { api: "anthropic", provider: "anthropic", id: "test-model" } as Model<any>;
 
 describe("QueryContext class", () => {
 	it("turnBlocks throws before resetTurnState", () => {
@@ -22,7 +24,9 @@ describe("QueryContext class", () => {
 
 		c.turnBlocks.push({ type: "text", text: "hello" });
 		assert.strictEqual(c.turnOutput.content.length, 1);
-		assert.strictEqual(c.turnOutput.content[0].text, "hello");
+		const firstBlock = c.turnOutput.content[0];
+		assert(firstBlock.type === "text");
+		assert.strictEqual(firstBlock.text, "hello");
 		// Same array reference
 		assert.strictEqual(c.turnBlocks, c.turnOutput.content);
 	});

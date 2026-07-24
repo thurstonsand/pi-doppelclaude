@@ -54,7 +54,7 @@ describe("rewritePiSystemPrompt", () => {
 			},
 		});
 
-		assert.equal(typeof systemPrompt, "string");
+		assert(typeof systemPrompt === "string");
 		assert.doesNotMatch(systemPrompt, /Pi documentation/);
 		assert.match(systemPrompt, /Custom docs:/);
 	});
@@ -67,6 +67,7 @@ describe("rewritePiSystemPrompt", () => {
 			},
 		});
 
+		assert(typeof systemPrompt !== "string");
 		assert.equal(systemPrompt.type, "preset");
 		assert.equal(systemPrompt.preset, "claude_code");
 		assert.doesNotMatch(systemPrompt.append, /Pi documentation/);

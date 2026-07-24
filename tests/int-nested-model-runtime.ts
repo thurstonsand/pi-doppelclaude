@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { createRpcHarness } from "./lib/rpc-harness.mjs";
+import { createRpcHarness } from "./lib/rpc-harness.js";
 
 const BRIDGE_MODEL = "anthropic/claude-haiku-4-5";
 const TEST_TIMEOUT = 240_000;
@@ -31,7 +31,7 @@ function reentrantCount() {
 	return [...debugLog().matchAll(REENTRANT_MARKER)].length;
 }
 
-async function waitForReentrantCountAbove(count, label) {
+async function waitForReentrantCountAbove(count: number, label: string) {
 	const deadline = Date.now() + TEST_TIMEOUT;
 	while (Date.now() < deadline) {
 		const current = reentrantCount();
@@ -41,7 +41,7 @@ async function waitForReentrantCountAbove(count, label) {
 	throw new Error(`${label}: timed out waiting for a reentrant nested-runtime query (count stayed ${count})`);
 }
 
-async function runNestedPrompt({ background, expectedMarker }) {
+async function runNestedPrompt({ background, expectedMarker }: { background: boolean; expectedMarker: string }) {
 	const beforeReentrant = reentrantCount();
 	const childMarker = background ? "CHILD-BACKGROUND-COMPLETE" : "CHILD-FOREGROUND-COMPLETE";
 	const resultTool = background ? "NestedAgentResult" : "NestedAgent";

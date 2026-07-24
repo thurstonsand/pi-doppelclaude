@@ -5,7 +5,7 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createRpcHarness } from "./lib/rpc-harness.mjs";
+import { createRpcHarness, parseCompactionResult } from "./lib/rpc-harness.js";
 
 const TIMEOUT = 180_000;
 const BRIDGE_MODEL = "anthropic/claude-haiku-4-5";
@@ -26,13 +26,13 @@ const harness = createRpcHarness({
 
 const { startAndWait, stop, send, promptAndWait, DEBUG_LOG, RPC_LOG } = harness;
 
-function assertMentions(summary, file) {
+function assertMentions(summary: string, file: string) {
 	if (!summary.includes(file)) {
 		throw new Error(`summary missing ${file}. Summary head: ${summary.slice(0, 500)}`);
 	}
 }
 
-async function forceDiscardableHistory(file, marker) {
+async function forceDiscardableHistory(file: string, marker: string) {
 	await promptAndWait(
 		`Use the read tool to read ${file}. Then reply with exactly '${marker}'.`,
 		TIMEOUT,
@@ -50,7 +50,7 @@ try {
 	await forceDiscardableHistory("tests/fixtures/compact-file-a.txt", "read-a-ok");
 
 	console.log("First /compact...");
-	const first = await send({ type: "compact" }, TIMEOUT);
+	const first = await send({ type: "compact" }, TIMEOUT, parseCompactionResult);
 	if (!first?.summary?.trim()) throw new Error(`first compact returned empty summary: ${JSON.stringify(first)}`);
 	assertMentions(first.summary, "tests/fixtures/compact-file-a.txt");
 
@@ -58,7 +58,7 @@ try {
 	await forceDiscardableHistory("tests/fixtures/compact-file-b.txt", "read-b-ok");
 
 	console.log("Second /compact...");
-	const second = await send({ type: "compact" }, TIMEOUT);
+	const second = await send({ type: "compact" }, TIMEOUT, parseCompactionResult);
 	if (!second?.summary?.trim()) throw new Error(`second compact returned empty summary: ${JSON.stringify(second)}`);
 	assertMentions(second.summary, "tests/fixtures/compact-file-a.txt");
 	assertMentions(second.summary, "tests/fixtures/compact-file-b.txt");

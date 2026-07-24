@@ -5,7 +5,7 @@
 
 import { describe, it, before, after, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { createRpcHarness } from "./lib/rpc-harness.mjs";
+import { createRpcHarness } from "./lib/rpc-harness.js";
 
 const TEST_TIMEOUT = 40_000;
 

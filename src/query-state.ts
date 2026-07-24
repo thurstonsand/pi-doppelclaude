@@ -7,19 +7,13 @@
 // Extracted from index.ts so tests can import without activating the extension.
 
 import type { AssistantMessage, AssistantMessageEventStream, Model } from "@earendil-works/pi-ai";
-import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { Query, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { McpResult } from "./extract-tool-results.js";
 import type { SessionStoreWriter } from "./session-store.js";
 
 export interface PendingToolCall {
 	toolName: string;
 	resolve: (result: McpResult) => void;
-}
-
-export interface ActiveQuery {
-	interrupt(): Promise<void>;
-	setModel(model?: string): Promise<void>;
-	close(): void;
 }
 
 export interface LocalSessionFragment {
@@ -68,7 +62,7 @@ export class PushQueue<T> implements AsyncIterable<T> {
 
 export class QueryContext {
 	// Query-scoped (fully isolated per query)
-	activeQuery: ActiveQuery | null = null;
+	activeQuery: Query | null = null;
 	inputQueue: PushQueue<SDKUserMessage> | null = null;
 	sessionStoreWriter: SessionStoreWriter | null = null;
 	currentPiStream: AssistantMessageEventStream | null = null;

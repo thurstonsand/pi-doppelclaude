@@ -8,12 +8,12 @@
 // Requires: CLAUDE_BRIDGE_TESTING_ALT_PROVIDER and CLAUDE_BRIDGE_TESTING_ALT_MODEL
 // naming any authenticated non-bridge model available to pi.
 
-console.log("=== session-resume-test.mjs ===");
+console.log("=== session-resume-test.ts ===");
 
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createRpcHarness, requireEnv } from "./lib/rpc-harness.mjs";
+import { createRpcHarness, requireEnv } from "./lib/rpc-harness.js";
 
 const OTHER_PROVIDER = requireEnv("CLAUDE_BRIDGE_TESTING_ALT_PROVIDER");
 const OTHER_MODEL = requireEnv("CLAUDE_BRIDGE_TESTING_ALT_MODEL");
@@ -53,7 +53,7 @@ function waitForIdle(timeout = TIMEOUT) {
 	});
 }
 
-async function promptAndWait(message) {
+async function promptAndWait(message: string) {
 	const collector = collectText();
 	await send({ type: "prompt", message });
 	await waitForIdle();

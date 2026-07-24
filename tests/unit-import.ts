@@ -3,11 +3,31 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { sanitizeToolId, convertPiMessages, mapSdkToolArgsToPi, mapSdkToolNameToPi } from "../src/convert.js";
+import type { Message as PiMessage } from "@earendil-works/pi-ai";
+import type { ContentBlock, Message as SessionMessage } from "cc-session-io";
+import { convertPiMessages, mapSdkToolArgsToPi, mapSdkToolNameToPi } from "../src/convert.js";
 
-/** Shorthand: convert pi messages and return just the anthropic messages. */
-function convert(messages, customToolNameToSdk) {
-	return convertPiMessages(messages, customToolNameToSdk).anthropicMessages;
+// Narrow a converted message's content to its block array. The converter returns
+// cc-session-io's `string | ContentBlock[]` union; the block-indexing tests only
+// run on messages the converter builds as block arrays.
+function blocks(message: SessionMessage): ContentBlock[] {
+	assert.ok(Array.isArray(message.content), `expected block content, got ${JSON.stringify(message.content)}`);
+	return message.content;
+}
+
+// Narrow a converted block to a concrete discriminant so assertions can read its
+// variant-specific fields (text, id, tool_use_id, ...) without a cast.
+function block<T extends ContentBlock["type"]>(message: SessionMessage, index: number, type: T): Extract<ContentBlock, { type: T }> {
+	const found = blocks(message)[index];
+	assert.equal(found.type, type);
+	return found as Extract<ContentBlock, { type: T }>;
+}
+
+// Shorthand: convert loose pi-message fixtures and return just the anthropic
+// messages. Fixtures are minimal by design, so they enter the real converter
+// through its `Message[]` boundary.
+function convert(messages: unknown[], customToolNameToSdk?: Map<string, string>): SessionMessage[] {
+	return convertPiMessages(messages as PiMessage[], customToolNameToSdk).anthropicMessages;
 }
 
 // --- Tests ---
@@ -33,8 +53,8 @@ describe("tool ID sanitization", () => {
 			{ role: "toolResult", toolCallId: "functions.bash:0", content: "file.txt" },
 		];
 		const result = convert(msgs);
-		assert.equal(result[0].content[0].id, "functions_bash_0");
-		assert.equal(result[1].content[0].tool_use_id, "functions_bash_0");
+		assert.equal(block(result[0], 0, "tool_use").id, "functions_bash_0");
+		assert.equal(block(result[1], 0, "tool_result").tool_use_id, "functions_bash_0");
 	});
 
 	it("IDs with spaces and special chars", () => {
@@ -43,8 +63,8 @@ describe("tool ID sanitization", () => {
 			{ role: "toolResult", toolCallId: "tool call#1@foo", content: "ok" },
 		];
 		const result = convert(msgs);
-		assert.equal(result[0].content[0].id, "tool_call_1_foo");
-		assert.equal(result[1].content[0].tool_use_id, "tool_call_1_foo");
+		assert.equal(block(result[0], 0, "tool_use").id, "tool_call_1_foo");
+		assert.equal(block(result[1], 0, "tool_result").tool_use_id, "tool_call_1_foo");
 	});
 
 	it("already-valid Anthropic IDs pass through unchanged", () => {
@@ -53,8 +73,8 @@ describe("tool ID sanitization", () => {
 			{ role: "toolResult", toolCallId: "toolu_abc123-XYZ", content: "data" },
 		];
 		const result = convert(msgs);
-		assert.equal(result[0].content[0].id, "toolu_abc123-XYZ");
-		assert.equal(result[1].content[0].tool_use_id, "toolu_abc123-XYZ");
+		assert.equal(block(result[0], 0, "tool_use").id, "toolu_abc123-XYZ");
+		assert.equal(block(result[1], 0, "tool_result").tool_use_id, "toolu_abc123-XYZ");
 	});
 
 	it("tool_use and tool_result IDs stay paired after sanitization", () => {
@@ -66,8 +86,8 @@ describe("tool ID sanitization", () => {
 		}
 		const result = convert(msgs);
 		for (let i = 0; i < ids.length; i++) {
-			const useId = result[i * 2].content[0].id;
-			const resultId = result[i * 2 + 1].content[0].tool_use_id;
+			const useId = block(result[i * 2], 0, "tool_use").id;
+			const resultId = block(result[i * 2 + 1], 0, "tool_result").tool_use_id;
 			assert.equal(useId, resultId, `pair ${i}: tool_use=${useId} tool_result=${resultId}`);
 		}
 	});
@@ -83,8 +103,8 @@ describe("empty text block filtering", () => {
 		];
 		const result = convert(msgs);
 		assert.equal(result.length, 1);
-		assert.equal(result[0].content.length, 1);
-		assert.equal(result[0].content[0].type, "tool_use");
+		assert.equal(blocks(result[0]).length, 1);
+		assert.equal(blocks(result[0])[0].type, "tool_use");
 	});
 
 	it("assistant with only empty text → placeholder", () => {
@@ -93,7 +113,7 @@ describe("empty text block filtering", () => {
 		];
 		const result = convert(msgs);
 		assert.equal(result.length, 1);
-		assert.equal(result[0].content[0].text, "[incompatible content omitted]");
+		assert.equal(block(result[0], 0, "text").text, "[incompatible content omitted]");
 	});
 
 	it("assistant with non-empty text → preserved", () => {
@@ -102,7 +122,7 @@ describe("empty text block filtering", () => {
 		];
 		const result = convert(msgs);
 		assert.equal(result.length, 1);
-		assert.equal(result[0].content[0].text, "Hello world");
+		assert.equal(block(result[0], 0, "text").text, "Hello world");
 	});
 
 	it("assistant with multiple text blocks, some empty", () => {
@@ -115,8 +135,8 @@ describe("empty text block filtering", () => {
 		];
 		const result = convert(msgs);
 		assert.equal(result.length, 1);
-		assert.equal(result[0].content.length, 1);
-		assert.equal(result[0].content[0].text, "real content");
+		assert.equal(blocks(result[0]).length, 1);
+		assert.equal(block(result[0], 0, "text").text, "real content");
 	});
 });
 
@@ -130,8 +150,8 @@ describe("thinking block filtering", () => {
 		];
 		const result = convert(msgs);
 		assert.equal(result.length, 1);
-		assert.equal(result[0].content.length, 1);
-		assert.equal(result[0].content[0].type, "text");
+		assert.equal(blocks(result[0]).length, 1);
+		assert.equal(blocks(result[0])[0].type, "text");
 	});
 
 	it("Anthropic provider thinking with signature preserved", () => {
@@ -142,9 +162,8 @@ describe("thinking block filtering", () => {
 			]},
 		];
 		const result = convert(msgs);
-		assert.equal(result[0].content.length, 2);
-		assert.equal(result[0].content[0].type, "thinking");
-		assert.equal(result[0].content[0].signature, "sig123");
+		assert.equal(blocks(result[0]).length, 2);
+		assert.equal(block(result[0], 0, "thinking").signature, "sig123");
 	});
 
 	it("Anthropic provider via api field", () => {
@@ -155,8 +174,8 @@ describe("thinking block filtering", () => {
 			]},
 		];
 		const result = convert(msgs);
-		assert.equal(result[0].content.length, 2);
-		assert.equal(result[0].content[0].type, "thinking");
+		assert.equal(blocks(result[0]).length, 2);
+		assert.equal(blocks(result[0])[0].type, "thinking");
 	});
 
 	it("Anthropic provider thinking WITHOUT signature → dropped", () => {
@@ -167,8 +186,8 @@ describe("thinking block filtering", () => {
 			]},
 		];
 		const result = convert(msgs);
-		assert.equal(result[0].content.length, 1);
-		assert.equal(result[0].content[0].type, "text");
+		assert.equal(blocks(result[0]).length, 1);
+		assert.equal(blocks(result[0])[0].type, "text");
 	});
 
 	it("assistant with only thinking (non-Anthropic) → placeholder", () => {
@@ -179,7 +198,7 @@ describe("thinking block filtering", () => {
 		];
 		const result = convert(msgs);
 		assert.equal(result.length, 1);
-		assert.equal(result[0].content[0].text, "[incompatible content omitted]");
+		assert.equal(block(result[0], 0, "text").text, "[incompatible content omitted]");
 	});
 });
 
@@ -190,17 +209,17 @@ describe("message structure", () => {
 		];
 		const result = convert(msgs);
 		assert.equal(result[0].role, "user");
-		assert.equal(result[0].content[0].type, "tool_result");
-		assert.equal(result[0].content[0].tool_use_id, "id1");
-		assert.equal(result[0].content[0].content, "result text");
-		assert.equal(result[0].content[0].is_error, false);
+		const toolResult = block(result[0], 0, "tool_result");
+		assert.equal(toolResult.tool_use_id, "id1");
+		assert.equal(toolResult.content, "result text");
+		assert.equal(toolResult.is_error, false);
 	});
 
 	it("toolResult with isError=true", () => {
 		const msgs = [
 			{ role: "toolResult", toolCallId: "id1", content: "oh no", isError: true },
 		];
-		assert.equal(convert(msgs)[0].content[0].is_error, true);
+		assert.equal(block(convert(msgs)[0], 0, "tool_result").is_error, true);
 	});
 
 	it("multiple tool results in sequence", () => {
@@ -215,11 +234,11 @@ describe("message structure", () => {
 		const result = convert(msgs);
 		assert.equal(result.length, 3);
 		assert.equal(result[0].role, "assistant");
-		assert.equal(result[0].content.length, 2);
+		assert.equal(blocks(result[0]).length, 2);
 		assert.equal(result[1].role, "user");
-		assert.equal(result[1].content[0].tool_use_id, "t1");
+		assert.equal(block(result[1], 0, "tool_result").tool_use_id, "t1");
 		assert.equal(result[2].role, "user");
-		assert.equal(result[2].content[0].tool_use_id, "t2");
+		assert.equal(block(result[2], 0, "tool_result").tool_use_id, "t2");
 	});
 
 	it("mixed conversation: user → assistant(tool) → toolResult → assistant(text)", () => {
@@ -236,12 +255,11 @@ describe("message structure", () => {
 		assert.equal(result[0].role, "user");
 		assert.equal(result[0].content, "read file.txt");
 		assert.equal(result[1].role, "assistant");
-		assert.equal(result[1].content[0].type, "tool_use");
-		assert.equal(result[1].content[0].name, "Read");
+		assert.equal(block(result[1], 0, "tool_use").name, "Read");
 		assert.equal(result[2].role, "user");
-		assert.equal(result[2].content[0].type, "tool_result");
+		assert.equal(blocks(result[2])[0].type, "tool_result");
 		assert.equal(result[3].role, "assistant");
-		assert.equal(result[3].content[0].text, "The file says hello world.");
+		assert.equal(block(result[3], 0, "text").text, "The file says hello world.");
 	});
 
 	it("user string content", () => {
@@ -269,8 +287,8 @@ describe("message structure", () => {
 			]},
 		];
 		const result = convert(msgs);
-		assert.equal(result[0].content[0].name, "Read");
-		assert.equal(result[0].content[1].name, "Bash");
+		assert.equal(block(result[0], 0, "tool_use").name, "Read");
+		assert.equal(block(result[0], 1, "tool_use").name, "Bash");
 	});
 
 	it("toolResult with array content extracts text", () => {
@@ -280,6 +298,6 @@ describe("message structure", () => {
 				{ type: "text", text: "line 2" },
 			]},
 		];
-		assert.equal(convert(msgs)[0].content[0].content, "line 1\nline 2");
+		assert.equal(block(convert(msgs)[0], 0, "tool_result").content, "line 1\nline 2");
 	});
 });

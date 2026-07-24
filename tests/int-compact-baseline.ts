@@ -1,15 +1,15 @@
 #!/usr/bin/env node
 // Baseline: pi-side /compact works end-to-end through the bridge.
 //
-// Companion to int-compact-during-tools.mjs. Establishes that the harness,
+// Companion to int-compact-during-tools.ts. Establishes that the harness,
 // model, and compact RPC path are healthy before asserting anything about
 // concurrency. If this fails, fix the environment/harness first — the
 // concurrency test is meaningless on top of a broken baseline.
 
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createRpcHarness } from "./lib/rpc-harness.mjs";
+import { createRpcHarness, parseCompactionResult } from "./lib/rpc-harness.js";
 
 const TIMEOUT = 180_000;
 const BRIDGE_MODEL = "anthropic/claude-haiku-4-5";
@@ -37,7 +37,7 @@ try {
 	await promptAndWait("Now pick a fruit. Reply with just the fruit.");
 
 	console.log("Triggering /compact...");
-	const compactResult = await send({ type: "compact" }, TIMEOUT);
+	const compactResult = await send({ type: "compact" }, TIMEOUT, parseCompactionResult);
 
 	if (!compactResult || typeof compactResult !== "object") {
 		throw new Error(`compact returned non-object: ${JSON.stringify(compactResult)}`);

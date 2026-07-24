@@ -9,9 +9,27 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import type { Query } from "@anthropic-ai/claude-agent-sdk";
+import type { Message as PiMessage, Model } from "@earendil-works/pi-ai";
 import { extractAllToolResults as _extractAllToolResults } from "../src/extract-tool-results.js";
 import { createBridgeRuntime } from "../src/bridge-runtime.js";
 import { QueryContext } from "../src/query-state.js";
+
+// Loose pi-message fixtures fed to the extractor: role plus the optional fields
+// the walk inspects. Extra per-block fields ride along as unknown content.
+type QueueMessage = { role: string; content?: unknown; toolCallId?: string; isError?: boolean };
+
+// The queue test-double matches results to handlers by tool-call id. Delivered
+// results carry text blocks; drain resolves stuck handlers with a fallback that
+// has no id. Callers only read content/isError, never the id, off a resolution.
+type TextResultBlock = { type: "text"; text: string };
+interface QueueResult {
+	toolCallId: string;
+	content: TextResultBlock[];
+	isError?: boolean;
+}
+type QueueFallback = { content: TextResultBlock[]; isError?: boolean };
+type QueueDelivery = QueueResult | QueueFallback;
 
 function makeRuntime() {
 	return createBridgeRuntime({
@@ -22,24 +40,27 @@ function makeRuntime() {
 
 // Test wrapper: real extract returns { results, stopIdx }; tests only want results.
 // Also unwraps converted content so assertions can check the original string.
-function extractAllToolResults(messages) {
+function extractAllToolResults(messages: QueueMessage[]) {
 	const { results } = _extractAllToolResults(messages);
 	// Unwrap [{type: "text", text: "foo"}] → "foo" so tests can compare raw.
-	return results.map((r) => ({
-		...r,
-		content: Array.isArray(r.content) && r.content.length === 1 && r.content[0].type === "text"
-			? r.content[0].text
-			: r.content,
-	}));
+	return results.map((r) => {
+		const first = r.content[0];
+		return {
+			...r,
+			content: Array.isArray(r.content) && r.content.length === 1 && first?.type === "text"
+				? first.text
+				: r.content,
+		};
+	});
 }
 
 function createBridge() {
-	const pendingHandlers = new Map(); // toolCallId → { resolve }
-	const pendingResults = new Map();  // toolCallId → { content, isError? }
+	const pendingHandlers = new Map<string, { resolve: (result: QueueDelivery) => void }>();
+	const pendingResults = new Map<string, QueueResult>();
 
 	return {
 		// Called by MCP handler: resolve immediately from queue, or block.
-		waitForResult(toolCallId) {
+		waitForResult(toolCallId: string): Promise<QueueDelivery> {
 			if (pendingResults.has(toolCallId)) {
 				const result = pendingResults.get(toolCallId);
 				pendingResults.delete(toolCallId);
@@ -49,7 +70,7 @@ function createBridge() {
 		},
 
 		// Called by tool result delivery: resolve a waiting handler, or queue.
-		deliverResult(result) {
+		deliverResult(result: QueueResult) {
 			const id = result.toolCallId;
 			if (pendingHandlers.has(id)) {
 				const h = pendingHandlers.get(id);
@@ -61,7 +82,7 @@ function createBridge() {
 		},
 
 		// Called on abort/query end.
-		drain(fallback) {
+		drain(fallback: QueueFallback) {
 			for (const h of pendingHandlers.values()) h.resolve(fallback);
 			pendingHandlers.clear();
 			pendingResults.clear();
@@ -91,19 +112,22 @@ describe("production MCP handlers", () => {
 		queryCtx.pendingToolCalls.get("tool-1").resolve({ toolCallId: "tool-1", content: [{ type: "text", text: "first" }] });
 		queryCtx.pendingToolCalls.delete("tool-1");
 
-		assert.equal((await second).content[0].text, "second");
-		assert.equal((await first).content[0].text, "first");
+		const secondBlock = (await second).content[0];
+		assert(secondBlock.type === "text");
+		assert.equal(secondBlock.text, "second");
+		const firstBlock = (await first).content[0];
+		assert(firstBlock.type === "text");
+		assert.equal(firstBlock.text, "first");
 	});
 
 	it("preserves a metadata failure until pi claims the orphaned tool-result stream", async () => {
 		const runtime = makeRuntime();
 		const queryCtx = runtime.test.rootContext;
 		let closeCount = 0;
-		queryCtx.activeQuery = {
-			async interrupt() {},
-			close() { closeCount++; },
-		};
-		queryCtx.resetTurnState({ api: "claude-bridge", provider: "anthropic", id: "test" });
+		const activeQuery = Object.create(null) as Query;
+		activeQuery.close = () => { closeCount++; };
+		queryCtx.activeQuery = activeQuery;
+		queryCtx.resetTurnState({ api: "claude-bridge", provider: "anthropic", id: "test" } as Model<any>);
 		const handler = runtime.test.createMcpToolHandler("read", queryCtx);
 
 		void handler({}, {});
@@ -114,18 +138,20 @@ describe("production MCP handlers", () => {
 
 		queryCtx.activeQuery = null;
 		const stream = runtime.test.streamClaudeAgentSdk(
-			{ api: "claude-bridge", provider: "anthropic", id: "test" },
+			{ api: "claude-bridge", provider: "anthropic", id: "test" } as Model<any>,
 			{
 				systemPrompt: "",
-				messages: [{ role: "toolResult", toolCallId: "tool-1", content: [{ type: "text", text: "result" }], isError: false }],
+				messages: [{ role: "toolResult", toolCallId: "tool-1", content: [{ type: "text", text: "result" }], isError: false }] as unknown as PiMessage[],
 				tools: [],
 			},
 		);
 		const events = [];
 		for await (const event of stream) events.push(event);
 		assert.equal(queryCtx.currentPiStream, null);
-		assert.equal(events.at(-1).type, "error");
-		assert.match(events.at(-1).error.errorMessage, /no longer sends claudecode\/toolUseId/);
+		const last = events.at(-1);
+		assert.equal(last.type, "error");
+		if (last.type !== "error") throw new Error("expected a trailing error event");
+		assert.match(last.error.errorMessage, /no longer sends claudecode\/toolUseId/);
 	});
 });
 
@@ -220,7 +246,7 @@ describe("abort", () => {
 		for (let i = 0; i < 4; i++) promises.push(bridge.waitForResult(`t${i}`));
 		bridge.deliverResult({ toolCallId: "t0", content: [{ type: "text", text: "r0" }] });
 		// 3 still waiting, 1 resolved
-		const fallback = { content: [{ type: "text", text: "aborted" }] };
+		const fallback: QueueFallback = { content: [{ type: "text", text: "aborted" }] };
 		bridge.drain(fallback);
 		const resolved = await Promise.all(promises);
 		assert.equal(resolved[0].content[0].text, "r0");
@@ -350,7 +376,7 @@ describe("extractAllToolResults boundaries", () => {
 describe("interleaved messages in tool result sequences", () => {
 
 	// Helper: extract tool call IDs from the last assistant message (like turnToolCallIds)
-	function getToolCallIds(messages) {
+	function getToolCallIds(messages: QueueMessage[]) {
 		for (let i = messages.length - 1; i >= 0; i--) {
 			const msg = messages[i];
 			if (msg.role === "assistant" && Array.isArray(msg.content)) {
@@ -361,12 +387,14 @@ describe("interleaved messages in tool result sequences", () => {
 	}
 
 	// Helper: run extractAllToolResults and also simulate bridge delivery
-	function simulateDelivery(messages, expectedHandlers) {
+	function simulateDelivery(messages: QueueMessage[], expectedHandlers: number) {
 		const results = extractAllToolResults(messages);
 		const ids = getToolCallIds(messages);
 		const bridge = createBridge();
 		for (let i = 0; i < expectedHandlers; i++) bridge.waitForResult(ids[i] ?? `unknown_${i}`);
-		for (const r of results) bridge.deliverResult(r);
+		// Only id-matching matters here, so deliver id-only results; content is
+		// asserted directly off `results`, never off a bridge resolution.
+		for (const r of results) bridge.deliverResult({ toolCallId: r.toolCallId ?? "", content: [] });
 		return { results, bridge };
 	}
 

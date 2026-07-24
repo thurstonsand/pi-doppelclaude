@@ -11,12 +11,12 @@
 // sharedSession.needsRebuild = true so the next syncSharedSession call
 // takes the REBUILD path.
 
-console.log("=== int-session-compact.mjs ===");
+console.log("=== int-session-compact.ts ===");
 
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createRpcHarness } from "./lib/rpc-harness.mjs";
+import { createRpcHarness } from "./lib/rpc-harness.js";
 
 const TIMEOUT = 180_000;
 const BRIDGE_MODEL = "anthropic/claude-haiku-4-5";

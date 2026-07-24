@@ -16,7 +16,7 @@
 // branch, orphans its stream, and stream.result() hangs forever — compaction
 // never completes.
 //
-// Predecessor: int-compact-baseline.mjs must pass (compact path healthy).
+// Predecessor: int-compact-baseline.ts must pass (compact path healthy).
 //
 // Determinism: isSplitTurn requires the cut point to land on an assistant
 // message, which needs accumulated recent tokens to exceed keepRecentTokens.
@@ -32,10 +32,10 @@
 //     "Turn Context (split turn)" marker that compact() only emits when
 //     isSplitTurn fired, proving the race path was exercised.
 
-import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createRpcHarness } from "./lib/rpc-harness.mjs";
+import { createRpcHarness, parseCompactionResult, type CompactionResult } from "./lib/rpc-harness.js";
 
 const BRIDGE_MODEL = "anthropic/claude-haiku-4-5";
 const COMPACT_TIMEOUT = 90_000; // compact should finish in ~10s; hang = timeout
@@ -70,9 +70,9 @@ try {
 
 	console.log("Triggering /compact (forces split-turn dual-summary)...");
 	const compactStarted = Date.now();
-	let compactResult;
+	let compactResult: CompactionResult | undefined;
 	try {
-		compactResult = await send({ type: "compact" }, COMPACT_TIMEOUT);
+		compactResult = await send({ type: "compact" }, COMPACT_TIMEOUT, parseCompactionResult);
 	} catch (e) {
 		throw new Error(
 			`compact did not complete within ${COMPACT_TIMEOUT / 1000}s — split-turn ` +

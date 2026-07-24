@@ -6,7 +6,7 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getProjectDir } from "cc-session-io";
-import { createRpcHarness } from "./lib/rpc-harness.mjs";
+import { createRpcHarness } from "./lib/rpc-harness.js";
 
 const cwd = mkdtempSync(join(tmpdir(), "pi-claude-bridge-fragment-cleanup-"));
 const harness = createRpcHarness({

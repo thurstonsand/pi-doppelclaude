@@ -8,7 +8,7 @@ import { loadConfig } from "../src/config.js";
 
 // Pin both HOME and PI_CODING_AGENT_DIR so loadConfig's global path (getAgentDir)
 // resolves to <home>/.pi/agent regardless of the developer's ambient PI_CODING_AGENT_DIR.
-function withTempHome(fn) {
+function withTempHome(fn: (home: string) => void) {
 	const oldHome = process.env.HOME;
 	const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
 	const home = mkdtempSync(join(tmpdir(), "claude-bridge-home-"));
@@ -112,12 +112,13 @@ describe("loadConfig", () => {
 		const configDir = join(home, ".pi", "agent");
 		mkdirSync(configDir, { recursive: true });
 
-		for (const removedConfig of [
+		const removedConfigs: Record<string, unknown>[] = [
 			{ provider: { strictMcpConfig: true } },
 			{ provider: { settingSources: [] } },
 			{ askClaude: { enabled: true } },
 			{ askClaude: { defaultMode: "read" } },
-		]) {
+		];
+		for (const removedConfig of removedConfigs) {
 			writeFileSync(join(configDir, "claude-bridge.json"), JSON.stringify(removedConfig));
 			assert.throws(() => loadConfig(process.cwd()), /must not have additional properties/);
 		}

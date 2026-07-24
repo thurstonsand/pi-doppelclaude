@@ -7,7 +7,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getSessionPath } from "cc-session-io";
-import { createRpcHarness } from "./lib/rpc-harness.mjs";
+import { createRpcHarness } from "./lib/rpc-harness.js";
 
 const cwd = mkdtempSync(join(tmpdir(), "pi-claude-bridge-option-drift-"));
 const harness = createRpcHarness({
@@ -17,7 +17,7 @@ const harness = createRpcHarness({
 	defaultTimeout: 120_000,
 });
 
-let sessionId;
+let sessionId: string | undefined;
 await harness.startAndWait();
 try {
 	await harness.send({ type: "set_thinking_level", level: "low" });

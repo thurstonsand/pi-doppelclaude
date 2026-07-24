@@ -11,6 +11,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { ExtensionAPI, ProviderConfig } from "@earendil-works/pi-coding-agent";
 
 // Isolate the bridge global config (so a developer's real askClaude config cannot
 // make loadConfig throw) and seed a valid claude-code prompt mode that needs no
@@ -20,23 +21,28 @@ process.env.PI_CODING_AGENT_DIR = agentDir;
 writeFileSync(join(agentDir, "claude-bridge.json"), '{"provider":{"systemPromptMode":"claude-code"}}\n');
 
 const OWNER_KEY = Symbol.for("claude-bridge:owner");
+// The owner lives on globalThis under a symbol key; view it as a symbol-keyed
+// record so reads/clears are typed instead of indexing typeof globalThis.
+const ownerRegistry = globalThis as Record<symbol, unknown>;
 const { default: activate } = await import("../src/index.js");
 
 const MUTATING_EVENTS = ["session_start", "session_shutdown", "model_select", "session_compact", "session_tree"];
 
 function fakePi() {
-	const handlers = new Map();
-	const providers = [];
+	const handlers = new Map<string, (...args: unknown[]) => unknown>();
+	const providers: Array<{ id: string; config: ProviderConfig }> = [];
+	// Test double for Pi's ExtensionAPI: activate() only touches registerProvider
+	// and on(), so the stub implements just those two of its many methods.
 	const pi = {
-		registerProvider(id, config) { providers.push({ id, config }); },
-		on(event, handler) { handlers.set(event, handler); },
-	};
+		registerProvider(id: string, config: ProviderConfig) { providers.push({ id, config }); },
+		on(event: string, handler: (...args: unknown[]) => unknown) { handlers.set(event, handler); },
+	} as unknown as ExtensionAPI;
 	return { pi, handlers, providers };
 }
 
 afterEach(() => {
 	// Drop any owner left standing so each test starts a fresh process generation.
-	globalThis[OWNER_KEY] = undefined;
+	ownerRegistry[OWNER_KEY] = undefined;
 });
 
 after(() => {
@@ -75,7 +81,7 @@ describe("extension activation ownership", () => {
 
 		// Root shutdown clears the shared runtime and releases the owner.
 		await first.handlers.get("session_shutdown")();
-		assert.equal(globalThis[OWNER_KEY], undefined);
+		assert.equal(ownerRegistry[OWNER_KEY], undefined);
 
 		// Next activation builds a fresh runtime with a distinct stream closure.
 		const next = fakePi();

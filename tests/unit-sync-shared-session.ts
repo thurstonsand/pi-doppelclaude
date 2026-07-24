@@ -7,6 +7,7 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getSessionPath } from "cc-session-io";
+import type { Message as PiMessage } from "@earendil-works/pi-ai";
 import { createBridgeRuntime } from "../src/bridge-runtime.js";
 
 const { test } = createBridgeRuntime({
@@ -31,7 +32,7 @@ describe("shared session sync planning", () => {
 			{ role: "user", content: "first", timestamp: 1 },
 			{ role: "assistant", content: [{ type: "text", text: "answer" }], timestamp: 2 },
 			{ role: "user", content: "next", timestamp: 3 },
-		], session);
+		] as unknown as PiMessage[], session);
 		assert.equal(plan.path, "reuse");
 		assert.equal(plan.advanceCursor, true);
 		assert.equal(session.cursor, 1);
@@ -44,7 +45,7 @@ describe("shared session sync planning", () => {
 			{ role: "user", content: "foreign turn", timestamp: 2 },
 			{ role: "assistant", content: [{ type: "text", text: "foreign answer" }], timestamp: 3 },
 			{ role: "user", content: "next", timestamp: 4 },
-		], session);
+		] as unknown as PiMessage[], session);
 		assert.equal(plan.path, "rebuild");
 	});
 
@@ -55,7 +56,7 @@ describe("shared session sync planning", () => {
 				{ role: "user", content: "remember one", timestamp: 1 },
 				{ role: "assistant", content: [{ type: "text", text: "one" }], api: "anthropic", provider: "anthropic", model: "claude-haiku-4-5", timestamp: 2 },
 				{ role: "user", content: "next", timestamp: 3 },
-			];
+			] as unknown as PiMessage[];
 			const first = test.syncSharedSession(messages, cwd);
 			assert.equal(first.path, "rebuild");
 			assert.ok(first.sessionId);

@@ -8,7 +8,7 @@
 import { readFileSync, rmSync, writeFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createRpcHarness } from "./lib/rpc-harness.mjs";
+import { createRpcHarness } from "./lib/rpc-harness.js";
 
 const TIMEOUT = 120_000;
 const BRIDGE_MODEL = "anthropic/claude-haiku-4-5";

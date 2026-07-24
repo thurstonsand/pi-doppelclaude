@@ -5,10 +5,10 @@
 // reason="new" and clears sharedSession). This is a regression test so the
 // behavior stays wired up.
 
-console.log("=== int-session-new.mjs ===");
+console.log("=== int-session-new.ts ===");
 
 import { readFileSync } from "node:fs";
-import { createRpcHarness } from "./lib/rpc-harness.mjs";
+import { createRpcHarness } from "./lib/rpc-harness.js";
 
 const TIMEOUT = 180_000;
 const BRIDGE_MODEL = "anthropic/claude-haiku-4-5";

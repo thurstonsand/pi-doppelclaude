@@ -11,14 +11,14 @@ import { BridgeSessionStore } from "../src/session-store.js";
 const CWD = process.cwd();
 const MODEL = "claude-haiku-4-5";
 
-function seed(store, sessionId, token) {
+function seed(store: BridgeSessionStore, sessionId: string, token: string) {
 	const session = createSession({ sessionId, projectPath: CWD, model: MODEL });
 	session.addUserMessage(`Please remember: the token is ${token}.`);
 	session.addAssistantMessage([{ type: "text", text: `Got it, the token is ${token}.` }]);
 	store.replace(sessionId, session.records);
 }
 
-async function run(store, sessionId, prompt, label) {
+async function run(store: BridgeSessionStore, sessionId: string, prompt: string, label: string): Promise<string> {
 	const writer = store.createWriter(label);
 	const sdkQuery = query({
 		prompt,

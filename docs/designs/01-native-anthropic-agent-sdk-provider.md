@@ -25,6 +25,11 @@ Concrete scenarios this design must handle:
 - `models.json` adds an unknown model or changes provider transport metadata; the model is hidden and direct selection ends in a terminal provider stream error before Claude Code starts.
 - A nested Pi runtime uses the provider while a parent bridge query is active; tool results must reach the QueryContext that owns the corresponding Claude Code MCP call.
 - Pi generates a compaction summary through the isolated Agent SDK stream; the resulting compaction entry records real usage instead of synthetic zero usage.
+- Claude Code falls back to a different concrete model; Pi prices the turn from the SDK's canonical served-model usage instead of the requested model.
+- Pi's available tool set changes while a persistent query is alive; the bridge reconciles MCP servers through the SDK control channel instead of discarding the process and its warm state.
+- An interrupted turn leaves queued input behind; the bridge uses the SDK interrupt receipt and aborted-message metadata to decide whether the query remains reusable.
+- Claude Code reports a subscription or model-scoped usage limit; Pi presents the structured limit and reset information without parsing human prose.
+- SessionStore mirroring or resume materialization fails; the bridge treats the authoritative transcript as compromised, surfaces the failure, and rebuilds from Pi history rather than silently continuing with incomplete state.
 
 ## Goals
 
@@ -36,6 +41,7 @@ Concrete scenarios this design must handle:
 - Preserve the persistent query, session synchronization, MCP tool bridge, reentrant call, cancellation, and compaction behavior already established by integration tests.
 - Include nested Agent SDK and isolated-compaction usage in the appropriate Pi session entries without double counting normal provider turns.
 - Fail fast on unsupported model identity or transport metadata.
+- Use Agent SDK 0.3's served-model, interrupt, MCP reconciliation, rate-limit, lifecycle, and SessionStore signals instead of duplicating those protocols through bridge inference.
 
 ## Non-Goals
 
@@ -146,6 +152,10 @@ Both methods validate the model and delegate to the same runtime stream closure.
 
 The runtime owns the shared Claude session, BridgeSessionStore, root and reentrant QueryContexts, active query set, MCP pending-result routing, persistent input queue, and query lifecycle. It receives config, logging, and notification dependencies, not `ExtensionAPI`.
 
+A QueryContext stores the Agent SDK's public `Query` type directly. It does not maintain a bridge-owned subset that can preserve obsolete method signatures. Runtime decisions consume typed control receipts and SDK messages at the boundary, then reduce them into bridge state.
+
+Tool-definition changes are reconciled against the live query with `setMcpServers()`. Model-only changes continue through `setModel()`. The spawn signature retains only options that cannot be applied live; a query rebuild is reserved for changed process-level options, divergent transcript history, unrecoverable control errors, or compromised session storage.
+
 ### Nested runtime ownership
 
 The first extension instance in a process owns the Provider/runtime pair. A global registration guard records that pair. Nested Pi runtimes inherit the already-registered native Provider and do not replace its stream closure with a separately evaluated extension module. Reentrant calls and their MCP tool results therefore continue to share the owning runtime's active QueryContext set.
@@ -165,6 +175,24 @@ A shared SDK-to-Pi usage mapper updates both normal provider outputs and isolate
 Default branch summaries continue through the normal provider stream and already receive assistant usage. No custom branch-summary handler is introduced.
 
 Pi 0.81.1 adds configured retries and retry lifecycle events around its default compaction and branch-summary calls. Branch summaries inherit that behavior automatically. The bridge's `session_before_compact` takeover returns an already-generated CompactionResult, so Pi cannot wrap its isolated summary call. The isolated compaction module must therefore use 0.81.1's `retryAssistantCall` with Pi's effective retry policy and retain usage only from the successful attempt. ExtensionContext does not expose that policy or let an extension emit Pi's summarization retry lifecycle events; implementation must verify whether the public SettingsManager can reproduce the effective persisted policy without diverging from in-memory SDK settings. If it cannot, preserving the takeover means documenting that custom compaction cannot provide Pi's lifecycle events until Pi exposes the missing extension boundary.
+
+### Agent SDK 0.3 runtime signals
+
+Agent SDK 0.3.218 bundles Claude Code 2.1.218 and exposes several contracts that replace bridge-owned inference:
+
+- Successful results report `canonicalModel` and `provider` for each `modelUsage` entry. The usage mapper attributes each served model's tokens and reference cost to that model, including fallback turns, while preserving Pi's requested model as the assistant message identity. If Pi's Usage shape cannot represent a multi-model turn, the mapper sums SDK-provided `costUSD` and records the per-model breakdown in diagnostics rather than pricing every token at the requested model's rate.
+- `Query.setMcpServers()` updates the live process's MCP surface. The runtime diffs normalized server definitions, applies additions/removals through the control channel, verifies the response, and rebuilds only if reconciliation fails. `initializationResult()` is used to inspect initial MCP status; required bridge-owned SDK servers may not remain `pending` when the first model turn starts. `reconnectMcpServer()` is reserved for an explicitly failed existing server, not used as a general retry loop.
+- `Query.interrupt()` returns a typed receipt containing `still_queued`, and interrupted assistant messages carry `aborted: true`. An empty receipt permits reuse once the terminal result arrives. Remaining queued commands, a missing terminal result, or a control error make the process non-reusable and trigger the existing bounded hard-close path. The bridge does not retain a `Promise<void>` compatibility contract.
+- Rate-limit events and result errors distinguish API 429 from overload 529 and expose limit type, utilization, reset windows, model-scoped weekly limits, and credit eligibility. The provider converts stable structured fields into Pi warnings and terminal errors; human message text is preserved only as detail. Experimental usage APIs remain diagnostic until Anthropic removes their instability warning.
+- Command lifecycle and structured `terminal_reason` events identify queued, started, completed, cancelled, and discarded inputs. The persistent input queue uses these events to confirm steering/follow-up disposition and to detect dead turns rather than inferring command fate from whichever result arrives first.
+
+### SessionStore contract
+
+The alpha `SessionStore` API did not materially change between Agent SDK 0.2.141 and 0.3.218. `SessionKey`, `SessionStoreEntry`, `SessionStoreFlush`, `SessionSummaryEntry`, and the append/load/list/delete/subkey contracts are unchanged; 0.3 only clarifies that `listSessions().mtime` is an integer Unix-millisecond value. The dependency bump therefore requires no storage migration.
+
+The bridge already relies on the important parts of the contract: UUID-idempotent append, subkey separation, revision fencing for stale writers, atomic transcript replacement, batched mirroring, resume through `load()`, and `mirror_error` observation. Batched mode exposes no public `flush()` method. Instead, the SDK awaits its pending `SessionStore.append()` batch before yielding each `result`, and flushes again before iterator EOF and on its read-error path. Those barriers already existed in 0.2.141; they are not new in 0.3.218. A consumed `result` is therefore the turn-level durability barrier for mirror frames received before that result, while awaited natural iterator EOF is the process-level barrier for later frames. `Query.close()` remains synchronous and forceful, so it is not a durability barrier for transcript frames the subprocess has not emitted.
+
+Phase 7 hardens this lifecycle rather than inventing a separate writer flush. Query options set `sessionStoreFlush: "batched"` and a finite `loadTimeoutMs` explicitly. Graceful replacement ends streaming input and awaits query completion before closing the bridge writer or loading the same session; hard close invalidates the writer revision and rebuilds from Pi history because no flush guarantee is possible. A `mirror_error` is a data-integrity failure because the in-memory store is authoritative for later rebuilds: the runtime reports a terminal provider error, invalidates that stored session, closes the query, and rebuilds from Pi's complete message history on the next call. A load timeout or malformed transcript fails before process startup and follows the same rebuild path. Eager flushing is rejected because it multiplies calls without strengthening the result/EOF barriers. Session summaries and listing APIs are not implemented until the bridge exposes a user-facing session browser; maintaining unused indexes would be ceremony.
 
 ## Design Decisions
 
@@ -220,6 +248,10 @@ Native registration changes the Provider abstraction but not the MCP causality: 
 
 The provider cutover has no feature flag, alias, wrapper provider, or dual stream path. Existing provider/session configuration is not migrated. Pi's own behavior for unavailable stored selections applies without extension-specific detection.
 
+### 10. Prefer SDK control and lifecycle contracts over reconstruction
+
+When the Agent SDK exposes served-model identity, MCP reconciliation, interrupt receipts, command lifecycle, structured rate limits, or storage failures, the bridge consumes that public contract directly. It does not preserve old local interfaces, parse prose, or rebuild a query merely because an older SDK lacked a control method. Experimental APIs may inform diagnostics but do not become correctness dependencies.
+
 ## Edge Cases & Failure Modes
 
 - **Claude Code logged out:** `auth.check` returns unavailable, clears its successful snapshot, and the provider contributes no available models.
@@ -239,6 +271,12 @@ The provider cutover has no feature flag, alias, wrapper provider, or dual strea
 - **Nested extension module loads:** do not replace the inherited provider/runtime closure.
 - **Extension reload:** the owning runtime closes cleanly and releases the global ownership guard before the new extension instance registers.
 - **Configuration still contains `askClaude`, `provider.plan`, or `provider.longContextExtraUsage`:** fail strict validation; no compatibility message or fallback default.
+- **Claude Code serves a fallback model:** retain the requested Pi model identity, but calculate cost from each canonical served-model usage entry and record the fallback.
+- **Live MCP reconciliation reports an error or leaves a required server pending:** do not send a model turn against a partial tool surface; close and rebuild once, then fail visibly if initialization is still incomplete.
+- **Interrupt receipt contains queued commands:** do not mark the query ready for input; drain or hard-close it so cancelled steering cannot execute in a later turn.
+- **Rate-limit event is a warning:** notify with structured utilization and reset data while leaving the turn alive. A rejected limit becomes a terminal provider error.
+- **SessionStore emits `mirror_error`:** invalidate the session and rebuild from Pi history on the next request; never resume from the incomplete transcript.
+- **SessionStore load times out or returns malformed entries:** fail before spawning Claude Code and rebuild from validated Pi history rather than retrying the same store materialization indefinitely.
 
 ## Alternatives
 
@@ -309,11 +347,11 @@ The provider cutover has no feature flag, alias, wrapper provider, or dual strea
   - Work: Remove every AskClaude path and setting; remove unused Pi TUI dependency; move all `ExtensionAPI` calls and event registration into the thin entrypoint; create a factory-owned bridge runtime; extract compaction/debug concerns; preserve legacy provider registration temporarily; update tests without changing provider identity or stream semantics.
   - Validation: `npm run typecheck`; full unit suite; current provider smoke, multi-turn, cache, session, compaction, cancellation, and nested-ModelRuntime regressions; repository search finds no current AskClaude references outside historical CHANGELOG and intentionally untouched external artifacts.
 
-- [ ] Phase 2: Convert the Node test suite to TypeScript
-  - Goal: Put executable test helpers and fixtures under the same compiler as production code without changing test behavior.
-  - Files: rename `tests/**/*.mjs` and `tests/usage-test.sh` to `.ts`, local test imports, `package.json`, README, CHANGELOG.
-  - Work: Rename all Node unit/integration tests, the RPC harness, and the usage diagnostic; use `.js` specifiers for local TypeScript imports; replace the usage diagnostic's shell/Python/eval data plumbing with typed subprocess, HTTP, JSON, and metrics code; update runner globs and documentation; add explicit fixture types where the compiler reveals ambiguous contracts; leave the small `.sh` process tests unchanged.
-  - Validation: `npm run typecheck`; `npm run test:unit`; compare the discovered unit and integration test counts before and after renaming; run the full integration suite outside the sandbox to prove the glob migration did not omit tests.
+- [x] Phase 2: Convert the Node test suite to TypeScript
+  - Goal: Put executable test helpers and fixtures under the same compiler as production code, preserving the unit/integration suites while hardening the one-off usage diagnostic's error handling.
+  - Files: renamed `tests/**/*.mjs` and `tests/usage-test.sh` to `.ts`, `tsconfig.json`, local test imports, `package.json`, README, CHANGELOG.
+  - Work: Renamed all Node unit/integration tests, the RPC harness, and the usage diagnostic; used `.js` specifiers for local TypeScript imports; enabled `noImplicitAny` so every migrated helper and assertion earns a real contract; replaced the RPC harness's open `any` index signature and generic casts with a parsed finite envelope and explicit command-result parsers, including a shared `CompactionResult` contract; used the canonical `cc-session-io` block types with narrowing helpers in the converter test instead of an invented wire model; added an explicit collection type to the one `convert.ts` inference the stricter flag surfaced (no runtime change). Replaced the usage diagnostic's shell/Python/eval data plumbing with typed subprocess, HTTP, JSON, and metrics code that conforms untrusted subprocess JSON, validates the turns argument, runs Pi in its own process group (so a hung run's Claude Code child cannot leak), preserves per-turn direct-turn evidence logs, and fails on a failed direct turn rather than emitting a misleading zero-usage row. Left the small `.sh` process tests unchanged; ShellCheck now covers only the remaining shell drivers and its usage-metric `SC2153` suppression is gone.
+  - Validation: `npm run typecheck` (now `noImplicitAny`) clean; all 118 pre-migration unit tests remain discovered, with the current 124-test suite adding runtime and RPC-boundary coverage; the `tests/int-*.ts` glob matches the same 14 Node integration files (21 tests) as the prior `.mjs` glob; the full integration and usage suites run outside the sandbox against authenticated local settings.
 
 - [ ] Phase 3: Adopt Pi 0.81.1 accounting, retries, and native types
   - Goal: Establish the dependency and accounting foundation before changing provider identity.
@@ -337,3 +375,9 @@ The provider cutover has no feature flag, alias, wrapper provider, or dual strea
   - Goal: Replace the dedicated `claude-bridge.json` files with extension configuration in Pi's shared settings files.
   - Work: Design the shared-settings shape and global/project precedence; move debug enablement into settings; decide whether `CLAUDE_BRIDGE_DEBUG` remains as a supported override and, if so, define its precedence.
   - Validation: To be designed when this phase begins.
+
+- [ ] Phase 7: Adopt Agent SDK 0.3 runtime control and integrity signals
+  - Goal: Replace remaining bridge inference with Agent SDK contracts for served-model accounting, live MCP changes, cancellation, quota reporting, command disposition, and transcript integrity.
+  - Files: `bridge-runtime.ts`, `provider-stream.ts`, `query-state.ts`, `session-store.ts`, focused unit/integration tests, README diagnostics, CHANGELOG.
+  - Work: Store the SDK `Query` type directly; account from canonical per-model usage and preserve fallback diagnostics; reconcile changing SDK MCP servers with `setMcpServers()` and verify required initial status with `initializationResult()`; consume interrupt receipts, aborted assistant metadata, command lifecycle, and terminal reasons to determine query reuse; map stable structured rate-limit fields into Pi notifications/errors; explicitly configure batched SessionStore flushing and load timeout; preserve `result` as the turn-level mirror barrier and awaited natural EOF as the replacement barrier; turn forced close, `mirror_error`, or invalid resume materialization into session invalidation and a rebuild from Pi history. Do not depend on the experimental usage method or implement unused session-list summary indexes.
+  - Validation: Unit tests cover multi-model fallback accounting, MCP add/remove/reconcile failure, empty and nonempty interrupt receipts, command cancellation/discard, 429/529 and model-scoped quota messages, result-before-append prevention, natural-EOF final flushing, forced-close revision fencing, mirror failure invalidation, and load timeout. Authenticated integration tests prove a changed Pi tool set does not rotate the Claude process, an interrupted queued follow-up cannot leak into the next turn, fallback usage is priced from the served model, option drift cannot load a session before the prior query's final mirror flush, and a deliberately failing SessionStore rebuilds from Pi history without writing or resuming a partial transcript.

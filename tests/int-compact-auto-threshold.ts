@@ -9,7 +9,7 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createRpcHarness } from "./lib/rpc-harness.mjs";
+import { createRpcHarness, parseCompactionEndEvent, type CompactionDetails } from "./lib/rpc-harness.js";
 
 const BRIDGE_MODEL = "anthropic/claude-haiku-4-5";
 const COMPACT_TIMEOUT = 120_000;
@@ -29,11 +29,11 @@ const harness = createRpcHarness({
 
 const { startAndWait, stop, send, promptAndWait, waitForMatch, DEBUG_LOG, RPC_LOG } = harness;
 
-function assert(condition, message) {
+function assert(condition: unknown, message: string) {
 	if (!condition) throw new Error(message);
 }
 
-function assertReadFile(details, suffix) {
+function assertReadFile(details: CompactionDetails | undefined, suffix: string) {
 	const readFiles = details?.readFiles;
 	assert(Array.isArray(readFiles), `readFiles missing/invalid in details: ${JSON.stringify(details)}`);
 	assert(
@@ -64,7 +64,7 @@ try {
 
 	const thresholdStarts = [];
 	const thresholdEnds = [];
-	let disableAutoPromise;
+	let disableAutoPromise: Promise<void> | undefined;
 	harness.addListener((msg) => {
 		if (msg.type === "compaction_start" && msg.reason === "threshold") {
 			thresholdStarts.push(msg);
@@ -87,7 +87,7 @@ try {
 		(msg) => msg.type === "compaction_end" && msg.reason === "threshold",
 		"threshold compaction_end",
 		COMPACT_TIMEOUT,
-	);
+	).then(parseCompactionEndEvent);
 
 	console.log("Enable auto-compaction and submit a normal prompt (not RPC compact)...");
 	await send({ type: "set_auto_compaction", enabled: true }, 30_000);

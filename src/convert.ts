@@ -2,7 +2,7 @@
 // Extracted so they can be tested without pulling in the full extension runtime.
 
 import type { Message as PiMessage } from "@earendil-works/pi-ai";
-import type { Message as SessionMessage } from "cc-session-io";
+import type { ContentBlock, Message as SessionMessage } from "cc-session-io";
 import { pascalCase } from "change-case";
 import { MCP_TOOL_PREFIX } from "./skills.js";
 
@@ -84,15 +84,15 @@ export function convertPiMessages(
 	messages: PiMessage[],
 	customToolNameToSdk?: Map<string, string>,
 ): { anthropicMessages: SessionMessage[]; sanitizedIds: Map<string, string> } {
-	const anthropicMessages = [];
-	const sanitizedIds = new Map();
+	const anthropicMessages: SessionMessage[] = [];
+	const sanitizedIds = new Map<string, string>();
 
 	for (const msg of messages) {
 		if (msg.role === "user") {
 			if (typeof msg.content === "string") {
 				anthropicMessages.push({ role: "user", content: msg.content || "[empty]" });
 			} else if (Array.isArray(msg.content)) {
-				const parts = [];
+				const parts: ContentBlock[] = [];
 				for (const block of msg.content) {
 					if (block.type === "text" && block.text) parts.push({ type: "text", text: block.text });
 					else if (block.type === "image" && block.data && block.mimeType) {
@@ -105,7 +105,7 @@ export function convertPiMessages(
 			}
 		} else if (msg.role === "assistant") {
 			const content = Array.isArray(msg.content) ? msg.content : [];
-			const blocks = [];
+			const blocks: ContentBlock[] = [];
 			for (const block of content) {
 				if (block.type === "text" && block.text) {
 					blocks.push({ type: "text", text: block.text });

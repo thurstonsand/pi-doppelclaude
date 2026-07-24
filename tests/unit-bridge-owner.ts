@@ -2,7 +2,7 @@
  * Proves the process-scoped bridge owner: two activations in one process share
  * one owner (and one runtime/stream closure), the runtime is built once, a
  * borrower cannot tear down the owner, and owner teardown permits a fresh
- * generation. Complements unit-bridge-runtime.mjs, which proves independently
+ * generation. Complements unit-bridge-runtime.ts, which proves independently
  * constructed runtimes do not bleed state.
  */
 import { describe, it, afterEach } from "node:test";
@@ -11,8 +11,9 @@ import { acquireBridgeOwner } from "../src/bridge-owner.js";
 import { createBridgeRuntime } from "../src/bridge-runtime.js";
 
 // The Symbol.for() registry is process-global; release any owner left standing
-// so each test starts from a clean process generation.
-const openRoots = [];
+// so each test starts from a clean process generation. Acquisitions here own
+// different owner shapes, so track just the release handle they share.
+const openRoots: Array<{ release(): void }> = [];
 afterEach(() => {
 	for (const acquisition of openRoots.splice(0)) acquisition.release();
 });

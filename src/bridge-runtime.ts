@@ -325,7 +325,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
 		piUI?.notify(message, "error");
 		queryCtx.fatalError = message;
 		emitTerminalError(queryCtx, "error", message);
-		try { queryCtx.activeQuery?.close(); } catch {}
+		void closeQueryContext(queryCtx, message, "force");
 	}
 
 	function createMcpToolHandler(toolName: string, queryCtx: QueryContext) {
@@ -363,21 +363,25 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
 		return { [MCP_SERVER_NAME]: server };
 	}
 
-	function closeQueryContext(c: QueryContext, label: string, inputWasReady = c.readyForInput): Promise<void> {
+	type QueryCloseMode = "drain" | "force";
+
+	function closeQueryContext(c: QueryContext, label: string, mode: QueryCloseMode): Promise<void> {
 		if (c.closeCompletion) return c.closeCompletion;
 		if (!c.activeQuery && !c.inputQueue) return c.completion ?? Promise.resolve();
-		debug(`provider: closing query (${label}) persistent=${c.persistent}`);
+		debug(`provider: closing query (${label}) mode=${mode} persistent=${c.persistent}`);
 		c.closing = true;
 		c.abortCleanup?.();
 		c.abortCleanup = null;
-		const drainNaturally = inputWasReady && c.inputQueue !== null;
 		c.inputQueue?.end();
+		const activeQuery = c.activeQuery;
 		const storeWriter = c.sessionStoreWriter;
 		const localSessionFragment = c.localSessionFragment;
-		if (drainNaturally) {
+		if (mode === "drain") {
 			debug("provider: waiting for natural query EOF before closing session-store writer");
 		} else {
-			try { c.activeQuery?.close(); } catch {}
+			storeWriter?.close();
+			if (sharedSession) sharedSession = { ...sharedSession, needsRebuild: true };
+			try { activeQuery?.close(); } catch {}
 		}
 		for (const pending of c.pendingToolCalls.values()) pending.resolve({ content: [{ type: "text", text: "Query ended" }] });
 		c.pendingToolCalls.clear();
@@ -403,7 +407,8 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
 
 	function closePersistentQuery(label: string): Promise<void> {
 		const c = rootContext;
-		return c.persistent ? closeQueryContext(c, label) : Promise.resolve();
+		if (!c.persistent) return Promise.resolve();
+		return closeQueryContext(c, label, c.readyForInput ? "drain" : "force");
 	}
 
 	function failQuery(
@@ -418,7 +423,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
 			sharedSession = null;
 		}
 		emitTerminalError(c, reason, message);
-		void closeQueryContext(c, message);
+		void closeQueryContext(c, message, "force");
 	}
 
 	/** Provider entry point. Pi calls this for each new prompt and each tool result. */
@@ -562,7 +567,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
 					queryCtx.inputQueue!.push(promptMessage);
 					debug(`Case 3: pushed turn into persistent session ${sharedSession?.sessionId.slice(0, 8) ?? "unknown"}`);
 				} catch (error) {
-					failQuery(queryCtx, "error", errorMessage(error), "drop");
+					if (!queryCtx.closing) failQuery(queryCtx, "error", errorMessage(error), "drop");
 				}
 			})();
 			return stream;
@@ -570,7 +575,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
 
 		void (async () => {
 			try {
-				if (queryCtx.activeQuery) await closeQueryContext(queryCtx, syncPlan.path === "reuse" ? "query options changed" : syncPlan.path, reusableRoot);
+				if (queryCtx.activeQuery) await closeQueryContext(queryCtx, syncPlan.path === "reuse" ? "query options changed" : syncPlan.path, reusableRoot ? "drain" : "force");
 				const syncResult = applySharedSessionSync(syncPlan, cwd, customToolNameToSdk, model.id);
 				queryCtx.pendingToolCalls.clear();
 				queryCtx.pendingResults.clear();
@@ -608,6 +613,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
 
 				queryCtx.completion = consumeQuery(sdkQuery, customToolNameToPi, model, queryCtx, {
 					onResult(result) {
+						if (queryCtx.closing) return;
 						queryCtx.abortCleanup?.();
 						queryCtx.abortCleanup = null;
 						if (queryCtx.turnAborted) emitTerminalError(queryCtx, "aborted", "Operation aborted");
@@ -623,9 +629,13 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
 							sharedSession = { sessionId, cursor: queryCtx.latestCursor };
 							debug(`provider: turn complete, session=${sessionId.slice(0, 8)}, cursor=${queryCtx.latestCursor}, storedRecords=${sessionStore.entryCount(sessionId)}`);
 						}
-						if (!queryCtx.persistent) void closeQueryContext(queryCtx, "reentrant turn complete");
+						if (!queryCtx.persistent) void closeQueryContext(queryCtx, "reentrant turn complete", "drain");
 					},
 					onSessionId(sessionId) {
+						if (queryCtx.closing) {
+							if (!syncResult.sessionId) deleteSession(sessionId, cwd, process.env.CLAUDE_CONFIG_DIR);
+							return;
+						}
 						if (!syncResult.sessionId && !queryCtx.localSessionFragment) {
 							queryCtx.localSessionFragment = {
 								sessionId,
@@ -658,7 +668,12 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
 	// owns the provider-registration global and clears it separately.
 	async function clear(reason: string): Promise<void> {
 		debug(`${reason}: clearing session ${sharedSession?.sessionId?.slice(0, 8) ?? "none"}`);
-		await closePersistentQuery(reason);
+		const contexts = [...activeQueryContexts];
+		await Promise.all(contexts.map((context) => closeQueryContext(
+			context,
+			reason,
+			context.readyForInput ? "drain" : "force",
+		)));
 		sharedSession = null;
 		sessionStore.clear();
 	}
@@ -713,6 +728,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
 			syncSharedSession,
 			consumeQuery,
 			finalizeCurrentStream,
+			closeQueryContext,
 			createMcpToolHandler,
 			streamClaudeAgentSdk,
 		},

@@ -2,7 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { BridgeSessionStore } from "../src/session-store.js";
 
-const key = (sessionId, subpath) => ({ projectKey: "ignored-project-scope", sessionId, ...(subpath ? { subpath } : {}) });
+const key = (sessionId: string, subpath?: string) => ({ projectKey: "ignored-project-scope", sessionId, ...(subpath ? { subpath } : {}) });
 
 describe("BridgeSessionStore", () => {
 	it("round-trips cloned transcript entries", async () => {
@@ -12,10 +12,13 @@ describe("BridgeSessionStore", () => {
 		await writer.append(key("s1"), entries);
 		entries[0].message.content = "mutated outside";
 
+		// SessionStoreEntry keeps its payload under an open index signature; view
+		// the round-tripped record as the message shape the store cloned.
 		const loaded = await writer.load(key("s1"));
-		assert.equal(loaded[0].message.content, "hello");
-		loaded[0].message.content = "mutated result";
-		assert.equal((await writer.load(key("s1")))[0].message.content, "hello");
+		const loadedMessage = loaded[0].message as { content: string };
+		assert.equal(loadedMessage.content, "hello");
+		loadedMessage.content = "mutated result";
+		assert.equal(((await writer.load(key("s1")))[0].message as { content: string }).content, "hello");
 	});
 
 	it("upserts UUID-bearing mirror retries without duplicating records", async () => {
