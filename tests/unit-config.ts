@@ -32,11 +32,11 @@ describe("loadConfig", () => {
 			const configDir = join(cwd, CONFIG_DIR_NAME);
 			mkdirSync(configDir, { recursive: true });
 			writeFileSync(join(configDir, "claude-bridge.json"), JSON.stringify({
-				provider: { plan: "max", systemPromptMode: "claude-code" },
+				provider: { pathToClaudeCodeExecutable: "/project/claude", systemPromptMode: "claude-code" },
 			}));
 
 			assert.deepEqual(loadConfig(cwd), {
-				provider: { plan: "max", systemPromptMode: "claude-code" },
+				provider: { pathToClaudeCodeExecutable: "/project/claude", systemPromptMode: "claude-code" },
 			});
 		} finally {
 			rmSync(cwd, { recursive: true, force: true });
@@ -51,14 +51,14 @@ describe("loadConfig", () => {
 			mkdirSync(globalDir, { recursive: true });
 			mkdirSync(projectDir, { recursive: true });
 			writeFileSync(join(globalDir, "claude-bridge.json"), JSON.stringify({
-				provider: { plan: "pro", systemPromptMode: "claude-code" },
+				provider: { pathToClaudeCodeExecutable: "/global/claude", systemPromptMode: "claude-code" },
 			}));
 			writeFileSync(join(projectDir, "claude-bridge.json"), JSON.stringify({
-				provider: { plan: "max" },
+				provider: { pathToClaudeCodeExecutable: "/project/claude" },
 			}));
 
 			assert.deepEqual(loadConfig(cwd), {
-				provider: { plan: "max", systemPromptMode: "claude-code" },
+				provider: { pathToClaudeCodeExecutable: "/project/claude", systemPromptMode: "claude-code" },
 			});
 		} finally {
 			rmSync(cwd, { recursive: true, force: true });
@@ -115,6 +115,8 @@ describe("loadConfig", () => {
 		const removedConfigs: Record<string, unknown>[] = [
 			{ provider: { strictMcpConfig: true } },
 			{ provider: { settingSources: [] } },
+			{ provider: { plan: "max" } },
+			{ provider: { longContextExtraUsage: true } },
 			{ askClaude: { enabled: true } },
 			{ askClaude: { defaultMode: "read" } },
 		];

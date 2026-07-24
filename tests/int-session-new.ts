@@ -11,7 +11,7 @@ import { readFileSync } from "node:fs";
 import { createRpcHarness } from "./lib/rpc-harness.js";
 
 const TIMEOUT = 180_000;
-const BRIDGE_MODEL = "anthropic/claude-haiku-4-5";
+const BRIDGE_MODEL = "anthropic-agent-sdk/claude-haiku-4-5";
 
 const harness = createRpcHarness({
 	name: "session-new",

@@ -1,67 +1,43 @@
-import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
 import { getAgentDir, SettingsManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import { PROVIDER_ID } from "./convert.js";
-import { applyLongContext, buildModels, type LongContextSettings } from "./models.js";
-import { loadConfig } from "./config.js";
+import { createDefaultAccountProbe } from "./account-probe.js";
 import { createBridgeRuntime } from "./bridge-runtime.js";
-import { createCompaction } from "./compaction.js";
 import { acquireBridgeOwner } from "./bridge-owner.js";
+import { createCompaction } from "./compaction.js";
+import { loadConfig } from "./config.js";
 import { debug, errorMessage, moduleInstanceId } from "./debug.js";
-
-// Project Pi's public Anthropic catalog down to bridge provider metadata.
-const MODELS = buildModels(getBuiltinModels("anthropic"));
+import { PROVIDER_ID } from "./models.js";
+import { createAnthropicAgentSdkProvider } from "./provider.js";
 
 export default function (pi: ExtensionAPI) {
-	// Disable non-essential Claude Code traffic (update checks, MCP registry, telemetry)
 	process.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1";
 
 	const config = loadConfig(process.cwd());
 	debug("loadConfig:", JSON.stringify(config));
 	const providerSettings = config.provider ?? {};
-	// We need these settings to know if we're eligible for 1M context on certain models.
-	// TODO(phase 2): derive plan and served context windows from live-query accountInfo/modelUsage.
-	const longContextSettings: LongContextSettings = {
-		plan: providerSettings.plan ?? "pro",
-		longContextExtraUsage: providerSettings.longContextExtraUsage ?? false,
-	};
 
-	// Compaction is isolated per activation and never touches the shared runtime
-	// (it spawns a one-shot Claude Code query), so borrower activations run it too.
 	const compaction = createCompaction({
-		longContextSettings,
 		queryFactory: query,
 		loadProviderSettings: (cwd) => loadConfig(cwd).provider ?? {},
 		loadRetryPolicy: (cwd, projectTrusted) =>
 			SettingsManager.create(cwd, getAgentDir(), { projectTrusted }).getRetrySettings(),
 	});
 
-	// One bridge runtime per process. The first activation builds and manages it;
-	// a nested/subagent activation borrows it so its provider calls
-	// route through the identical stream closure and reentrant QueryContexts.
 	const { owner, ownsLifecycle, release } = acquireBridgeOwner(() => {
-		const registeredModels = applyLongContext(MODELS, longContextSettings);
-		const runtime = createBridgeRuntime({ providerSettings, longContextSettings });
-		return { runtime, registeredModels };
+		const runtime = createBridgeRuntime({ providerSettings });
+		const provider = createAnthropicAgentSdkProvider({
+			stream: runtime.stream,
+			accountProbe: createDefaultAccountProbe(providerSettings),
+		});
+		return { runtime, provider };
 	});
-	const { runtime, registeredModels } = owner;
-	debug(`owner: ${ownsLifecycle ? "created" : "borrowing"} shared bridge runtime (module=${moduleInstanceId})`);
+	const { runtime, provider } = owner;
+	debug(`owner: ${ownsLifecycle ? "created" : "borrowing"} shared Provider/runtime (module=${moduleInstanceId})`);
 
-	// Every activation registers the shared runtime's provider into its own Pi
-	// runtime, by reference, so the stream closure identity is preserved for
-	// nested/reentrant MCP routing.
-	pi.registerProvider(PROVIDER_ID, {
-		baseUrl: "claude-bridge",
-		apiKey: "not-used",
-		api: "claude-bridge",
-		models: registeredModels,
-		streamSimple: runtime.stream,
-	});
+	pi.registerProvider(provider);
 
-	// Compaction takeover runs per activation (root and borrower): each uses its
-	// own config and the isolated summary never mutates shared runtime state.
 	pi.on("session_before_compact", async (event, ctx) => {
-		if (ctx.model?.baseUrl !== "claude-bridge") return undefined;
+		if (ctx.model?.provider !== PROVIDER_ID) return undefined;
 		debug(
 			`session_before_compact: takeover reason=${event.reason} willRetry=${event.willRetry} ` +
 			`isSplitTurn=${event.preparation.isSplitTurn} messages=${event.preparation.messagesToSummarize.length} ` +
@@ -90,10 +66,6 @@ export default function (pi: ExtensionAPI) {
 		}
 	});
 
-	// Only the activation that created the owner may mutate/close the shared
-	// runtime or clear the owner. A borrower's lifecycle events must never clear the parent session,
-	// overwrite its UI, mark its root session for rebuild, or close it on model
-	// selection — so borrowers wire nothing below.
 	if (!ownsLifecycle) return;
 
 	pi.on("session_start", async (event, ctx) => {
@@ -107,7 +79,7 @@ export default function (pi: ExtensionAPI) {
 		release();
 	});
 	pi.on("model_select", async (event) => {
-		if (event.previousModel?.baseUrl === "claude-bridge" && event.model.baseUrl !== "claude-bridge") {
+		if (event.previousModel?.provider === PROVIDER_ID && event.model.provider !== PROVIDER_ID) {
 			await runtime.closePersistent("provider switch");
 		}
 	});

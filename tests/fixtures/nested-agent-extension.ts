@@ -21,6 +21,11 @@ async function createNestedModelRuntime(ctx: ExtensionContext): Promise<ModelRun
 	});
 
 	for (const providerId of ctx.modelRegistry.getRegisteredProviderIds()) {
+		const provider = ctx.modelRegistry.getRegisteredNativeProvider(providerId);
+		if (provider) {
+			runtime.registerNativeProvider(provider);
+			continue;
+		}
 		const config = ctx.modelRegistry.getRegisteredProviderConfig(providerId);
 		if (config) runtime.registerProvider(providerId, config);
 	}

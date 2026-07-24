@@ -21,11 +21,19 @@ pi install npm:pi-claude-bridge
 
 ## Provider
 
-Use `/model` to select `anthropic/claude-fable-5`, `anthropic/claude-opus-4-8`, `anthropic/claude-opus-4-7`, `anthropic/claude-opus-4-6`, `anthropic/claude-sonnet-5`, `anthropic/claude-sonnet-4-6`, or `anthropic/claude-haiku-4-5`.
+Authenticate with Claude Code first:
+
+```sh
+claude auth login
+```
+
+Use `/model` to select one of the seven models under the `anthropic-agent-sdk` provider: `claude-fable-5`, `claude-opus-4-8`, `claude-opus-4-7`, `claude-opus-4-6`, `claude-sonnet-5`, `claude-sonnet-4-6`, or `claude-haiku-4-5`. For example: `anthropic-agent-sdk/claude-sonnet-5`.
+
+Claude Code owns authentication; Pi stores no key for this provider. Run `claude auth login` in a terminal.
 
 Behind the scenes, pi's tools are bridged to Claude Code but it should all work like normal in pi. Bash commands get a 120-second default timeout (matching Claude Code's default) since pi's bash has no timeout by default. In the default `append` prompt mode, the rewritten Pi system prompt is appended to Claude Code's preset.
 
-**1M Context:** Opus 4.7 and Opus 4.8 get 1M context by default. Opus 4.6 only gets 1M if you're on a Max plan or pay for Extra Usage. Sonnet 4.6 only gets 1M if you pay for Extra Usage. You will need to set `provider.plan` and/or `provider.longContextExtraUsage` for 1M context in Opus 4.6/Sonnet 4.6 as described in [Configuration](#configuration).
+**1M context:** Model metadata comes unchanged from Pi's canonical Anthropic catalog. When a model's final `contextWindow` exceeds 200K, the bridge requests Claude Code's `[1m]` variant. Claude Code remains responsible for subscription and Extra Usage authorization and surfaces any rejection directly.
 
 ## Configuration
 
@@ -34,8 +42,6 @@ Config: `~/.pi/agent/claude-bridge.json` (global) or the project Pi config direc
 ```json
 {
   "provider": {
-    "plan": "max",
-    "longContextExtraUsage": false,
     "systemPromptMode": "pi",
     "systemPromptReplacements": {
       "identity": "You are a coding assistant running through Claude Code.",
@@ -52,8 +58,6 @@ Config: `~/.pi/agent/claude-bridge.json` (global) or the project Pi config direc
 
 `provider`:
 
-- `plan` (default `"pro"`) — set to `"max"` for Max (or Team Premium/Enterprise) to enable Opus 4.6 with 1M context.
-- `longContextExtraUsage` — set to `true` to enable 1M models that cost money through Extra Usage. It enables Sonnet 4.6 with 1M on every plan and Opus 4.6 with 1M on Pro. Not needed for Opus 4.7 or 4.8.
 - `systemPromptMode` — `"claude-code"` uses only Claude Code's preset, `"pi"` uses only the rewritten Pi system prompt, and `"append"` appends the rewritten Pi prompt to Claude Code's preset (default `"append"`).
 - `systemPromptReplacements` — replacement prose used whenever the Pi prompt is included (`"pi"` or `"append"`). `documentation.heading` and `documentation.instructions` are required and must be nonblank. `identity` and `toolNameNote` are optional overrides. Discovered installation paths are preserved between the custom heading and instructions.
 - Claude Code filesystem settings are isolated in `"pi"` mode and use Claude Code defaults in `"claude-code"` and `"append"` modes. Filesystem and cloud MCP servers are always blocked, since pi is the tool-execution layer.
@@ -135,7 +139,23 @@ Available tools:
 <Pi working-directory and runtime context>
 ```
 
-**Extension providers and models.json:** pi's `modelOverrides` in `~/.pi/agent/models.json` do not currently apply to extension-registered providers. Overriding `contextWindow` or other fields requires editing `src/models.ts` directly.
+### models.json overrides
+
+Pi's `modelOverrides` apply to the supported IDs. The final composed metadata controls Pi's display, compaction threshold, and Claude Code request form. For example:
+
+```json
+{
+  "providers": {
+    "anthropic-agent-sdk": {
+      "modelOverrides": {
+        "claude-opus-4-8": { "contextWindow": 200000 }
+      }
+    }
+  }
+}
+```
+
+Provider-level custom models and added IDs are unsupported. Changing a model's `api` or `baseUrl` is also unsupported; such models are hidden, and direct requests end with a provider error before Claude Code starts.
 
 ## Development
 

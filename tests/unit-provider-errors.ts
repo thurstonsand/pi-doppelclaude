@@ -7,13 +7,12 @@ import { QueryContext } from "../src/query-state.js";
 
 const runtime = createBridgeRuntime({
 	providerSettings: {},
-	longContextSettings: { plan: "pro", longContextExtraUsage: false },
 });
 
 // Minimal stand-in for pi-ai's Model; the stream path only reads api/provider/id/cost.
 const fakeModel = {
-	api: "claude-bridge",
-	provider: "anthropic",
+	api: "anthropic-agent-sdk",
+	provider: "anthropic-agent-sdk",
 	id: "claude-test",
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 } as Model<any>;

@@ -156,7 +156,7 @@ describe("thinking block filtering", () => {
 
 	it("Anthropic provider thinking with signature preserved", () => {
 		const msgs = [
-			{ role: "assistant", provider: "anthropic", content: [
+			{ role: "assistant", provider: "anthropic-agent-sdk", content: [
 				{ type: "thinking", thinking: "reasoning...", thinkingSignature: "sig123" },
 				{ type: "text", text: "answer" },
 			]},
@@ -168,7 +168,7 @@ describe("thinking block filtering", () => {
 
 	it("Anthropic provider via api field", () => {
 		const msgs = [
-			{ role: "assistant", api: "anthropic", content: [
+			{ role: "assistant", api: "anthropic-messages", content: [
 				{ type: "thinking", thinking: "hmm", thinkingSignature: "sig456" },
 				{ type: "text", text: "done" },
 			]},
@@ -180,7 +180,7 @@ describe("thinking block filtering", () => {
 
 	it("Anthropic provider thinking WITHOUT signature → dropped", () => {
 		const msgs = [
-			{ role: "assistant", provider: "anthropic", content: [
+			{ role: "assistant", provider: "anthropic-agent-sdk", content: [
 				{ type: "thinking", thinking: "no sig" },
 				{ type: "text", text: "answer" },
 			]},

@@ -16,7 +16,6 @@ import type { SessionStoreWriter } from "../src/session-store.js";
 function makeRuntime() {
 	return createBridgeRuntime({
 		providerSettings: {},
-		longContextSettings: { plan: "pro", longContextExtraUsage: false },
 	});
 }
 
@@ -53,7 +52,7 @@ describe("bridge runtime isolation", () => {
 		try {
 			const messages = [
 				{ role: "user", content: "remember", timestamp: 1 },
-				{ role: "assistant", content: [{ type: "text", text: "ok" }], api: "anthropic", provider: "anthropic", model: "claude-haiku-4-5", timestamp: 2 },
+				{ role: "assistant", content: [{ type: "text", text: "ok" }], api: "anthropic-agent-sdk", provider: "anthropic-agent-sdk", model: "claude-haiku-4-5", timestamp: 2 },
 				{ role: "user", content: "next", timestamp: 3 },
 			] as unknown as PiMessage[];
 			const result = a.test.syncSharedSession(messages, cwd);

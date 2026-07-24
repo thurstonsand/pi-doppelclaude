@@ -10,11 +10,18 @@
 // ExtensionAPI — index.ts passes an ordinary build factory and does all Pi
 // registration and event wiring itself.
 
+import type { Provider } from "@earendil-works/pi-ai";
+
 const OWNER_KEY = Symbol.for("claude-bridge:owner");
 
-export interface OwnerAcquisition<T> {
-	/** The shared owner: built once per process, reused by borrowers. */
-	owner: T;
+export interface BridgeOwner<TRuntime extends object> {
+	provider: Provider;
+	runtime: TRuntime;
+}
+
+export interface OwnerAcquisition<TRuntime extends object> {
+	/** The shared Provider/runtime pair: built once per process, reused by borrowers. */
+	owner: BridgeOwner<TRuntime>;
 	/** True only for the activation that created and manages the owner. */
 	ownsLifecycle: boolean;
 	/**
@@ -25,11 +32,13 @@ export interface OwnerAcquisition<T> {
 	release(): void;
 }
 
-export function acquireBridgeOwner<T extends object>(build: () => T): OwnerAcquisition<T> {
+export function acquireBridgeOwner<TRuntime extends object>(
+	build: () => BridgeOwner<TRuntime>,
+): OwnerAcquisition<TRuntime> {
 	const registry = globalThis as Record<symbol, unknown>;
 	const existing = registry[OWNER_KEY];
 	if (existing !== undefined) {
-		return { owner: existing as T, ownsLifecycle: false, release() {} };
+		return { owner: existing as BridgeOwner<TRuntime>, ownsLifecycle: false, release() {} };
 	}
 	const owner = build();
 	registry[OWNER_KEY] = owner;

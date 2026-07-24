@@ -34,7 +34,6 @@ type QueueDelivery = QueueResult | QueueFallback;
 function makeRuntime() {
 	return createBridgeRuntime({
 		providerSettings: {},
-		longContextSettings: { plan: "pro", longContextExtraUsage: false },
 	});
 }
 
@@ -127,7 +126,7 @@ describe("production MCP handlers", () => {
 		const activeQuery = Object.create(null) as Query;
 		activeQuery.close = () => { closeCount++; };
 		queryCtx.activeQuery = activeQuery;
-		queryCtx.resetTurnState({ api: "claude-bridge", provider: "anthropic", id: "test" } as Model<any>);
+		queryCtx.resetTurnState({ api: "anthropic-agent-sdk", provider: "anthropic-agent-sdk", id: "test" } as Model<any>);
 		const handler = runtime.test.createMcpToolHandler("read", queryCtx);
 
 		void handler({}, {});
@@ -138,7 +137,7 @@ describe("production MCP handlers", () => {
 
 		queryCtx.activeQuery = null;
 		const stream = runtime.test.streamClaudeAgentSdk(
-			{ api: "claude-bridge", provider: "anthropic", id: "test" } as Model<any>,
+			{ api: "anthropic-agent-sdk", provider: "anthropic-agent-sdk", id: "test" } as Model<any>,
 			{
 				systemPrompt: "",
 				messages: [{ role: "toolResult", toolCallId: "tool-1", content: [{ type: "text", text: "result" }], isError: false }] as unknown as PiMessage[],

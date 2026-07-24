@@ -11,7 +11,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ExtensionAPI, ProviderConfig } from "@earendil-works/pi-coding-agent";
+import type { Provider } from "@earendil-works/pi-ai";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 // Isolate the bridge global config (so a developer's real askClaude config cannot
 // make loadConfig throw) and seed a valid claude-code prompt mode that needs no
@@ -30,11 +31,9 @@ const MUTATING_EVENTS = ["session_start", "session_shutdown", "model_select", "s
 
 function fakePi() {
 	const handlers = new Map<string, (...args: unknown[]) => unknown>();
-	const providers: Array<{ id: string; config: ProviderConfig }> = [];
-	// Test double for Pi's ExtensionAPI: activate() only touches registerProvider
-	// and on(), so the stub implements just those two of its many methods.
+	const providers: Provider[] = [];
 	const pi = {
-		registerProvider(id: string, config: ProviderConfig) { providers.push({ id, config }); },
+		registerProvider(provider: Provider) { providers.push(provider); },
 		on(event: string, handler: (...args: unknown[]) => unknown) { handlers.set(event, handler); },
 	} as unknown as ExtensionAPI;
 	return { pi, handlers, providers };
@@ -56,11 +55,11 @@ describe("extension activation ownership", () => {
 		const borrower = fakePi();
 		activate(borrower.pi);
 
-		// Both register, by reference, the same stream closure and models.
+		// Both register the complete native Provider object by reference.
 		assert.equal(root.providers.length, 1);
 		assert.equal(borrower.providers.length, 1);
-		assert.strictEqual(borrower.providers[0].config.streamSimple, root.providers[0].config.streamSimple);
-		assert.strictEqual(borrower.providers[0].config.models, root.providers[0].config.models);
+		assert.strictEqual(borrower.providers[0], root.providers[0]);
+		assert.strictEqual(borrower.providers[0].streamSimple, root.providers[0].streamSimple);
 
 		// The creating activation wires runtime lifecycle + compaction; the borrower wires only compaction.
 		for (const event of MUTATING_EVENTS) assert.ok(root.handlers.has(event), `root missing ${event}`);
@@ -72,7 +71,7 @@ describe("extension activation ownership", () => {
 	it("owner shutdown releases the runtime so the next activation owns a fresh generation", async () => {
 		const first = fakePi();
 		activate(first.pi);
-		const firstStream = first.providers[0].config.streamSimple;
+		const firstProvider = first.providers[0];
 
 		// A borrower cannot release the owner (it has no shutdown handler at all).
 		const borrower = fakePi();
@@ -86,6 +85,7 @@ describe("extension activation ownership", () => {
 		// Next activation builds a fresh runtime with a distinct stream closure.
 		const next = fakePi();
 		activate(next.pi);
-		assert.notStrictEqual(next.providers[0].config.streamSimple, firstStream);
+		assert.notStrictEqual(next.providers[0], firstProvider);
+		assert.notStrictEqual(next.providers[0].streamSimple, firstProvider.streamSimple);
 	});
 });

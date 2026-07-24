@@ -1,203 +1,90 @@
-/**
- * Tests for MODELS construction + resolveModel.
- * Pins: opus shortcut resolves to whichever opus is first in MODEL_IDS_IN_ORDER,
- * projection strips pi-ai's baseUrl/api/provider/headers, and ordering is preserved.
- */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
-import { MODEL_IDS_IN_ORDER, applyLongContext, buildModels, claudeCodeModelId, resolveClaudeCodeRuntimeModel, resolveModel, resolveThinkingEffort, type LongContextSettings } from "../src/models.js";
+import {
+	buildModels,
+	claudeCodeModelId,
+	MODEL_IDS_IN_ORDER,
+	PROVIDER_API,
+	PROVIDER_BASE_URL,
+	PROVIDER_ID,
+	resolveThinkingEffort,
+} from "../src/models.js";
 
-const PRO: LongContextSettings = { plan: "pro", longContextExtraUsage: false };
-const MAX: LongContextSettings = { plan: "max", longContextExtraUsage: false };
-const EXTRA: LongContextSettings = { plan: "pro", longContextExtraUsage: true };
+const canonicalModels = getBuiltinModels("anthropic");
+const find = <T extends { id: string }>(models: readonly T[], id: string): T => models.find((model) => model.id === id)!;
 
-// Simulated pi-ai registry entry — extra fields mimic the ones pi-ai exposes
-// that must not leak into the provider-registered MODELS array.
-const mockPiAiModel = (id: string) => ({
-	id, name: id, reasoning: true, input: ["text"],
-	cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1.25 },
-	contextWindow: 200000, maxTokens: 8000,
-	// Leaky fields that should be stripped by the projection:
-	baseUrl: "https://api.anthropic.com", api: "anthropic", provider: "anthropic",
-	headers: { "x-api-key": "LEAK" },
-});
-
-const oneM = (id: string) => ({ ...mockPiAiModel(id), contextWindow: 1000000 });
-
-const find = <T extends { id: string }>(models: T[], id: string): T | undefined => models.find((m) => m.id === id);
-
-describe("MODELS projection", () => {
-	it("strips baseUrl/api/provider/headers", () => {
-		const models = buildModels(MODEL_IDS_IN_ORDER.map(mockPiAiModel));
-		for (const m of models) {
-			// The projected model type no longer declares these leaky pi-ai fields;
-			// probe the raw record to prove the projection stripped them.
-			const raw = m as Record<string, unknown>;
-			assert.equal(raw.baseUrl, undefined);
-			assert.equal(raw.api, undefined);
-			assert.equal(raw.provider, undefined);
-			assert.equal(raw.headers, undefined);
+describe("native model projection", () => {
+	it("projects the seven canonical models in the declared order", () => {
+		const models = buildModels(canonicalModels);
+		assert.deepEqual(models.map((model) => model.id), MODEL_IDS_IN_ORDER);
+		for (const model of models) {
+			assert.equal(model.provider, PROVIDER_ID);
+			assert.equal(model.api, PROVIDER_API);
+			assert.equal(model.baseUrl, PROVIDER_BASE_URL);
 		}
 	});
 
-	it("preserves MODEL_IDS_IN_ORDER ordering", () => {
-		const models = buildModels(MODEL_IDS_IN_ORDER.map(mockPiAiModel));
-		assert.deepEqual(models.map((m) => m.id), MODEL_IDS_IN_ORDER);
-	});
-
-	it("silently drops IDs missing from pi-ai (no fallback)", () => {
-		// Only haiku present — opus/sonnet vanish from picker.
-		const models = buildModels([mockPiAiModel("claude-haiku-4-5")]);
-		assert.deepEqual(models.map((m) => m.id), ["claude-haiku-4-5"]);
-	});
-
-	it("preserves API-equivalent pricing", () => {
-		const models = buildModels(MODEL_IDS_IN_ORDER.map(mockPiAiModel));
-		for (const m of models) {
-			assert.deepEqual(m.cost, { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1.25 });
+	it("preserves every canonical metadata field other than provider identity", () => {
+		for (const model of buildModels(canonicalModels)) {
+			const canonical = find(canonicalModels, model.id);
+			assert.equal(model.name, canonical.name);
+			assert.equal(model.reasoning, canonical.reasoning);
+			assert.deepEqual(model.thinkingLevelMap, canonical.thinkingLevelMap);
+			assert.deepEqual(model.input, canonical.input);
+			assert.deepEqual(model.cost, canonical.cost);
+			assert.equal(model.contextWindow, canonical.contextWindow);
+			assert.equal(model.maxTokens, canonical.maxTokens);
 		}
 	});
 
-	it("leaves display names bare before plan-specific context is applied", () => {
-		const models = buildModels(MODEL_IDS_IN_ORDER.map(oneM));
-		assert.deepEqual(models.map((m) => m.id), MODEL_IDS_IN_ORDER);
-		assert.ok(models.every((m) => !m.name.includes("1M")));
-	});
-
-	it("preserves Pi's thinkingLevelMap without local model-specific fallbacks", () => {
-		const withMap = (id: string) => ({ ...mockPiAiModel(id), thinkingLevelMap: { xhigh: "xhigh", max: "max" } });
-		const models = buildModels([withMap("claude-sonnet-5"), mockPiAiModel("claude-sonnet-4-6")]);
-		assert.deepEqual(find(models, "claude-sonnet-5")?.thinkingLevelMap, { xhigh: "xhigh", max: "max" });
-		assert.equal(find(models, "claude-sonnet-4-6")?.thinkingLevelMap, undefined);
-	});
-
-	it("projects native Pi 0.80.10 Sonnet thinking levels", () => {
-		const models = buildModels(getBuiltinModels("anthropic"));
-		assert.deepEqual(find(models, "claude-sonnet-5")?.thinkingLevelMap, { xhigh: "xhigh", max: "max" });
-		assert.deepEqual(find(models, "claude-sonnet-4-6")?.thinkingLevelMap, { max: "max" });
+	it("fails if Pi's canonical catalog is missing a required model", () => {
+		assert.throws(
+			() => buildModels(canonicalModels.filter((model) => model.id !== "claude-fable-5")),
+			/catalog is missing required model claude-fable-5/,
+		);
 	});
 });
 
 describe("thinking effort", () => {
-	const models = buildModels(getBuiltinModels("anthropic"));
+	const models = buildModels(canonicalModels);
 
 	it("uses native per-model mappings before generic effort aliases", () => {
 		assert.equal(resolveThinkingEffort(find(models, "claude-sonnet-5"), "xhigh"), "xhigh");
 		assert.equal(resolveThinkingEffort(find(models, "claude-opus-4-6"), "xhigh"), "max");
 	});
 
-	it("supports max and disables effort for off or omitted levels", () => {
+	it("uses Claude Code defaults when reasoning is off or omitted", () => {
 		assert.equal(resolveThinkingEffort(find(models, "claude-sonnet-5"), "max"), "max");
 		assert.equal(resolveThinkingEffort(find(models, "claude-sonnet-5"), "off"), undefined);
 		assert.equal(resolveThinkingEffort(find(models, "claude-sonnet-5"), undefined), undefined);
 	});
 });
 
-describe("Claude Code runtime model policy", () => {
-	it("uses measured Pro defaults", () => {
-		assert.deepEqual(resolveClaudeCodeRuntimeModel("claude-opus-4-8", PRO), { cliModelId: "claude-opus-4-8[1m]", contextWindow: 1000000 });
-		assert.deepEqual(resolveClaudeCodeRuntimeModel("claude-opus-4-7", PRO), { cliModelId: "claude-opus-4-7", contextWindow: 1000000 });
-		assert.deepEqual(resolveClaudeCodeRuntimeModel("claude-opus-4-6", PRO), { cliModelId: "claude-opus-4-6", contextWindow: 200000 });
-		assert.deepEqual(resolveClaudeCodeRuntimeModel("claude-sonnet-4-6", PRO), { cliModelId: "claude-sonnet-4-6", contextWindow: 200000 });
-		assert.deepEqual(resolveClaudeCodeRuntimeModel("claude-haiku-4-5", PRO), { cliModelId: "claude-haiku-4-5", contextWindow: 200000 });
+describe("Claude Code model argument", () => {
+	const models = buildModels(canonicalModels);
+
+	it("uses [1m] for canonical long-context models except bare Opus 4.7", () => {
+		assert.equal(claudeCodeModelId(find(models, "claude-fable-5")), "claude-fable-5[1m]");
+		assert.equal(claudeCodeModelId(find(models, "claude-opus-4-8")), "claude-opus-4-8[1m]");
+		assert.equal(claudeCodeModelId(find(models, "claude-opus-4-7")), "claude-opus-4-7");
+		assert.equal(claudeCodeModelId(find(models, "claude-opus-4-6")), "claude-opus-4-6[1m]");
+		assert.equal(claudeCodeModelId(find(models, "claude-sonnet-5")), "claude-sonnet-5[1m]");
+		assert.equal(claudeCodeModelId(find(models, "claude-sonnet-4-6")), "claude-sonnet-4-6[1m]");
+		assert.equal(claudeCodeModelId(find(models, "claude-haiku-4-5")), "claude-haiku-4-5");
 	});
 
-	it("plan max only changes Opus 4.6", () => {
-		assert.deepEqual(resolveClaudeCodeRuntimeModel("claude-opus-4-8", MAX), { cliModelId: "claude-opus-4-8[1m]", contextWindow: 1000000 });
-		assert.deepEqual(resolveClaudeCodeRuntimeModel("claude-opus-4-7", MAX), { cliModelId: "claude-opus-4-7", contextWindow: 1000000 });
-		assert.deepEqual(resolveClaudeCodeRuntimeModel("claude-opus-4-6", MAX), { cliModelId: "claude-opus-4-6[1m]", contextWindow: 1000000 });
-		assert.deepEqual(resolveClaudeCodeRuntimeModel("claude-sonnet-4-6", MAX), { cliModelId: "claude-sonnet-4-6", contextWindow: 200000 });
+	it("uses the final modelOverride context window", () => {
+		const opus = { ...find(models, "claude-opus-4-8"), contextWindow: 200_000 };
+		const haiku = { ...find(models, "claude-haiku-4-5"), contextWindow: 1_000_000 };
+		assert.equal(claudeCodeModelId(opus), "claude-opus-4-8");
+		assert.equal(claudeCodeModelId(haiku), "claude-haiku-4-5[1m]");
 	});
 
-	it("longContextExtraUsage enables metered variants but not Haiku", () => {
-		assert.deepEqual(resolveClaudeCodeRuntimeModel("claude-opus-4-6", EXTRA), { cliModelId: "claude-opus-4-6[1m]", contextWindow: 1000000 });
-		assert.deepEqual(resolveClaudeCodeRuntimeModel("claude-sonnet-4-6", EXTRA), { cliModelId: "claude-sonnet-4-6[1m]", contextWindow: 1000000 });
-		assert.deepEqual(resolveClaudeCodeRuntimeModel("claude-haiku-4-5", EXTRA), { cliModelId: "claude-haiku-4-5", contextWindow: 200000 });
-	});
-
-	it("unknown model falls back to bare id at 200K", () => {
-		assert.deepEqual(resolveClaudeCodeRuntimeModel("claude-future-9-9", PRO), { cliModelId: "claude-future-9-9", contextWindow: 200000 });
-	});
-});
-
-describe("claudeCodeModelId", () => {
-	const models = buildModels(MODEL_IDS_IN_ORDER.map(oneM));
-
-	it("returns the measured SDK request id", () => {
-		assert.equal(claudeCodeModelId(find(models, "claude-opus-4-8"), PRO), "claude-opus-4-8[1m]");
-		assert.equal(claudeCodeModelId(find(models, "claude-opus-4-7"), PRO), "claude-opus-4-7");
-		assert.equal(claudeCodeModelId(find(models, "claude-opus-4-6"), PRO), "claude-opus-4-6");
-		assert.equal(claudeCodeModelId(find(models, "claude-opus-4-6"), MAX), "claude-opus-4-6[1m]");
-		assert.equal(claudeCodeModelId(find(models, "claude-sonnet-4-6"), EXTRA), "claude-sonnet-4-6[1m]");
-		assert.equal(claudeCodeModelId(find(models, "claude-haiku-4-5"), EXTRA), "claude-haiku-4-5");
-	});
-
-});
-
-describe("applyLongContext", () => {
-	const models = buildModels(MODEL_IDS_IN_ORDER.map(oneM));
-
-	it("registers measured Pro defaults", () => {
-		const registered = applyLongContext(models, PRO);
-		assert.equal(find(registered, "claude-opus-4-8").contextWindow, 1000000);
-		assert.equal(find(registered, "claude-opus-4-7").contextWindow, 1000000);
-		assert.equal(find(registered, "claude-opus-4-6").contextWindow, 200000);
-		assert.equal(find(registered, "claude-sonnet-4-6").contextWindow, 200000);
-		assert.equal(find(registered, "claude-haiku-4-5").contextWindow, 200000);
-		// Does not mutate the source table used for id resolution.
-		assert.equal(find(models, "claude-opus-4-6").contextWindow, 1000000);
-	});
-
-	it("registers Max-plan Opus 4.6 at 1M but leaves Sonnet at 200K", () => {
-		const registered = applyLongContext(models, MAX);
-		assert.equal(find(registered, "claude-opus-4-6").contextWindow, 1000000);
-		assert.equal(find(registered, "claude-sonnet-4-6").contextWindow, 200000);
-	});
-
-	it("registers extra-usage Opus 4.6 and Sonnet at 1M", () => {
-		const registered = applyLongContext(models, EXTRA);
-		assert.equal(find(registered, "claude-opus-4-6").contextWindow, 1000000);
-		assert.equal(find(registered, "claude-sonnet-4-6").contextWindow, 1000000);
-		assert.equal(find(registered, "claude-haiku-4-5").contextWindow, 200000);
-	});
-
-	it("labels exactly the registered 1M models", () => {
-		const pro = applyLongContext(models, PRO);
-		assert.equal(find(pro, "claude-opus-4-8").name, "claude-opus-4-8 1M");
-		assert.equal(find(pro, "claude-opus-4-7").name, "claude-opus-4-7 1M");
-		assert.equal(find(pro, "claude-opus-4-6").name, "claude-opus-4-6");
-		assert.equal(find(pro, "claude-sonnet-4-6").name, "claude-sonnet-4-6");
-
-		const extra = applyLongContext(models, EXTRA);
-		assert.equal(find(extra, "claude-opus-4-6").name, "claude-opus-4-6 1M");
-		assert.equal(find(extra, "claude-sonnet-4-6").name, "claude-sonnet-4-6 1M");
-	});
-});
-
-describe("resolveModel", () => {
-	const models = buildModels(MODEL_IDS_IN_ORDER.map(mockPiAiModel));
-
-	it("opus shortcut resolves to claude-opus-4-8 (first opus in order)", () => {
-		assert.equal(resolveModel(models, "opus")?.id, "claude-opus-4-8");
-	});
-
-	it("haiku shortcut resolves to claude-haiku-4-5", () => {
-		assert.equal(resolveModel(models, "haiku")?.id, "claude-haiku-4-5");
-	});
-
-	it("full ID resolves to itself", () => {
-		assert.equal(resolveModel(models, "claude-opus-4-6")?.id, "claude-opus-4-6");
-	});
-
-	it("returns undefined when no match", () => {
-		assert.equal(resolveModel(models, "gpt-9"), undefined);
-	});
-
-	it("returns the matched model object for CLI-arg conversion", () => {
-		const oneMModels = buildModels(MODEL_IDS_IN_ORDER.map(oneM));
-		const model = resolveModel(oneMModels, "opus");
-		assert.equal(model.id, "claude-opus-4-8");
-		assert.equal(claudeCodeModelId(model, PRO), "claude-opus-4-8[1m]");
+	it("rejects unknown IDs instead of guessing a context window", () => {
+		assert.throws(
+			() => claudeCodeModelId({ id: "claude-future-9-9", contextWindow: 200_000 }),
+			/Unsupported Anthropic Agent SDK model/,
+		);
 	});
 });

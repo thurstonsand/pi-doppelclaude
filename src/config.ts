@@ -29,8 +29,6 @@ const PROVIDER_CONFIG_SCHEMA = strictObject({
 	])),
 	systemPromptReplacements: Type.Optional(SYSTEM_PROMPT_REPLACEMENTS_SCHEMA),
 	pathToClaudeCodeExecutable: Type.Optional(Type.String()),
-	plan: Type.Optional(Type.Union([Type.Literal("pro"), Type.Literal("max")])),
-	longContextExtraUsage: Type.Optional(Type.Boolean()),
 });
 
 const CONFIG_SCHEMA = strictObject({

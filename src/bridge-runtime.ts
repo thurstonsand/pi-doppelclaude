@@ -12,7 +12,7 @@ import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { createSession, deleteSession, repairToolPairing } from "cc-session-io";
 import { messageContentToText, convertPiMessages } from "./convert.js";
-import { claudeCodeModelId, type LongContextSettings, resolveThinkingEffort } from "./models.js";
+import { claudeCodeModelId, resolveThinkingEffort } from "./models.js";
 import { MCP_SERVER_NAME, MCP_TOOL_PREFIX } from "./skills.js";
 import { extractAllToolResults as _extractAllToolResults, type McpResult } from "./extract-tool-results.js";
 import { PushQueue, QueryContext } from "./query-state.js";
@@ -25,7 +25,6 @@ import { debug, diagDump, errorMessage, makeCliDebugOptions, sdkChildEnv } from 
 
 interface BridgeRuntimeDependencies {
 	providerSettings: NonNullable<Config["provider"]>;
-	longContextSettings: LongContextSettings;
 }
 
 interface SessionState {
@@ -66,7 +65,7 @@ interface SyncPlan {
 type SessionDisposition = "rebuild" | "drop";
 
 export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
-	const { providerSettings, longContextSettings } = dependencies;
+	const { providerSettings } = dependencies;
 
 	let sharedSession: SessionState | null = null;
 	const sessionStore = new BridgeSessionStore(debug);
@@ -507,7 +506,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
 		const settingSources = settingSourcesFor(systemPromptMode);
 		const claudeExecutable = providerSettings.pathToClaudeCodeExecutable;
 		const effort = resolveThinkingEffort(model, options?.reasoning);
-		const cliModel = claudeCodeModelId(model, longContextSettings);
+		const cliModel = claudeCodeModelId(model);
 		const extraArgs: Record<string, string | null> = {};
 		if (effort) extraArgs["thinking-display"] = "summarized";
 		const spawnSignature = JSON.stringify({

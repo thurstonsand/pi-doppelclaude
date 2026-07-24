@@ -12,7 +12,7 @@ import { createRpcHarness } from "./lib/rpc-harness.js";
 const cwd = mkdtempSync(join(tmpdir(), "pi-claude-bridge-option-drift-"));
 const harness = createRpcHarness({
 	name: "session-option-drift",
-	args: ["--model", "anthropic/claude-haiku-4-5"],
+	args: ["--model", "anthropic-agent-sdk/claude-haiku-4-5"],
 	cwd,
 	defaultTimeout: 120_000,
 });

@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRpcHarness, parseCompactionEndEvent, type CompactionDetails } from "./lib/rpc-harness.js";
 
-const BRIDGE_MODEL = "anthropic/claude-haiku-4-5";
+const BRIDGE_MODEL = "anthropic-agent-sdk/claude-haiku-4-5";
 const COMPACT_TIMEOUT = 120_000;
 const TEST_TIMEOUT = 240_000;
 

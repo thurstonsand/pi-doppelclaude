@@ -1,6 +1,6 @@
 // Compaction: isolated summary generation and prior-compaction file-op reinjection.
 //
-// When pi asks a claude-bridge model to compact, the bridge takes over: it runs
+// When pi asks an Anthropic Agent SDK model to compact, the bridge takes over: it runs
 // the split-turn summary as an isolated Claude Code subprocess (never through the
 // live provider stream — see issue #18) and carries forward file operations from
 // the previous compaction so <read-files>/<modified-files> stay accurate.
@@ -10,7 +10,7 @@ import { compact, type CompactionEntry, type CompactionResult, type SessionBefor
 import { type Options, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { messageContentToText } from "./convert.js";
 import type { Config } from "./config.js";
-import { claudeCodeModelId, type LongContextSettings } from "./models.js";
+import { claudeCodeModelId } from "./models.js";
 import { buildClaudeSystemPrompt, settingSourcesFor } from "./system-prompt.js";
 import { debug, errorMessage, makeCliDebugOptions, sdkChildEnv } from "./debug.js";
 import { logServedContextWindow, resultErrorText } from "./sdk-result.js";
@@ -22,7 +22,6 @@ interface IsolatedQuery extends AsyncIterable<SDKMessage> {
 }
 
 interface CompactionDependencies {
-	longContextSettings: LongContextSettings;
 	queryFactory(request: { prompt: string; options?: Options }): IsolatedQuery;
 	loadProviderSettings(cwd: string): NonNullable<Config["provider"]>;
 	loadRetryPolicy(cwd: string, projectTrusted: boolean): RetryPolicy;
@@ -78,7 +77,7 @@ interface CompactionRequest {
 }
 
 export function createCompaction(dependencies: CompactionDependencies) {
-	const { longContextSettings, queryFactory, loadProviderSettings, loadRetryPolicy } = dependencies;
+	const { queryFactory, loadProviderSettings, loadRetryPolicy } = dependencies;
 
 	async function runIsolatedSummary(
 		model: Model<any>,
@@ -101,7 +100,7 @@ export function createCompaction(dependencies: CompactionDependencies) {
 			const compactSystemPromptMode = compactProviderSettings.systemPromptMode ?? "append";
 			const compactSettingSources = settingSourcesFor(compactSystemPromptMode);
 			const claudeExecutable = compactProviderSettings.pathToClaudeCodeExecutable;
-			const cliModel = claudeCodeModelId(model, longContextSettings);
+			const cliModel = claudeCodeModelId(model);
 			debug(`compact summary: spawn model=${cliModel} registeredModel=${model.id} promptLen=${promptText.length}`);
 
 			sdkQuery = queryFactory({

@@ -4,9 +4,8 @@
 import type { Message as PiMessage } from "@earendil-works/pi-ai";
 import type { ContentBlock, Message as SessionMessage } from "cc-session-io";
 import { pascalCase } from "change-case";
+import { PROVIDER_API, PROVIDER_ID } from "./models.js";
 import { MCP_TOOL_PREFIX } from "./skills.js";
-
-export const PROVIDER_ID = "anthropic";
 
 export const PI_TO_SDK_TOOL_NAME: Record<string, string> = {
 	read: "Read", write: "Write", edit: "Edit", bash: "Bash",
@@ -111,7 +110,7 @@ export function convertPiMessages(
 					blocks.push({ type: "text", text: block.text });
 				} else if (block.type === "thinking") {
 					const sig = block.thinkingSignature;
-					const isAnthropicProvider = msg.provider === PROVIDER_ID || msg.api === "anthropic";
+					const isAnthropicProvider = msg.provider === PROVIDER_ID || msg.api === PROVIDER_API || msg.api === "anthropic-messages";
 					if (isAnthropicProvider && sig) {
 						blocks.push({ type: "thinking", thinking: block.thinking ?? "", signature: sig });
 					}

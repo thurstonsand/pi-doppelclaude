@@ -38,7 +38,6 @@ describe("isolated compaction accounting", () => {
 		let providerSettingsCwd: string | undefined;
 		const requestedCwd = "/tmp/phase-3-compaction-cwd";
 		const compaction = createCompaction({
-			longContextSettings: { plan: "pro", longContextExtraUsage: false },
 			queryFactory: (request) => {
 				queryCwd = request.options?.cwd;
 				const message = resultMessage(++attempts);
@@ -91,7 +90,6 @@ describe("isolated compaction accounting", () => {
 	it("combines usage from both successful split-turn summaries", async () => {
 		let attempts = 0;
 		const compaction = createCompaction({
-			longContextSettings: { plan: "pro", longContextExtraUsage: false },
 			queryFactory: () => {
 				attempts++;
 				const message = resultMessage(2);

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Prompt cache efficiency test for pi-claude-bridge.
 # Runs a multi-turn conversation and verifies Anthropic prompt caching is working.
-# Expects: cacheRead grows across turns (system prompt + history are cache-hit),
-#   cacheWrite is small after the first turn (only new content is written).
+# Expects: the cached prefix remains large across turns, with cacheRead
+# dominating cacheWrite after warmup. Cache breakpoints can move tokens between
+# read and write, so those fields are not individually monotonic.
 #
 # Also checks session sync correctness: consecutive same-provider turns must
 # resume the session (Case 3), not rebuild it (Case 4). A rebuild would reset
@@ -25,7 +26,7 @@ rm -f "$TMPFILE" "$CLAUDE_BRIDGE_DEBUG_PATH"
 
 echo "Running 5-turn conversation (text + tool use)..."
 timeout 180 pi --no-session -ne -e "$DIR" \
-  --model "anthropic/claude-haiku-4-5" \
+  --model "anthropic-agent-sdk/claude-haiku-4-5" \
   --mode json \
   -p "The secret number is 42. Acknowledge briefly." \
      "Write the secret number to $TMPFILE. Just the number, nothing else." \
@@ -52,17 +53,17 @@ fi
 echo ""
 echo "Turn-by-turn cache metrics:"
 echo "---"
-printf "%-6s  %8s  %8s  %8s  %8s  %s\n" "Turn" "Input" "CacheRd" "CacheWr" "Output" "CacheHit%"
+printf "%-6s  %8s  %8s  %8s  %8s  %s\n" "Turn" "Input" "CacheRd" "CacheWr" "Output" "CacheCov%"
 
 # Thresholds
-MIN_CACHE_HIT_PCT=90
+MIN_CACHE_COVERAGE_PCT=90
 MIN_EXPECTED_TURNS=7    # 5 prompts + 2 tool sub-turns (write + read)
 MIN_CASE3_RESUMES=2
 EXPECTED_CASE1=1
 
 TURN=0
 FAIL=0
-PREV_CACHE_READ=0
+PREV_CACHED_PREFIX=0
 
 while IFS= read -r line; do
   TURN=$((TURN + 1))
@@ -72,30 +73,34 @@ while IFS= read -r line; do
   OUTPUT=$(echo "$line" | jq -r '.output')
   TOTAL_INPUT=$((INPUT + CACHE_READ + CACHE_WRITE))
 
+  CACHED_PREFIX=$((CACHE_READ + CACHE_WRITE))
   if [ "$TOTAL_INPUT" -gt 0 ]; then
-    HIT_PCT=$((CACHE_READ * 100 / TOTAL_INPUT))
+    CACHE_COVERAGE_PCT=$((CACHED_PREFIX * 100 / TOTAL_INPUT))
   else
-    HIT_PCT=0
+    CACHE_COVERAGE_PCT=0
   fi
 
-  printf "%-6s  %8s  %8s  %8s  %8s  %s%%\n" "$TURN" "$INPUT" "$CACHE_READ" "$CACHE_WRITE" "$OUTPUT" "$HIT_PCT"
+  printf "%-6s  %8s  %8s  %8s  %8s  %s%%\n" "$TURN" "$INPUT" "$CACHE_READ" "$CACHE_WRITE" "$OUTPUT" "$CACHE_COVERAGE_PCT"
 
   # Assertions
   if [ "$TURN" -ge 3 ]; then
-    # Turn 3+: cache read should be >= turn 2's (system prompt + history cached).
-    # It can stay flat when the prior turn's response was short.
-    if [ "$CACHE_READ" -lt "$PREV_CACHE_READ" ]; then
-      echo "  FAIL: Turn $TURN cacheRead ($CACHE_READ) decreased from turn $((TURN - 1)) ($PREV_CACHE_READ)"
+    # A new cache breakpoint may rewrite part of the prefix, but the total
+    # cached prefix should remain within 5% of the preceding sub-turn.
+    if [ $((CACHED_PREFIX * 100)) -lt $((PREV_CACHED_PREFIX * 95)) ]; then
+      echo "  FAIL: Turn $TURN cached prefix ($CACHED_PREFIX) dropped by more than 5% from turn $((TURN - 1)) ($PREV_CACHED_PREFIX)"
       FAIL=$((FAIL + 1))
     fi
-    # Cache hit rate should be high
-    if [ "$HIT_PCT" -lt $MIN_CACHE_HIT_PCT ]; then
-      echo "  FAIL: Turn $TURN cache hit rate ${HIT_PCT}% < ${MIN_CACHE_HIT_PCT}%"
+    if [ "$CACHE_COVERAGE_PCT" -lt $MIN_CACHE_COVERAGE_PCT ]; then
+      echo "  FAIL: Turn $TURN cache coverage ${CACHE_COVERAGE_PCT}% < ${MIN_CACHE_COVERAGE_PCT}%"
+      FAIL=$((FAIL + 1))
+    fi
+    if [ "$CACHE_READ" -le "$CACHE_WRITE" ]; then
+      echo "  FAIL: Turn $TURN cacheRead ($CACHE_READ) did not dominate cacheWrite ($CACHE_WRITE)"
       FAIL=$((FAIL + 1))
     fi
   fi
 
-  PREV_CACHE_READ=$CACHE_READ
+  PREV_CACHED_PREFIX=$CACHED_PREFIX
 done < <(jq -c 'select(.type == "turn_end") | .message.usage | {input, cacheRead, cacheWrite, output}' "$LOGFILE")
 
 echo "---"

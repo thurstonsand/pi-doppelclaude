@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { createRpcHarness, parseCompactionResult } from "./lib/rpc-harness.js";
 
 const TIMEOUT = 180_000;
-const BRIDGE_MODEL = "anthropic/claude-haiku-4-5";
+const BRIDGE_MODEL = "anthropic-agent-sdk/claude-haiku-4-5";
 
 const testAgentDir = mkdtempSync(join(tmpdir(), "compact-baseline-agent-"));
 writeFileSync(join(testAgentDir, "settings.json"), JSON.stringify({
