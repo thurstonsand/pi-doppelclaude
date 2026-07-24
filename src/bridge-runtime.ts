@@ -6,7 +6,7 @@
 
 import { createAssistantMessageEventStream, type AssistantMessageEventStream, type Context, type Model, type SimpleStreamOptions, type Tool } from "@earendil-works/pi-ai";
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
-import { createSdkMcpServer, query, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import { createSdkMcpServer, query, type Options, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { Base64ImageSource, ContentBlockParam, MessageParam } from "@anthropic-ai/sdk/resources";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
@@ -592,7 +592,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
 				const writerLabel = isReentrant ? "provider-child" : "provider";
 				const storeWriter = sessionStore.createWriter(writerLabel);
 				queryCtx.sessionStoreWriter = storeWriter;
-				const queryOptions: NonNullable<Parameters<typeof query>[0]["options"]> = {
+				const queryOptions: Options = {
 					cwd,
 					env: sdkChildEnv({ ENABLE_CLAUDEAI_MCP_SERVERS: "0", DISABLE_AUTO_COMPACT: "1" }),
 					tools: [], permissionMode: "bypassPermissions", allowDangerouslySkipPermissions: true,

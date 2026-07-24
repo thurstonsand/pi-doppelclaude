@@ -48,9 +48,13 @@ try {
 	if (!compactResult.firstKeptEntryId) {
 		throw new Error(`compact returned no firstKeptEntryId: ${JSON.stringify(compactResult)}`);
 	}
+	if (!compactResult.usage || compactResult.usage.totalTokens <= 0) {
+		throw new Error(`compact returned no persisted summary usage: ${JSON.stringify(compactResult)}`);
+	}
 	console.log(`  summary:        ${compactResult.summary.slice(0, 80).replace(/\n/g, " ")}...`);
 	console.log(`  firstKeptEntry: ${compactResult.firstKeptEntryId.slice(0, 8)}`);
 	console.log(`  tokensBefore:   ${compactResult.tokensBefore}`);
+	console.log(`  summary usage:  ${compactResult.usage.totalTokens} tokens`);
 
 	console.log("Post-compact prompt...");
 	const after = await promptAndWait('Reply with exactly "after-compact-ok".');

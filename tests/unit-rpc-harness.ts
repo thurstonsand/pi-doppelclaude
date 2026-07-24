@@ -43,8 +43,16 @@ describe("RPC harness boundaries", () => {
 			summary: "summary",
 			firstKeptEntryId: "entry-1",
 			tokensBefore: 42,
+			usage: undefined,
 			details: { readFiles: ["a.ts"] },
 		});
+		assert.equal(parseCompactionResult({
+			summary: "summary",
+			usage: {
+				input: 1, output: 2, cacheRead: 3, cacheWrite: 4, totalTokens: 10,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+		}).usage?.totalTokens, 10);
 		assert.throws(() => parseCompactionResult({ summary: "summary", tokensBefore: "42" }), /tokensBefore must be a finite number/);
 	});
 

@@ -1,5 +1,6 @@
 import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, SettingsManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { query } from "@anthropic-ai/claude-agent-sdk";
 import { PROVIDER_ID } from "./convert.js";
 import { applyLongContext, buildModels, type LongContextSettings } from "./models.js";
 import { loadConfig } from "./config.js";
@@ -27,7 +28,13 @@ export default function (pi: ExtensionAPI) {
 
 	// Compaction is isolated per activation and never touches the shared runtime
 	// (it spawns a one-shot Claude Code query), so borrower activations run it too.
-	const compaction = createCompaction({ longContextSettings });
+	const compaction = createCompaction({
+		longContextSettings,
+		queryFactory: query,
+		loadProviderSettings: (cwd) => loadConfig(cwd).provider ?? {},
+		loadRetryPolicy: (cwd, projectTrusted) =>
+			SettingsManager.create(cwd, getAgentDir(), { projectTrusted }).getRetrySettings(),
+	});
 
 	// One bridge runtime per process. The first activation builds and manages it;
 	// a nested/subagent activation borrows it so its provider calls
@@ -67,6 +74,8 @@ export default function (pi: ExtensionAPI) {
 				branchEntries: event.branchEntries,
 				customInstructions: event.customInstructions,
 				signal: event.signal,
+				cwd: ctx.cwd,
+				projectTrusted: ctx.isProjectTrusted(),
 			});
 			debug(`session_before_compact: takeover complete summaryLen=${result.summary.length}`);
 			return { compaction: result };

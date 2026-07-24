@@ -44,8 +44,8 @@
     "zod": "^4.4.3"
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": ">=0.80.10",
-    "@earendil-works/pi-coding-agent": ">=0.80.10"
+    "@earendil-works/pi-ai": ">=0.81.1",
+    "@earendil-works/pi-coding-agent": ">=0.81.1"
   },
   "devDependencies": {
     "@earendil-works/pi-ai": "^0.81.1",

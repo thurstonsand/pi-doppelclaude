@@ -8,7 +8,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { StringDecoder } from "node:string_decoder";
-import type { AssistantMessageEvent } from "@earendil-works/pi-ai";
+import type { AssistantMessageEvent, Usage } from "@earendil-works/pi-ai";
 
 // Isolate Pi's agent dir so a developer's real ~/.pi/agent/claude-bridge.json
 // (which may still hold a now-rejected askClaude block) cannot break tests.
@@ -35,6 +35,7 @@ export interface CompactionResult {
 	summary: string;
 	firstKeptEntryId?: string;
 	tokensBefore?: number;
+	usage?: Usage;
 	details?: CompactionDetails;
 }
 
@@ -89,10 +90,35 @@ export function parseRpcMessage(value: unknown): RpcMessage {
 	};
 }
 
-function optionalNumber(value: unknown, label: string): number | undefined {
-	if (value === undefined) return undefined;
+function finiteNumber(value: unknown, label: string): number {
 	if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`${label} must be a finite number`);
 	return value;
+}
+
+function optionalNumber(value: unknown, label: string): number | undefined {
+	if (value === undefined) return undefined;
+	return finiteNumber(value, label);
+}
+
+function parseUsage(value: unknown): Usage | undefined {
+	if (value === undefined) return undefined;
+	const usage = record(value, "compaction result.usage");
+	const cost = record(usage.cost, "compaction result.usage.cost");
+	return {
+		input: finiteNumber(usage.input, "compaction result.usage.input"),
+		output: finiteNumber(usage.output, "compaction result.usage.output"),
+		cacheRead: finiteNumber(usage.cacheRead, "compaction result.usage.cacheRead"),
+		cacheWrite: finiteNumber(usage.cacheWrite, "compaction result.usage.cacheWrite"),
+		reasoning: optionalNumber(usage.reasoning, "compaction result.usage.reasoning"),
+		totalTokens: finiteNumber(usage.totalTokens, "compaction result.usage.totalTokens"),
+		cost: {
+			input: finiteNumber(cost.input, "compaction result.usage.cost.input"),
+			output: finiteNumber(cost.output, "compaction result.usage.cost.output"),
+			cacheRead: finiteNumber(cost.cacheRead, "compaction result.usage.cost.cacheRead"),
+			cacheWrite: finiteNumber(cost.cacheWrite, "compaction result.usage.cost.cacheWrite"),
+			total: finiteNumber(cost.total, "compaction result.usage.cost.total"),
+		},
+	};
 }
 
 export function parseCompactionResult(value: unknown): CompactionResult {
@@ -110,6 +136,7 @@ export function parseCompactionResult(value: unknown): CompactionResult {
 		summary: result.summary,
 		firstKeptEntryId: optionalString(result.firstKeptEntryId, "compaction result.firstKeptEntryId"),
 		tokensBefore: optionalNumber(result.tokensBefore, "compaction result.tokensBefore"),
+		usage: parseUsage(result.usage),
 		details,
 	};
 }

@@ -84,6 +84,9 @@ try {
 	if (!compactResult?.summary?.trim()) {
 		throw new Error(`compact returned empty summary: ${JSON.stringify(compactResult)}`);
 	}
+	if (!compactResult.usage || compactResult.usage.totalTokens <= 0) {
+		throw new Error(`split-turn compact returned no combined summary usage: ${JSON.stringify(compactResult)}`);
+	}
 
 	// Self-verification: the split-turn marker only appears when isSplitTurn
 	// fired and Promise.all ran both summaries. Guards against a false green

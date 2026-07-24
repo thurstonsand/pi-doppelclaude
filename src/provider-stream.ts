@@ -1,8 +1,9 @@
-import { calculateCost, type AssistantMessage, type AssistantMessageEventStream, type Model } from "@earendil-works/pi-ai";
-import { type SDKMessage, query } from "@anthropic-ai/claude-agent-sdk";
+import { type AssistantMessage, type AssistantMessageEventStream, type Model } from "@earendil-works/pi-ai";
+import { type Query, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { QueryContext } from "./query-state.js";
 import { mapSdkToolArgsToPi, mapSdkToolNameToPi } from "./convert.js";
 import { logServedContextWindow, resultErrorText } from "./sdk-result.js";
+import { applySdkUsage, debugSdkUsage, type SdkUsage } from "./sdk-usage.js";
 
 interface ProviderStreamDependencies {
 	debug(...args: unknown[]): void;
@@ -12,22 +13,9 @@ interface ProviderStreamDependencies {
 export function createProviderStreamRuntime(dependencies: ProviderStreamDependencies) {
 	const { debug, notify } = dependencies;
 
-	// --- Usage helpers ---
-
-	function updateUsage(output: AssistantMessage, usage: Record<string, number | undefined>, model: Model<any>): void {
-		if (usage.input_tokens != null) output.usage.input = usage.input_tokens;
-		if (usage.output_tokens != null) output.usage.output = usage.output_tokens;
-		if (usage.cache_read_input_tokens != null) output.usage.cacheRead = usage.cache_read_input_tokens;
-		if (usage.cache_creation_input_tokens != null) output.usage.cacheWrite = usage.cache_creation_input_tokens;
-		// Claude Code may report reasoning/thinking tokens separately, while pi's Usage type does not model that field.
-		const reasoning = usage.reasoning_tokens ?? usage.thinking_tokens;
-		if (reasoning != null) (output.usage as typeof output.usage & { reasoning?: number }).reasoning = reasoning;
-		output.usage.totalTokens = output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
-		calculateCost(model, output.usage);
-		const promptTokens = output.usage.input + output.usage.cacheRead + output.usage.cacheWrite;
-		const cachePct = promptTokens > 0 ? Math.round(output.usage.cacheRead / promptTokens * 100) : 0;
-		const reasoningText = reasoning != null ? ` reasoning=${reasoning}` : "";
-		debug(`usage: in=${output.usage.input} out=${output.usage.output} cacheRead=${output.usage.cacheRead} cacheWrite=${output.usage.cacheWrite} total=${output.usage.totalTokens}${reasoningText} cachePct=${cachePct}% model=${model.id}`);
+	function updateUsage(output: AssistantMessage, usage: SdkUsage, model: Model<any>): void {
+		applySdkUsage(output, usage, model);
+		debugSdkUsage(debug, output, model);
 	}
 
 	// --- Provider helpers: misc ---
@@ -291,7 +279,7 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
 	}
 
 	async function consumeQuery(
-		sdkQuery: ReturnType<typeof query>,
+		sdkQuery: Query,
 		customToolNameToPi: Map<string, string>,
 		model: Model<any>,
 		queryCtx: QueryContext,

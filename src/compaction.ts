@@ -5,18 +5,27 @@
 // live provider stream — see issue #18) and carries forward file operations from
 // the previous compaction so <read-files>/<modified-files> stay accurate.
 
-import { createAssistantMessageEventStream, type AssistantMessage, type AssistantMessageEventStream, type Context, type Model, type SimpleStreamOptions } from "@earendil-works/pi-ai";
-import { compact, type CompactionEntry } from "@earendil-works/pi-coding-agent";
-import { query } from "@anthropic-ai/claude-agent-sdk";
+import { createAssistantMessageEventStream, type AssistantMessage, type AssistantMessageEventStream, type Context, type Model, type RetryPolicy, type SimpleStreamOptions } from "@earendil-works/pi-ai";
+import { compact, type CompactionEntry, type CompactionResult, type SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent";
+import { type Options, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { messageContentToText } from "./convert.js";
-import { loadConfig } from "./config.js";
+import type { Config } from "./config.js";
 import { claudeCodeModelId, type LongContextSettings } from "./models.js";
 import { buildClaudeSystemPrompt, settingSourcesFor } from "./system-prompt.js";
 import { debug, errorMessage, makeCliDebugOptions, sdkChildEnv } from "./debug.js";
 import { logServedContextWindow, resultErrorText } from "./sdk-result.js";
+import { applySdkUsage, debugSdkUsage, type SdkUsage } from "./sdk-usage.js";
+
+interface IsolatedQuery extends AsyncIterable<SDKMessage> {
+	interrupt(): Promise<unknown>;
+	close(): void;
+}
 
 interface CompactionDependencies {
 	longContextSettings: LongContextSettings;
+	queryFactory(request: { prompt: string; options?: Options }): IsolatedQuery;
+	loadProviderSettings(cwd: string): NonNullable<Config["provider"]>;
+	loadRetryPolicy(cwd: string, projectTrusted: boolean): RetryPolicy;
 }
 
 function newAssistantOutput(model: Model<any>, text: string, stopReason: AssistantMessage["stopReason"], errorMessage?: string): AssistantMessage {
@@ -59,23 +68,26 @@ function reinjectPriorCompactionFileOps(branchEntries: Array<{ type: string; det
 }
 
 interface CompactionRequest {
-	preparation: Parameters<typeof compact>[0];
+	preparation: SessionBeforeCompactEvent["preparation"];
 	model: Model<any>;
 	branchEntries: Array<{ type: string; details?: unknown }>;
 	customInstructions: string | undefined;
 	signal: AbortSignal | undefined;
+	cwd: string;
+	projectTrusted: boolean;
 }
 
 export function createCompaction(dependencies: CompactionDependencies) {
-	const { longContextSettings } = dependencies;
+	const { longContextSettings, queryFactory, loadProviderSettings, loadRetryPolicy } = dependencies;
 
 	async function runIsolatedSummary(
 		model: Model<any>,
 		context: Context,
 		options: SimpleStreamOptions | undefined,
 		stream: AssistantMessageEventStream,
+		cwd: string,
 	): Promise<void> {
-		let sdkQuery: ReturnType<typeof query> | undefined;
+		let sdkQuery: IsolatedQuery | undefined;
 		let wasAborted = false;
 		const onAbort = () => {
 			wasAborted = true;
@@ -85,15 +97,14 @@ export function createCompaction(dependencies: CompactionDependencies) {
 
 		try {
 			const promptText = extractIsolatedSummaryPrompt(context.messages);
-			const cwd = (options as { cwd?: string } | undefined)?.cwd ?? process.cwd();
-			const compactProviderSettings = loadConfig(cwd).provider ?? {};
+			const compactProviderSettings = loadProviderSettings(cwd);
 			const compactSystemPromptMode = compactProviderSettings.systemPromptMode ?? "append";
 			const compactSettingSources = settingSourcesFor(compactSystemPromptMode);
 			const claudeExecutable = compactProviderSettings.pathToClaudeCodeExecutable;
 			const cliModel = claudeCodeModelId(model, longContextSettings);
 			debug(`compact summary: spawn model=${cliModel} registeredModel=${model.id} promptLen=${promptText.length}`);
 
-			sdkQuery = query({
+			sdkQuery = queryFactory({
 				prompt: promptText,
 				options: {
 					cwd,
@@ -123,6 +134,7 @@ export function createCompaction(dependencies: CompactionDependencies) {
 			let assistantText = "";
 			let finalText = "";
 			let errorText: string | undefined;
+			let terminalUsage: SdkUsage | undefined;
 			let firstEventLogged = false;
 
 			for await (const message of sdkQuery) {
@@ -140,6 +152,7 @@ export function createCompaction(dependencies: CompactionDependencies) {
 					logServedContextWindow(debug, "compact summary", message, model);
 					if (message.subtype === "success") {
 						finalText = message.result || assistantText;
+						terminalUsage = message.usage;
 					} else {
 						errorText = resultErrorText(message);
 					}
@@ -163,8 +176,13 @@ export function createCompaction(dependencies: CompactionDependencies) {
 				return;
 			}
 
+			const output = newAssistantOutput(model, text, "stop");
+			if (terminalUsage) {
+				applySdkUsage(output, terminalUsage, model);
+				debugSdkUsage(debug, output, model);
+			}
 			debug(`compact summary: done textLen=${text.length}`);
-			stream.push({ type: "done", reason: "stop", message: newAssistantOutput(model, text, "stop") });
+			stream.push({ type: "done", reason: "stop", message: output });
 			stream.end();
 		} catch (err) {
 			const msg = errorMessage(err);
@@ -177,14 +195,15 @@ export function createCompaction(dependencies: CompactionDependencies) {
 		}
 	}
 
-	function isolatedStreamFn(model: Model<any>, context: Context, options?: SimpleStreamOptions): AssistantMessageEventStream {
-		const stream = createAssistantMessageEventStream();
-		void runIsolatedSummary(model, context, options, stream);
-		return stream;
-	}
-
-	async function run(request: CompactionRequest): ReturnType<typeof compact> {
+	async function run(request: CompactionRequest): Promise<CompactionResult> {
 		reinjectPriorCompactionFileOps(request.branchEntries, request.preparation as { fileOps: { read: Set<string>; edited: Set<string> } });
+		const retry = loadRetryPolicy(request.cwd, request.projectTrusted);
+		debug(`compact takeover: retry enabled=${retry.enabled} maxRetries=${retry.maxRetries} baseDelayMs=${retry.baseDelayMs}`);
+		const isolatedStreamFn = (model: Model<any>, context: Context, options?: SimpleStreamOptions): AssistantMessageEventStream => {
+			const stream = createAssistantMessageEventStream();
+			void runIsolatedSummary(model, context, options, stream, request.cwd);
+			return stream;
+		};
 		return compact(
 			request.preparation,
 			request.model,
@@ -195,6 +214,7 @@ export function createCompaction(dependencies: CompactionDependencies) {
 			undefined,
 			isolatedStreamFn,
 			undefined,
+			retry,
 		);
 	}
 
