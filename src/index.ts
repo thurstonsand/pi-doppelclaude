@@ -6,10 +6,21 @@ import { acquireBridgeOwner } from "./bridge-owner.js";
 import { createCompaction } from "./compaction.js";
 import { configureDebug, debug, errorMessage, moduleInstanceId } from "./debug.js";
 import { PROVIDER_ID } from "./models.js";
-import { createAnthropicAgentSdkProvider } from "./provider.js";
+import { createAnthropicAgentSdkProvider, type AnthropicAgentSdkProvider } from "./provider.js";
 import { loadBridgeSettings } from "./settings.js";
 
-export default function (pi: ExtensionAPI) {
+interface ActivationDependencies {
+	initializeProvider: (provider: AnthropicAgentSdkProvider) => Promise<void>;
+}
+
+const defaultActivationDependencies: ActivationDependencies = {
+	initializeProvider: (provider) => provider.initializeModels(),
+};
+
+export default function activate(
+	pi: ExtensionAPI,
+	dependencies: ActivationDependencies = defaultActivationDependencies,
+): void {
 	process.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1";
 
 	const settings = loadBridgeSettings(process.cwd());
@@ -35,6 +46,11 @@ export default function (pi: ExtensionAPI) {
 	const { runtime, provider } = owner;
 	debug(`owner: ${ownsLifecycle ? "created" : "borrowing"} shared Provider/runtime (module=${moduleInstanceId})`);
 
+	if (ownsLifecycle) {
+		void dependencies.initializeProvider(provider).catch((error: unknown) => {
+			debug("provider: initial model discovery failed; using available catalog state", error);
+		});
+	}
 	pi.registerProvider(provider);
 
 	pi.on("session_before_compact", async (event, ctx) => {

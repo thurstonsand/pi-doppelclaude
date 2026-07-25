@@ -11,6 +11,7 @@ import {
 	type SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import type { AccountSnapshot } from "../src/account-probe.js";
 import { createAnthropicAgentSdkProvider } from "../src/provider.js";
 import { PROVIDER_API, PROVIDER_BASE_URL, PROVIDER_ID, PROVIDER_NAME } from "../src/models.js";
 
@@ -47,7 +48,10 @@ function successfulStream(model: Model<any>) {
 	return stream;
 }
 
-function providerWith(spy?: (model: Model<any>, options: SimpleStreamOptions | undefined) => void, accountProbe = async () => true) {
+const availableAccount: AccountSnapshot = { available: true, supportedModels: [] };
+const unavailableAccount: AccountSnapshot = { available: false, supportedModels: [] };
+
+function providerWith(spy?: (model: Model<any>, options: SimpleStreamOptions | undefined) => void, accountProbe = async () => availableAccount) {
 	return createAnthropicAgentSdkProvider({
 		accountProbe,
 		stream(model, _context, options) {
@@ -84,48 +88,65 @@ describe("native Provider shape", () => {
 });
 
 describe("ambient Claude Code auth", () => {
-	it("checks freshly and lets resolve reuse the last successful snapshot", async () => {
+	it("starts one probe without making check await it, then resolve shares it", async () => {
+		let resolveProbe: (snapshot: AccountSnapshot) => void = () => {};
 		let probes = 0;
-		const provider = providerWith(undefined, async () => { probes++; return true; });
-		assert.deepEqual(await provider.auth.apiKey!.check!(authInput), { type: "api_key", source: "Claude Code" });
-		assert.deepEqual(await provider.auth.apiKey!.resolve(authInput), { auth: {}, source: "Claude Code" });
-		assert.equal(probes, 1);
-		await provider.auth.apiKey!.check!(authInput);
-		assert.equal(probes, 2);
-	});
-
-	it("returns unavailable when logged out and clears a prior snapshot", async () => {
-		const states = [true, false, false];
-		const provider = providerWith(undefined, async () => states.shift()!);
-		assert.ok(await provider.auth.apiKey!.check!(authInput));
-		assert.equal(await provider.auth.apiKey!.check!(authInput), undefined);
-		assert.equal(await provider.auth.apiKey!.resolve(authInput), undefined);
-		assert.equal(states.length, 0);
-	});
-
-	it("propagates actionable probe failures", async () => {
-		const provider = providerWith(undefined, async () => {
-			throw new Error("Run `claude auth login`");
+		const provider = providerWith(undefined, () => {
+			probes++;
+			return new Promise<AccountSnapshot>((resolve) => { resolveProbe = resolve; });
 		});
-		await assert.rejects(provider.auth.apiKey!.check!(authInput), /claude auth login/);
+
+		assert.deepEqual(await provider.auth.apiKey!.check!(authInput), { type: "api_key", source: "Claude Code" });
+		assert.equal(probes, 1);
+		const resolution = provider.auth.apiKey!.resolve(authInput);
+		let settled = false;
+		void resolution.finally(() => { settled = true; });
+		await Promise.resolve();
+		assert.equal(settled, false);
+		assert.equal(probes, 1);
+
+		resolveProbe(availableAccount);
+		assert.deepEqual(await resolution, { auth: {}, source: "Claude Code" });
+	});
+
+	it("returns unavailable only after a completed logged-out probe while retrying in the background", async () => {
+		const resolvers: Array<(snapshot: AccountSnapshot) => void> = [];
+		const provider = providerWith(undefined, () => new Promise((resolve) => { resolvers.push(resolve); }));
+		assert.ok(await provider.auth.apiKey!.check!(authInput));
+		resolvers.shift()!(unavailableAccount);
+		assert.equal(await provider.auth.apiKey!.resolve(authInput), undefined);
+
+		assert.equal(await provider.auth.apiKey!.check!(authInput), undefined);
+		assert.equal(resolvers.length, 1);
+		resolvers.shift()!(availableAccount);
+		assert.deepEqual(await provider.auth.apiKey!.resolve(authInput), { auth: {}, source: "Claude Code" });
+	});
+
+	it("retains probe failures for resolve without creating an unhandled rejection", async () => {
+		let rejectProbe: (error: Error) => void = () => {};
+		const provider = providerWith(undefined, () => new Promise((_resolve, reject) => { rejectProbe = reject; }));
+		assert.ok(await provider.auth.apiKey!.check!(authInput));
+		rejectProbe(new Error("Run `claude auth login`"));
+		await new Promise((resolve) => setImmediate(resolve));
 		await assert.rejects(provider.auth.apiKey!.resolve(authInput), /claude auth login/);
 	});
 
 	it("shares one in-flight account probe across concurrent checks", async () => {
-		let resolveProbe: (available: boolean) => void = () => {};
+		let resolveProbe: (snapshot: AccountSnapshot) => void = () => {};
 		let probes = 0;
 		const provider = providerWith(undefined, () => {
 			probes++;
-			return new Promise<boolean>((resolve) => { resolveProbe = resolve; });
+			return new Promise<AccountSnapshot>((resolve) => { resolveProbe = resolve; });
 		});
-		const first = provider.auth.apiKey!.check!(authInput);
-		const second = provider.auth.apiKey!.check!(authInput);
-		assert.equal(probes, 1);
-		resolveProbe(true);
-		assert.deepEqual(await Promise.all([first, second]), [
+		assert.deepEqual(await Promise.all([
+			provider.auth.apiKey!.check!(authInput),
+			provider.auth.apiKey!.check!(authInput),
+		]), [
 			{ type: "api_key", source: "Claude Code" },
 			{ type: "api_key", source: "Claude Code" },
 		]);
+		assert.equal(probes, 1);
+		resolveProbe(availableAccount);
 	});
 });
 

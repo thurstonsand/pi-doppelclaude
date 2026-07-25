@@ -7,10 +7,9 @@ import {
 	type SimpleStreamOptions,
 	type ThinkingLevel,
 } from "@earendil-works/pi-ai";
-import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
-import type { AccountProbe } from "./account-probe.js";
+import type { AccountProbe, AccountSnapshot } from "./account-probe.js";
+import { createBridgeModelCatalog, type BridgeModelCatalog } from "./model-catalog.js";
 import {
-	buildModels,
 	type BridgeModel,
 	isSupportedModel,
 	PROVIDER_API,
@@ -23,6 +22,11 @@ import {
 interface ProviderDependencies {
 	stream(model: BridgeModel, context: Context, options?: SimpleStreamOptions): AssistantMessageEventStream;
 	accountProbe: AccountProbe;
+	modelCatalog?: BridgeModelCatalog;
+}
+
+export interface AnthropicAgentSdkProvider extends Provider<typeof PROVIDER_API> {
+	initializeModels(): Promise<void>;
 }
 
 const THINKING_LEVELS = new Set<string>(["minimal", "low", "medium", "high", "xhigh", "max"]);
@@ -31,31 +35,37 @@ function compatibleReasoning(reasoning: unknown): ThinkingLevel | undefined {
 	return typeof reasoning === "string" && THINKING_LEVELS.has(reasoning) ? reasoning as ThinkingLevel : undefined;
 }
 
-export function createAnthropicAgentSdkProvider(dependencies: ProviderDependencies): Provider<typeof PROVIDER_API> {
-	const models = buildModels(getBuiltinModels("anthropic"));
-	let successfulAccountSnapshot = false;
-	let inFlightProbe: Promise<boolean> | undefined;
+export function createAnthropicAgentSdkProvider(dependencies: ProviderDependencies): AnthropicAgentSdkProvider {
+	const catalog = dependencies.modelCatalog ?? createBridgeModelCatalog();
+	let lastSnapshot: AccountSnapshot | undefined;
+	let lastProbe: Promise<AccountSnapshot> | undefined;
+	let inFlightProbe: Promise<AccountSnapshot> | undefined;
 
-	const probe = (): Promise<boolean> => {
-		if (inFlightProbe) return inFlightProbe;
-		inFlightProbe = dependencies.accountProbe().finally(() => {
-			inFlightProbe = undefined;
+	const launchProbe = (): Promise<AccountSnapshot> => {
+		const tracked = dependencies.accountProbe().then((snapshot) => {
+			lastSnapshot = snapshot;
+			return snapshot;
+		}).finally(() => {
+			if (inFlightProbe === tracked) inFlightProbe = undefined;
 		});
-		return inFlightProbe;
+		lastProbe = tracked;
+		inFlightProbe = tracked;
+		void tracked.catch(() => {});
+		return tracked;
 	};
 
+	const startProbe = (fresh: boolean): Promise<AccountSnapshot> =>
+		inFlightProbe ?? (!fresh ? lastProbe : undefined) ?? launchProbe();
+
 	const check = async () => {
-		const available = await probe();
-		successfulAccountSnapshot = available;
-		return available ? { type: "api_key" as const, source: "Claude Code" } : undefined;
+		const unavailable = lastSnapshot?.available === false;
+		void startProbe(true);
+		return unavailable ? undefined : { type: "api_key" as const, source: "Claude Code" };
 	};
 
 	const resolve = async () => {
-		if (!successfulAccountSnapshot) {
-			const available = await probe();
-			successfulAccountSnapshot = available;
-			if (!available) return undefined;
-		}
+		const snapshot = await startProbe(false);
+		if (!snapshot.available) return undefined;
 		return { auth: {}, source: "Claude Code" };
 	};
 
@@ -73,6 +83,10 @@ export function createAnthropicAgentSdkProvider(dependencies: ProviderDependenci
 	};
 
 	return {
+		async initializeModels() {
+			const snapshot = await startProbe(false);
+			await catalog.initialize(snapshot.supportedModels);
+		},
 		id: PROVIDER_ID,
 		name: PROVIDER_NAME,
 		baseUrl: PROVIDER_BASE_URL,
@@ -83,7 +97,11 @@ export function createAnthropicAgentSdkProvider(dependencies: ProviderDependenci
 				resolve,
 			},
 		},
-		getModels: () => models,
+		getModels: catalog.getModels,
+		async refreshModels(context) {
+			const snapshot = context.allowNetwork ? await startProbe(true) : undefined;
+			await catalog.refresh(context, snapshot?.supportedModels ?? []);
+		},
 		filterModels: (candidates) => candidates.filter(isSupportedModel),
 		stream(model, context, options) {
 			const { reasoning, ...baseOptions } = (options ?? {}) as SimpleStreamOptions & Record<string, unknown>;

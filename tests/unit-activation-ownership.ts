@@ -25,6 +25,7 @@ const OWNER_KEY = Symbol.for("claude-bridge:owner");
 // record so reads/clears are typed instead of indexing typeof globalThis.
 const ownerRegistry = globalThis as Record<symbol, unknown>;
 const { default: activate } = await import("../src/index.js");
+const activationDependencies = { initializeProvider: async () => {} };
 
 const MUTATING_EVENTS = ["session_start", "session_shutdown", "model_select", "session_compact", "session_tree"];
 
@@ -48,11 +49,26 @@ after(() => {
 });
 
 describe("extension activation ownership", () => {
-	it("shares one runtime/stream across activations and gates lifecycle to its owner", () => {
+	it("starts owner model initialization without blocking provider registration", () => {
+		let starts = 0;
+		let finishInitialization: () => void = () => {};
 		const root = fakePi();
-		activate(root.pi);
+		activate(root.pi, {
+			initializeProvider() {
+				starts++;
+				return new Promise<void>((resolve) => { finishInitialization = resolve; });
+			},
+		});
+		finishInitialization();
+		assert.equal(starts, 1);
+		assert.equal(root.providers.length, 1);
+	});
+
+	it("shares one runtime/stream across activations and gates lifecycle to its owner", async () => {
+		const root = fakePi();
+		activate(root.pi, activationDependencies);
 		const borrower = fakePi();
-		activate(borrower.pi);
+		activate(borrower.pi, activationDependencies);
 
 		// Both register the complete native Provider object by reference.
 		assert.equal(root.providers.length, 1);
@@ -69,12 +85,12 @@ describe("extension activation ownership", () => {
 
 	it("owner shutdown releases the runtime so the next activation owns a fresh generation", async () => {
 		const first = fakePi();
-		activate(first.pi);
+		activate(first.pi, activationDependencies);
 		const firstProvider = first.providers[0];
 
 		// A borrower cannot release the owner (it has no shutdown handler at all).
 		const borrower = fakePi();
-		activate(borrower.pi);
+		activate(borrower.pi, activationDependencies);
 		assert.equal(borrower.handlers.has("session_shutdown"), false);
 
 		// Root shutdown clears the shared runtime and releases the owner.
@@ -83,7 +99,7 @@ describe("extension activation ownership", () => {
 
 		// Next activation builds a fresh runtime with a distinct stream closure.
 		const next = fakePi();
-		activate(next.pi);
+		activate(next.pi, activationDependencies);
 		assert.notStrictEqual(next.providers[0], firstProvider);
 		assert.notStrictEqual(next.providers[0].streamSimple, firstProvider.streamSimple);
 	});

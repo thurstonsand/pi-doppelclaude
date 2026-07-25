@@ -1,9 +1,29 @@
-import { query, type AccountInfo, type Options } from "@anthropic-ai/claude-agent-sdk";
+import { query, type AccountInfo, type ModelInfo, type Options } from "@anthropic-ai/claude-agent-sdk";
+import { Type } from "typebox";
 import type { ProviderSettings } from "./settings.js";
 import { errorMessage } from "./debug.js";
+import { parseValue } from "./validation.js";
+
+const ACCOUNT_INFO_SCHEMA = Type.Object({
+	email: Type.Optional(Type.String()),
+	organization: Type.Optional(Type.String()),
+	subscriptionType: Type.Optional(Type.String()),
+	tokenSource: Type.Optional(Type.String()),
+	apiKeySource: Type.Optional(Type.String()),
+	apiProvider: Type.Optional(Type.String()),
+});
+
+const MODEL_INFO_SCHEMA = Type.Object({
+	value: Type.String(),
+	resolvedModel: Type.Optional(Type.String()),
+	displayName: Type.String(),
+	description: Type.String(),
+});
+const SUPPORTED_MODELS_SCHEMA = Type.Array(MODEL_INFO_SCHEMA);
 
 interface AccountQuery {
 	accountInfo(): Promise<AccountInfo>;
+	supportedModels(): Promise<ModelInfo[]>;
 	close(): void;
 }
 
@@ -12,7 +32,12 @@ interface AccountProbeDependencies {
 	queryFactory(request: { prompt: AsyncIterable<never>; options?: Options }): AccountQuery;
 }
 
-export type AccountProbe = () => Promise<boolean>;
+export interface AccountSnapshot {
+	available: boolean;
+	supportedModels: readonly ModelInfo[];
+}
+
+export type AccountProbe = () => Promise<AccountSnapshot>;
 
 async function* noPrompt(): AsyncGenerator<never> {}
 
@@ -21,16 +46,7 @@ function nonEmpty(value: unknown): value is string {
 }
 
 function parseAccountInfo(value: unknown): boolean {
-	if (typeof value !== "object" || value === null || Array.isArray(value)) {
-		throw new Error("Claude Code returned malformed account information");
-	}
-	const account = value as AccountInfo;
-	for (const field of ["email", "organization", "subscriptionType", "tokenSource", "apiKeySource", "apiProvider"] as const) {
-		if (account[field] !== undefined && typeof account[field] !== "string") {
-			throw new Error(`Claude Code returned malformed account information (${field})`);
-		}
-	}
-
+	const account = parseValue(ACCOUNT_INFO_SCHEMA, value, "Claude Code returned malformed account information");
 	if (account.apiProvider !== undefined && account.apiProvider !== "firstParty") {
 		throw new Error(`Claude Code is using unsupported API provider "${account.apiProvider}"`);
 	}
@@ -46,15 +62,22 @@ function parseAccountInfo(value: unknown): boolean {
 	return true;
 }
 
+function parseSupportedModels(value: unknown): ModelInfo[] {
+	return parseValue(SUPPORTED_MODELS_SCHEMA, value, "Claude Code returned malformed supported-model information");
+}
+
 export function createAccountProbe(dependencies: AccountProbeDependencies): AccountProbe {
 	const { providerSettings, queryFactory } = dependencies;
 	return async () => {
 		let controlQuery: AccountQuery | undefined;
+		const abortController = new AbortController();
+		let timeout: ReturnType<typeof setTimeout> | undefined;
 		try {
 			const claudeExecutable = providerSettings.pathToClaudeCodeExecutable;
 			controlQuery = queryFactory({
 				prompt: noPrompt(),
 				options: {
+					abortController,
 					tools: [],
 					settingSources: [],
 					skills: [],
@@ -62,10 +85,24 @@ export function createAccountProbe(dependencies: AccountProbeDependencies): Acco
 					...(claudeExecutable ? { pathToClaudeCodeExecutable: claudeExecutable } : {}),
 				},
 			});
-			return parseAccountInfo(await controlQuery.accountInfo());
+			const deadline = new Promise<never>((_resolve, reject) => {
+				timeout = setTimeout(() => {
+					abortController.abort();
+					reject(new Error("Claude Code account probe timed out after 15 seconds"));
+				}, 15_000);
+			});
+			const [account, supportedModels] = await Promise.race([
+				Promise.all([controlQuery.accountInfo(), controlQuery.supportedModels()]),
+				deadline,
+			]);
+			return {
+				available: parseAccountInfo(account),
+				supportedModels: parseSupportedModels(supportedModels),
+			};
 		} catch (error) {
 			throw new Error(`Claude Code authentication check failed: ${errorMessage(error)}. Run \`claude auth login\` and try again.`, { cause: error });
 		} finally {
+			if (timeout) clearTimeout(timeout);
 			controlQuery?.close();
 		}
 	};

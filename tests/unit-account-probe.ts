@@ -1,7 +1,14 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import type { AccountInfo, Options } from "@anthropic-ai/claude-agent-sdk";
+import type { AccountInfo, ModelInfo, Options } from "@anthropic-ai/claude-agent-sdk";
 import { createAccountProbe } from "../src/account-probe.js";
+
+const supportedModels: ModelInfo[] = [{
+	value: "opus[1m]",
+	resolvedModel: "claude-opus-5[1m]",
+	displayName: "Opus",
+	description: "Opus 5",
+}];
 
 function probeFor(account: unknown, onClose = () => {}, captureOptions = (_options: Options | undefined) => {}) {
 	return createAccountProbe({
@@ -10,6 +17,7 @@ function probeFor(account: unknown, onClose = () => {}, captureOptions = (_optio
 			captureOptions(request.options);
 			return {
 				accountInfo: async () => account as AccountInfo,
+				supportedModels: async () => supportedModels,
 				close: onClose,
 			};
 		},
@@ -25,8 +33,9 @@ describe("Claude Code account probe", () => {
 			() => { closes++; },
 			(value) => { options = value; },
 		);
-		assert.equal(await probe(), true);
+		assert.deepEqual(await probe(), { available: true, supportedModels });
 		assert.equal(closes, 1);
+		assert.ok(options?.abortController instanceof AbortController);
 		assert.deepEqual(options?.tools, []);
 		assert.deepEqual(options?.settingSources, []);
 		assert.deepEqual(options?.skills, []);
@@ -35,9 +44,9 @@ describe("Claude Code account probe", () => {
 	});
 
 	it("treats the explicit no-token account state as logged out", async () => {
-		assert.equal(await probeFor({ apiProvider: "firstParty" })(), false);
-		assert.equal(await probeFor({})(), false);
-		assert.equal(await probeFor({ apiProvider: "firstParty", tokenSource: "none", apiKeySource: "none" })(), false);
+		assert.equal((await probeFor({ apiProvider: "firstParty" })()).available, false);
+		assert.equal((await probeFor({})()).available, false);
+		assert.equal((await probeFor({ apiProvider: "firstParty", tokenSource: "none", apiKeySource: "none" })()).available, false);
 	});
 
 	it("rejects non-first-party backends with login guidance", async () => {
@@ -70,6 +79,7 @@ describe("Claude Code account probe", () => {
 			queryFactory() {
 				return {
 					accountInfo: async () => { throw new Error("control channel failed"); },
+					supportedModels: async () => supportedModels,
 					close: () => { closes++; },
 				};
 			},

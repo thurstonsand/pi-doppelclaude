@@ -14,14 +14,14 @@ import type { Provider } from "@earendil-works/pi-ai";
 
 const OWNER_KEY = Symbol.for("claude-bridge:owner");
 
-export interface BridgeOwner<TRuntime extends object> {
-	provider: Provider;
+export interface BridgeOwner<TRuntime extends object, TProvider extends Provider> {
+	provider: TProvider;
 	runtime: TRuntime;
 }
 
-export interface OwnerAcquisition<TRuntime extends object> {
+export interface OwnerAcquisition<TRuntime extends object, TProvider extends Provider> {
 	/** The shared Provider/runtime pair: built once per process, reused by borrowers. */
-	owner: BridgeOwner<TRuntime>;
+	owner: BridgeOwner<TRuntime, TProvider>;
 	/** True only for the activation that created and manages the owner. */
 	ownsLifecycle: boolean;
 	/**
@@ -32,13 +32,13 @@ export interface OwnerAcquisition<TRuntime extends object> {
 	release(): void;
 }
 
-export function acquireBridgeOwner<TRuntime extends object>(
-	build: () => BridgeOwner<TRuntime>,
-): OwnerAcquisition<TRuntime> {
+export function acquireBridgeOwner<TRuntime extends object, TProvider extends Provider>(
+	build: () => BridgeOwner<TRuntime, TProvider>,
+): OwnerAcquisition<TRuntime, TProvider> {
 	const registry = globalThis as Record<symbol, unknown>;
 	const existing = registry[OWNER_KEY];
 	if (existing !== undefined) {
-		return { owner: existing as BridgeOwner<TRuntime>, ownsLifecycle: false, release() {} };
+		return { owner: existing as BridgeOwner<TRuntime, TProvider>, ownsLifecycle: false, release() {} };
 	}
 	const owner = build();
 	registry[OWNER_KEY] = owner;
