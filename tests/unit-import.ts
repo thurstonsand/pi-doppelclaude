@@ -5,7 +5,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import type { Message as PiMessage } from "@earendil-works/pi-ai";
 import type { ContentBlock, Message as SessionMessage } from "cc-session-io";
-import { convertPiMessages, mapSdkToolArgsToPi, mapSdkToolNameToPi } from "../src/convert.js";
+import { convertPiMessages, mapPiToolNameToSdk, mapSdkToolArgsToPi, mapSdkToolNameToPi } from "../src/convert.js";
 
 // Narrow a converted message's content to its block array. The converter returns
 // cc-session-io's `string | ContentBlock[]` union; the block-indexing tests only
@@ -33,16 +33,46 @@ function convert(messages: unknown[], customToolNameToSdk?: Map<string, string>)
 // --- Tests ---
 
 describe("SDK tool conversion", () => {
-	it("maps built-in and MCP tool names to pi", () => {
-		assert.equal(mapSdkToolNameToPi("Read"), "read");
-		assert.equal(mapSdkToolNameToPi("mcp__custom-tools__SlowTool"), "SlowTool");
+	const registered = new Map([
+		["mcp__custom-tools__SlowTool", "SlowTool"],
+		["mcp__custom-tools__slowtool", "SlowTool"],
+		["mcp__custom-tools__bash", "bash"],
+	]);
+
+	it("maps registered MCP tool names to pi", () => {
+		assert.equal(mapSdkToolNameToPi("mcp__custom-tools__SlowTool", registered), "SlowTool");
+		assert.equal(mapSdkToolNameToPi("mcp__custom-tools__bash", registered), "bash");
 	});
 
-	it("renames SDK arguments and applies the pi bash timeout", () => {
+	it("mangles every unregistered name, including CC built-ins and near misses", () => {
+		assert.equal(mapSdkToolNameToPi("bash", registered), "cc_no_such_tool__bash");
+		assert.equal(mapSdkToolNameToPi("Read", registered), "cc_no_such_tool__Read");
+		assert.equal(mapSdkToolNameToPi("mcp__custom-tools__bassh", registered), "cc_no_such_tool__mcp__custom-tools__bassh");
+		assert.equal(mapSdkToolNameToPi("anything"), "cc_no_such_tool__anything");
+	});
+
+	it("materializes a mangled name back to the literal CC name", () => {
+		assert.equal(mapPiToolNameToSdk("cc_no_such_tool__bash"), "bash");
+		assert.equal(mapPiToolNameToSdk("cc_no_such_tool__mcp__custom-tools__bassh"), "mcp__custom-tools__bassh");
+	});
+
+	it("passes SDK arguments through and applies the pi bash timeout", () => {
 		assert.deepEqual(mapSdkToolArgsToPi("edit", { file_path: "a.ts", old_string: "a", new_string: "b" }), {
-			path: "a.ts", oldText: "a", newText: "b",
+			file_path: "a.ts", old_string: "a", new_string: "b",
 		});
 		assert.deepEqual(mapSdkToolArgsToPi("bash", { command: "pwd" }), { command: "pwd", timeout: 120 });
+	});
+
+	it("round-trips a rejected call through pi history", () => {
+		const msgs = [
+			{ role: "assistant", content: [{ type: "toolCall", id: "toolu_1", name: "cc_no_such_tool__bash", arguments: { command: "ls" } }] },
+			{ role: "toolResult", toolCallId: "toolu_1", content: "Tool cc_no_such_tool__bash not found", isError: true },
+		];
+		const result = convert(msgs);
+		const use = block(result[0], 0, "tool_use");
+		assert.equal(use.name, "bash");
+		assert.deepEqual(use.input, { command: "ls" });
+		assert.equal(block(result[1], 0, "tool_result").is_error, true);
 	});
 });
 

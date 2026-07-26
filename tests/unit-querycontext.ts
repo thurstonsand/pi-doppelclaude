@@ -31,12 +31,16 @@ describe("QueryContext class", () => {
 		assert.strictEqual(c.turnBlocks, c.turnOutput.content);
 	});
 
-	it("resetTurnState preserves turnToolCallIds", () => {
+	it("resetTurnState preserves query-scoped tool call tracking", () => {
 		const c = new QueryContext();
-		c.turnToolCallIds = ["id1", "id2"];
+		c.shownToolCallIds.add("id1");
+		c.dispatchedToolCallIds.add("id1");
+		c.rejectedToolCallIds.add("id2");
 		c.resetTurnState(fakeModel);
 
-		assert.deepStrictEqual(c.turnToolCallIds, ["id1", "id2"]);
+		assert.deepStrictEqual([...c.shownToolCallIds], ["id1"]);
+		assert.deepStrictEqual([...c.dispatchedToolCallIds], ["id1"]);
+		assert.deepStrictEqual([...c.rejectedToolCallIds], ["id2"]);
 	});
 
 	it("fresh instances share no query state", () => {

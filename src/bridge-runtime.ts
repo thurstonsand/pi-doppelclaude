@@ -7,7 +7,12 @@
 import { randomUUID } from "node:crypto";
 import { createAssistantMessageEventStream, type AssistantMessageEventStream, type Context, type Model, type SimpleStreamOptions, type Tool } from "@earendil-works/pi-ai";
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
-import { createSdkMcpServer, query, type McpServerConfig, type Options, type Query, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import { query, type McpServerConfig, type Options, type Query, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+// Server's @deprecated tag steers high-level users toward McpServer, whose
+// pre-handler validation is exactly what buildMcpServers must escape; the tag
+// itself sanctions low-level Server for "advanced use cases".
+import { Server as McpLowLevelServer } from "@modelcontextprotocol/sdk/server/index.js";
+import { CallToolRequestSchema, ErrorCode, ListToolsRequestSchema, McpError } from "@modelcontextprotocol/sdk/types.js";
 import type { Base64ImageSource, ContentBlockParam, MessageParam } from "@anthropic-ai/sdk/resources";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
@@ -18,7 +23,6 @@ import { MCP_SERVER_NAME, MCP_TOOL_PREFIX } from "./skills.js";
 import { extractAllToolResults as _extractAllToolResults, type McpResult } from "./extract-tool-results.js";
 import { PushQueue, QueryContext } from "./query-state.js";
 import type { ProviderSettings } from "./settings.js";
-import { jsonSchemaToZodShape } from "./typebox-to-zod.js";
 import { buildClaudeSystemPrompt, settingSourcesFor } from "./system-prompt.js";
 import { createProviderStreamRuntime } from "./provider-stream.js";
 import { BridgeSessionStore, MalformedSessionTranscriptError } from "./session-store.js";
@@ -106,6 +110,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
 		claimCurrentPiStream,
 		emitTerminalError,
 		finalizeCurrentStream,
+		replayBufferedSdkMessages,
 		consumeQuery,
 	} = createProviderStreamRuntime({
 		debug,
@@ -309,7 +314,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
 			const id = result.toolCallId;
 			if (!id) continue;
 			for (const queryCtx of activeQueryContexts) {
-				if (queryCtx.pendingToolCalls.has(id) || queryCtx.pendingResults.has(id) || queryCtx.turnToolCallIds.includes(id)) {
+				if (queryCtx.pendingToolCalls.has(id) || queryCtx.pendingResults.has(id) || queryCtx.shownToolCallIds.has(id)) {
 					return queryCtx;
 				}
 			}
@@ -363,6 +368,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
 				return new Promise<McpResult>(() => {});
 			}
 			const toolCallId = extra._meta["claudecode/toolUseId"];
+			queryCtx.dispatchedToolCallIds.add(toolCallId);
 			if (queryCtx.pendingResults.has(toolCallId)) {
 				const result = queryCtx.pendingResults.get(toolCallId)!;
 				queryCtx.pendingResults.delete(toolCallId);
@@ -378,20 +384,53 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
 
 	// Creates an MCP server that bridges pi tools to the SDK. Each tool handler
 	// blocks on a Promise until pi delivers the matching tool result.
+	//
+	// Built on the low-level MCP Server rather than createSdkMcpServer: that helper
+	// takes Zod shapes and validates arguments before the handler runs, which drops
+	// the generator backpressure for a call Claude Code streamed — the deadlock in
+	// docs/investigations/01-unmatched-tool-call-deadlock.md. Here every correctly
+	// named call reaches the handler and pi's TypeBox validation is the sole
+	// argument gate; pi's schemas are also advertised verbatim instead of through a
+	// lossy Zod translation. The Agent SDK only calls `instance.connect(transport)`
+	// on an sdk server config, so a low-level Server satisfies it; see the import
+	// for why Server's deprecation tag does not apply here.
+	function advertisedInputSchema(tool: Tool): { type: "object" } {
+		const schemaType = (tool.parameters as { type?: unknown }).type;
+		if (schemaType !== "object") throw new Error(`Claude bridge: tool ${tool.name} parameters must be an object schema, got ${JSON.stringify(schemaType)}`);
+		// pi types parameters as TSchema, which hides `type`; the check above proves
+		// the literal MCP requires.
+		return tool.parameters as { type: "object" };
+	}
+
 	function buildMcpServers(tools: Tool[], queryCtx: QueryContext): Record<string, McpServerConfig> {
 		if (!tools.length) return {};
-		const mcpTools = tools.map((tool) => ({
-			name: tool.name,
-			description: tool.description,
-			inputSchema: jsonSchemaToZodShape(tool.parameters),
-			handler: createMcpToolHandler(tool.name, queryCtx),
+		const handlers = new Map(tools.map((tool) => [tool.name, createMcpToolHandler(tool.name, queryCtx)]));
+		const server = new McpLowLevelServer({ name: MCP_SERVER_NAME, version: "1.0.0" }, { capabilities: { tools: {} } });
+		server.setRequestHandler(ListToolsRequestSchema, () => ({
+			tools: tools.map((tool) => ({
+				name: tool.name,
+				description: tool.description,
+				inputSchema: advertisedInputSchema(tool),
+			})),
 		}));
-		const server = createSdkMcpServer({ name: MCP_SERVER_NAME, version: "1.0.0", tools: mcpTools });
-		return { [MCP_SERVER_NAME]: server };
+		server.setRequestHandler(CallToolRequestSchema, (request) => {
+			const handler = handlers.get(request.params.name);
+			if (!handler) throw new McpError(ErrorCode.InvalidParams, `Tool ${request.params.name} not found`);
+			return handler(request.params.arguments, { _meta: request.params._meta });
+		});
+		return { [MCP_SERVER_NAME]: { type: "sdk", name: MCP_SERVER_NAME, instance: server as never } };
 	}
 
 	function mcpSignature(tools: Tool[]): string {
 		return JSON.stringify(tools.map((tool) => ({ name: tool.name, description: tool.description, parameters: tool.parameters })));
+	}
+
+	function clearToolCallTracking(c: QueryContext): void {
+		c.shownToolCallIds.clear();
+		c.dispatchedToolCallIds.clear();
+		c.rejectedToolCallIds.clear();
+		c.rejectionWindowOpen = false;
+		c.bufferedSdkMessages = [];
 	}
 
 	type QueryCloseMode = "drain" | "force";
@@ -417,6 +456,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
 		for (const pending of c.pendingToolCalls.values()) pending.resolve({ content: [{ type: "text", text: "Query ended" }] });
 		c.pendingToolCalls.clear();
 		c.pendingResults.clear();
+		clearToolCallTracking(c);
 		c.activeQuery = null;
 		c.inputQueue = null;
 		c.readyForInput = false;
@@ -506,6 +546,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
 			const syncResult = applySharedSessionSync(syncPlan, cwd, customToolNameToSdk, model.id);
 			queryCtx.pendingToolCalls.clear();
 			queryCtx.pendingResults.clear();
+			clearToolCallTracking(queryCtx);
 			queryCtx.persistent = !isReentrant;
 			queryCtx.closing = false;
 			queryCtx.spawnSignature = spawnSignature;
@@ -643,23 +684,37 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
 				}
 			}
 
+			// Anything Claude Code streamed while pi was executing is older than what the
+			// unblocked generator will produce, so it replays into the fresh turn first.
+			replayBufferedSdkMessages(resultCtx);
+
 			for (const result of allResults) {
 				const id = result.toolCallId;
-				if (id && resultCtx.pendingToolCalls.has(id)) {
-					const pending = resultCtx.pendingToolCalls.get(id)!;
+				if (!id) {
+					debug("WARNING: tool result without toolCallId, cannot match");
+					continue;
+				}
+				const pending = resultCtx.pendingToolCalls.get(id);
+				if (pending) {
 					resultCtx.pendingToolCalls.delete(id);
 					debug(`provider: resolving ${pending.toolName} [${id}]${result.isError ? " (error)" : ""}`, JSON.stringify(result.content).slice(0, 200));
 					pending.resolve(result);
-				} else if (id) {
+				} else if (resultCtx.rejectedToolCallIds.has(id)) {
+					// Claude Code already answered this call with its own error; a second
+					// answer would be a duplicate reply to a closed question.
+					debug(`provider: dropping result for Claude-rejected call [${id}]`);
+				} else if (resultCtx.shownToolCallIds.has(id)) {
 					resultCtx.pendingResults.set(id, result);
 					debug(`provider: queued result [${id}] (${resultCtx.pendingResults.size} pending)`);
 				} else {
-					debug("WARNING: tool result without toolCallId, cannot match");
+					emitTerminalError(resultCtx, "error", `Claude bridge: pi delivered a result for tool call [${id}], which was never streamed to pi`);
+					return stream;
 				}
 			}
 			if (resultCtx.pendingToolCalls.size > 0) {
-				debug(`WARNING: ${resultCtx.pendingToolCalls.size} MCP handlers still waiting after delivering ${allResults.length} results`);
-				piUI?.notify(`Claude bridge: ${resultCtx.pendingToolCalls.size} tool handler(s) still waiting — provider may be stuck`, "warning");
+				const waiting = [...resultCtx.pendingToolCalls.keys()].join(", ");
+				emitTerminalError(resultCtx, "error", `Claude bridge: ${resultCtx.pendingToolCalls.size} tool handler(s) still waiting after ${allResults.length} result(s) [${waiting}]`);
+				return stream;
 			}
 			if (sharedSession) sharedSession.cursor = context.messages.length;
 			return stream;
@@ -723,6 +778,8 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
 				queryCtx.readyForInput = false;
 				for (const pending of queryCtx.pendingToolCalls.values()) pending.resolve({ content: [{ type: "text", text: "Operation aborted" }] });
 				queryCtx.pendingToolCalls.clear();
+				queryCtx.rejectionWindowOpen = false;
+				queryCtx.bufferedSdkMessages = [];
 				const activeQuery = queryCtx.activeQuery;
 				if (!activeQuery) {
 					failQuery(queryCtx, "aborted", "Operation aborted", "rebuild");
@@ -876,6 +933,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
 			closeQueryContext,
 			settleInterruptedQuery,
 			createMcpToolHandler,
+			buildMcpServers,
 			streamClaudeAgentSdk,
 		},
 	};

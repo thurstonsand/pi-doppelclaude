@@ -7,7 +7,7 @@
 // Extracted from index.ts so tests can import without activating the extension.
 
 import type { AssistantMessage, AssistantMessageEventStream, Model } from "@earendil-works/pi-ai";
-import type { Query, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { Query, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { ResultVerdict } from "./sdk-signals.js";
 import type { SdkModelUsage } from "./sdk-usage.js";
 import type { McpResult } from "./extract-tool-results.js";
@@ -93,7 +93,18 @@ export class QueryContext {
 	turnRateLimitRejection: string | null = null;
 	pendingToolCalls = new Map<string, PendingToolCall>();
 	pendingResults = new Map<string, McpResult>();
-	turnToolCallIds: string[] = [];
+	// Reconciliation is order-independent: a tool call is shown to pi when it is
+	// streamed, dispatched when Claude Code invokes its MCP handler, and rejected
+	// when Claude Code answers it without ever dispatching it.
+	shownToolCallIds = new Set<string>();
+	dispatchedToolCallIds = new Set<string>();
+	rejectedToolCallIds = new Set<string>();
+	// While a rejection has removed the MCP handler's backpressure, SDK messages
+	// that drive the pi stream are held here instead of discarded, and replayed
+	// when pi claims its next stream.
+	rejectionWindowOpen = false;
+	bufferedSdkMessages: SDKMessage[] = [];
+	dispatchSdkMessage: ((message: SDKMessage) => void) | null = null;
 
 	// Per-turn (reset together)
 	turnOutput: AssistantMessage | null = null;
@@ -108,6 +119,10 @@ export class QueryContext {
 
 	beginCommand(model: Model<any>): void {
 		this.commandOutputs = [];
+		// The buffer belongs to the command that opened its window; a new command
+		// must never inherit the previous one's unreplayed messages.
+		this.rejectionWindowOpen = false;
+		this.bufferedSdkMessages = [];
 		this.resetTurnState(model);
 	}
 
@@ -131,7 +146,5 @@ export class QueryContext {
 		this.turnApiFailure = null;
 		this.turnRateLimitRejection = null;
 		this.readyForInput = false;
-		// turnToolCallIds is not reset — it persists across tool-result delivery
-		// callbacks within the same assistant message.
 	}
 }

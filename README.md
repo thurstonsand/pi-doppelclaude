@@ -175,6 +175,8 @@ The repository pins Node, ShellCheck, and hk through mise. After trusting the co
 
 `npm test` for the full suite, which adds integration tests that hit APIs (`tests/int-*.{sh,ts}`: smoke, multi-turn, cache, sessions, compaction, nested runtimes, and tool messages). Set `CLAUDE_BRIDGE_TESTING_ALT_PROVIDER` and `CLAUDE_BRIDGE_TESTING_ALT_MODEL` in `.env.test` to any authenticated non-bridge provider/model used by the session-resume test (for example, `google` and `gemini-2.5-flash`).
 
+`tests/int-rejection-smoke.ts` is an on-demand smoke that asks the model to misname a tool so Claude Code rejects it internally, then checks the bridge's recovery in the debug log. It depends on the model complying, so it reports a skip instead of failing when no rejection was provoked.
+
 `npm run test:usage` runs the one-off A/B subscription-usage diagnostic (`tests/usage-test.ts`) comparing the bridge against Claude Code direct. It reads Claude Code OAuth credentials from the macOS keychain and hits a rate-limited usage endpoint, so run it sparingly.
 
 ## Debugging

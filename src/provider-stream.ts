@@ -1,7 +1,8 @@
 import { type AssistantMessageEventStream, type Model } from "@earendil-works/pi-ai";
-import { type Query, type SDKAssistantMessage, type SDKMessage, type SDKMirrorErrorMessage, type SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
+import { parse as parsePartialJsonText } from "partial-json";
+import { type Query, type SDKAssistantMessage, type SDKMessage, type SDKMirrorErrorMessage, type SDKResultMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { QueryContext } from "./query-state.js";
-import { mapSdkToolArgsToPi, mapSdkToolNameToPi } from "./convert.js";
+import { isCcRejectedToolName, mapSdkToolArgsToPi, mapSdkToolNameToPi } from "./convert.js";
 import { logServedContextWindow, resultErrorText } from "./sdk-result.js";
 import { applySdkUsage, debugSdkUsage, diffSdkModelUsage, reconcileSdkModelUsage } from "./sdk-usage.js";
 import { apiStatusFailure, assistantApiFailure, classifyResult, formatRateLimitMessage } from "./sdk-signals.js";
@@ -26,7 +27,10 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
 
 	function parsePartialJson(input: string, fallback: Record<string, unknown>): Record<string, unknown> {
 		if (!input) return fallback;
-		try { return JSON.parse(input); } catch { return fallback; }
+		try {
+			const parsed = parsePartialJsonText(input);
+			return typeof parsed === "object" && parsed !== null ? parsed as Record<string, unknown> : fallback;
+		} catch { return fallback; }
 	}
 
 
@@ -55,7 +59,56 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
 		if (c.currentPiStream && !completedStreams.has(c.currentPiStream as object)) {
 			debug(`WARNING: currentPiStream overwritten before terminal event (${label}); activeQuery=${Boolean(c.activeQuery)} pendingHandlers=${c.pendingToolCalls.size}`);
 		}
+		if (c.rejectionWindowOpen) {
+			debug(`provider: rejection window closed by ${label}; ${c.bufferedSdkMessages.length} buffered message(s)`);
+			c.rejectionWindowOpen = false;
+		}
 		c.currentPiStream = stream;
+	}
+
+	function openRejectionWindow(c: QueryContext, reason: string): void {
+		if (c.rejectionWindowOpen) return;
+		c.rejectionWindowOpen = true;
+		debug(`provider: rejection window open (${reason})`);
+	}
+
+	/** Replays the messages buffered while the pi stream was unclaimed. Callers must
+	 *  have reset the turn state for the stream that is about to receive them. */
+	function replayBufferedSdkMessages(c: QueryContext): void {
+		if (!c.bufferedSdkMessages.length) return;
+		const buffered = c.bufferedSdkMessages;
+		c.bufferedSdkMessages = [];
+		const dispatch = c.dispatchSdkMessage;
+		// consumeQuery is the only producer and installs the dispatcher before its
+		// first iteration, so a filled buffer without one means the invariant broke.
+		if (!dispatch) throw new Error(`Claude bridge: ${buffered.length} buffered SDK message(s) with no consumer`);
+		debug(`provider: replaying ${buffered.length} buffered message(s)`);
+		for (const message of buffered) dispatch(message);
+	}
+
+	/** Claude Code declined every mangled name at emission, so its calls are answered
+	 *  by CC itself and can never dispatch an MCP handler. */
+	function noteRejectedToolCallNames(c: QueryContext): void {
+		if (!c.turnOutput) return;
+		const rejected = c.turnBlocks.filter((block: any) => block.type === "toolCall" && isCcRejectedToolName(block.name));
+		if (!rejected.length) return;
+		for (const block of rejected) c.rejectedToolCallIds.add(block.id);
+		openRejectionWindow(c, `Claude Code has no tool ${rejected.map((block: any) => block.name).join(", ")}`);
+	}
+
+	/** Generic dispatch detector: Claude Code must answer every tool_use it emitted,
+	 *  so a tool_result for a call whose handler never fired means CC rejected it. */
+	function noteRejectedToolResults(message: SDKUserMessage, c: QueryContext): void {
+		const content = message.message?.content;
+		if (!Array.isArray(content)) return;
+		for (const block of content as Array<{ type?: string; tool_use_id?: string }>) {
+			const id = block?.type === "tool_result" ? block.tool_use_id : undefined;
+			if (!id || !c.shownToolCallIds.has(id)) continue;
+			if (c.dispatchedToolCallIds.has(id) || c.rejectedToolCallIds.has(id)) continue;
+			c.rejectedToolCallIds.add(id);
+			debug(`provider: Claude Code answered [${id}] without dispatching it`);
+			if (!c.currentPiStream) openRejectionWindow(c, `undispatched tool call [${id}]`);
+		}
 	}
 
 	function ensureTurnStarted(c: QueryContext): void {
@@ -107,7 +160,6 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
 		const event = (message as SDKMessage & { event: any }).event;
 
 		if (event?.type === "message_start") {
-			c.turnToolCallIds = [];
 			if (event.message?.usage && c.turnOutput) applySdkUsage(c.turnOutput, event.message.usage, model);
 			return;
 		}
@@ -122,7 +174,7 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
 				c.currentPiStream!.push({ type: "thinking_start", contentIndex: c.turnBlocks.length - 1, partial: c.turnOutput });
 			} else if (event.content_block?.type === "tool_use") {
 				c.turnSawToolCall = true;
-				c.turnToolCallIds.push(event.content_block.id);
+				c.shownToolCallIds.add(event.content_block.id);
 				c.turnBlocks.push({
 					type: "toolCall", id: event.content_block.id,
 					name: mapSdkToolNameToPi(event.content_block.name, customToolNameToPi),
@@ -195,6 +247,7 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
 			markStreamComplete(stream);
 			stream!.end();
 			c.currentPiStream = null;
+			noteRejectedToolCallNames(c);
 
 			// Cursor is updated by the next streamSimple call (tool result delivery path)
 			// which sets cursor = context.messages.length with the post-tool-result context.
@@ -218,7 +271,6 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
 		if (c.turnSawStreamEvent) return;
 		const assistantMsg = message.message;
 		if (!assistantMsg?.content) return;
-		c.turnToolCallIds = [];
 		debug(`processAssistantMessage fallback: ${assistantMsg.content.length} blocks, types=${assistantMsg.content.map((b: any) => b.type).join(",")}`);
 		for (const block of assistantMsg.content) {
 			if (block.type === "text" && block.text) {
@@ -238,7 +290,7 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
 			} else if (block.type === "tool_use") {
 				ensureTurnStarted(c);
 				c.turnSawToolCall = true;
-				c.turnToolCallIds.push(block.id);
+				c.shownToolCallIds.add(block.id);
 				const mappedArgs = mapSdkToolArgsToPi(mapSdkToolNameToPi(block.name, customToolNameToPi), block.input as Record<string, unknown>);
 				c.turnBlocks.push({
 					type: "toolCall", id: block.id,
@@ -263,6 +315,7 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
 			markStreamComplete(stream);
 			stream.end();
 			c.currentPiStream = null;
+			noteRejectedToolCallNames(c);
 		}
 	}
 
@@ -320,6 +373,68 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
 		}
 	}
 
+	// Messages that drive the pi stream. Only these are buffered while a rejection
+	// window is open; the rest never touch the stream and must process live.
+	function drivesPiStream(message: SDKMessage): boolean {
+		return message.type === "stream_event" || message.type === "assistant" || message.type === "result";
+	}
+
+	function dispatchSdkMessage(
+		message: SDKMessage,
+		customToolNameToPi: Map<string, string>,
+		model: Model<any>,
+		queryCtx: QueryContext,
+		hooks: QueryConsumerHooks,
+	): void {
+		const currentModel = queryCtx.activeModel ?? model;
+		switch (message.type) {
+			case "system":
+				switch (message.subtype) {
+					case "init":
+						hooks.onSessionId(message.session_id);
+						break;
+					case "mirror_error":
+						debug("consumeQuery: sessionStore mirror_error", message.error, message.key);
+						hooks.onMirrorError?.(message);
+						break;
+					case "api_retry": {
+						const failure = apiStatusFailure(message.error_status) ?? assistantApiFailure(message.error);
+						if (failure) notify?.(`${failure}; retrying attempt ${message.attempt}/${message.max_retries}`, "warning");
+						break;
+					}
+				}
+				break;
+			case "rate_limit_event": {
+				// Processed live even during a rejection window, so a rejection recorded
+				// here is cleared by the reset before a buffered result replays; the
+				// turn then reports the plainer result error instead of the quota text.
+				const rateLimitMessage = formatRateLimitMessage(message.rate_limit_info);
+				debug("consumeQuery: rate_limit_event", JSON.stringify(message.rate_limit_info).slice(0, 300));
+				if (message.rate_limit_info.status === "rejected") queryCtx.turnRateLimitRejection = rateLimitMessage;
+				if (message.rate_limit_info.status !== "allowed") notify?.(rateLimitMessage, "warning");
+				break;
+			}
+			case "assistant":
+				processAssistantMessage(message, currentModel, customToolNameToPi, queryCtx);
+				break;
+			case "result":
+				processResultMessage(message, currentModel, queryCtx);
+				hooks.onResult(message);
+				break;
+			case "stream_event":
+				processStreamEvent(message, customToolNameToPi, currentModel, queryCtx);
+				break;
+			case "user":
+				noteRejectedToolResults(message, queryCtx);
+				break;
+			default:
+				if (queryCtx.currentPiStream && queryCtx.turnOutput) {
+					debug("consumeQuery: unhandled SDK message type", message.type);
+				}
+				break;
+		}
+	}
+
 	async function consumeQuery(
 		sdkQuery: Query,
 		customToolNameToPi: Map<string, string>,
@@ -328,52 +443,16 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
 		hooks: QueryConsumerHooks,
 	): Promise<void> {
 		let capturedSessionId: string | undefined;
+		queryCtx.dispatchSdkMessage = (message) => dispatchSdkMessage(message, customToolNameToPi, model, queryCtx, hooks);
 
 		for await (const message of sdkQuery) {
-			const currentModel = queryCtx.activeModel ?? model;
-			switch (message.type) {
-				case "system":
-					switch (message.subtype) {
-						case "init":
-							capturedSessionId = message.session_id;
-							hooks.onSessionId(capturedSessionId);
-							break;
-						case "mirror_error":
-							debug("consumeQuery: sessionStore mirror_error", message.error, message.key);
-							hooks.onMirrorError?.(message);
-							break;
-						case "api_retry": {
-							const failure = apiStatusFailure(message.error_status) ?? assistantApiFailure(message.error);
-							if (failure) notify?.(`${failure}; retrying attempt ${message.attempt}/${message.max_retries}`, "warning");
-							break;
-						}
-					}
-					break;
-				case "rate_limit_event": {
-					const rateLimitMessage = formatRateLimitMessage(message.rate_limit_info);
-					debug("consumeQuery: rate_limit_event", JSON.stringify(message.rate_limit_info).slice(0, 300));
-					if (message.rate_limit_info.status === "rejected") queryCtx.turnRateLimitRejection = rateLimitMessage;
-					if (message.rate_limit_info.status !== "allowed") notify?.(rateLimitMessage, "warning");
-					break;
-				}
-				case "assistant":
-					processAssistantMessage(message, currentModel, customToolNameToPi, queryCtx);
-					break;
-				case "result":
-					processResultMessage(message, currentModel, queryCtx);
-					hooks.onResult(message);
-					break;
-				case "stream_event":
-					processStreamEvent(message, customToolNameToPi, currentModel, queryCtx);
-					break;
-				case "user":
-					break;
-				default:
-					if (queryCtx.currentPiStream && queryCtx.turnOutput) {
-						debug("consumeQuery: unhandled SDK message type", message.type);
-					}
-					break;
+			if (message.type === "system" && message.subtype === "init") capturedSessionId = message.session_id;
+			if (queryCtx.rejectionWindowOpen && drivesPiStream(message)) {
+				queryCtx.bufferedSdkMessages.push(message);
+				debug(`consumeQuery: buffered ${message.type} while the pi stream is unclaimed (${queryCtx.bufferedSdkMessages.length} held)`);
+				continue;
 			}
+			queryCtx.dispatchSdkMessage(message);
 		}
 
 		debug(`consumeQuery: for-await loop exited, capturedSessionId=${capturedSessionId?.slice(0, 8) ?? "none"}`);
@@ -384,6 +463,7 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
 		claimCurrentPiStream,
 		emitTerminalError,
 		finalizeCurrentStream,
+		replayBufferedSdkMessages,
 		consumeQuery,
 	};
 }
