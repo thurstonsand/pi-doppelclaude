@@ -8,12 +8,16 @@ import {
 	type AssistantMessage,
 	type Context,
 	type Model,
+	type ModelsStoreEntry,
+	type ProviderModelsStore,
 	type SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { AccountSnapshot } from "../src/account-probe.js";
+import type { BridgeModelCatalog } from "../src/model-catalog.js";
 import { createAnthropicAgentSdkProvider } from "../src/provider.js";
-import { PROVIDER_API, PROVIDER_BASE_URL, PROVIDER_ID, PROVIDER_NAME } from "../src/models.js";
+import { PROVIDER_API, PROVIDER_BASE_URL, PROVIDER_ID, PROVIDER_NAME, type BridgeModel } from "../src/models.js";
+import { bridgeModel } from "./lib/models.js";
 
 const context: Context = { messages: [{ role: "user", content: "test", timestamp: 1 }] };
 const authInput = {
@@ -51,9 +55,37 @@ function successfulStream(model: Model<any>) {
 const availableAccount: AccountSnapshot = { available: true, supportedModels: [] };
 const unavailableAccount: AccountSnapshot = { available: false, supportedModels: [] };
 
-function providerWith(spy?: (model: Model<any>, options: SimpleStreamOptions | undefined) => void, accountProbe = async () => availableAccount) {
+function memoryStore(): ProviderModelsStore {
+	let entry: ModelsStoreEntry | undefined;
+	return {
+		async read() { return entry; },
+		async write(written) { entry = structuredClone(written); },
+		async delete() { entry = undefined; },
+	};
+}
+
+// Provider coverage owns stream/auth/composition boundaries; catalog assembly is proven in
+// unit-model-catalog, so these tests state the discovered models outright.
+const discoveredModels = [bridgeModel("claude-opus-4-8"), bridgeModel("claude-sonnet-5"), bridgeModel("claude-haiku-4-5")];
+
+function stubCatalog(models: readonly BridgeModel[] = discoveredModels): BridgeModelCatalog {
+	return {
+		getModels: () => models,
+		// Stands in for the real catalog's contract: it asks Claude Code only when it needs discovery.
+		async refresh(context, requestSupportedModels) {
+			if (context.allowNetwork) await requestSupportedModels();
+		},
+	};
+}
+
+function providerWith(
+	spy?: (model: Model<any>, options: SimpleStreamOptions | undefined) => void,
+	accountProbe = async () => availableAccount,
+	modelCatalog: BridgeModelCatalog = stubCatalog(),
+) {
 	return createAnthropicAgentSdkProvider({
 		accountProbe,
+		modelCatalog,
 		stream(model, _context, options) {
 			spy?.(model, options);
 			return successfulStream(model);
@@ -69,7 +101,7 @@ describe("native Provider shape", () => {
 		assert.equal(provider.baseUrl, PROVIDER_BASE_URL);
 		assert.equal(provider.auth.apiKey?.login, undefined);
 		assert.match(provider.auth.apiKey!.name, /Claude Code CLI.*claude auth login/);
-		assert.equal(provider.getModels().length, 7);
+		assert.deepEqual(provider.getModels().map((model) => model.id), discoveredModels.map((model) => model.id));
 		assert.ok(provider.getModels().every((model) => model.api === PROVIDER_API));
 	});
 
@@ -88,65 +120,62 @@ describe("native Provider shape", () => {
 });
 
 describe("ambient Claude Code auth", () => {
-	it("starts one probe without making check await it, then resolve shares it", async () => {
-		let resolveProbe: (snapshot: AccountSnapshot) => void = () => {};
+	it("answers auth from cached state without ever probing", async () => {
 		let probes = 0;
-		const provider = providerWith(undefined, () => {
-			probes++;
-			return new Promise<AccountSnapshot>((resolve) => { resolveProbe = resolve; });
-		});
+		const provider = providerWith(undefined, async () => { probes++; return availableAccount; });
 
 		assert.deepEqual(await provider.auth.apiKey!.check!(authInput), { type: "api_key", source: "Claude Code" });
-		assert.equal(probes, 1);
-		const resolution = provider.auth.apiKey!.resolve(authInput);
-		let settled = false;
-		void resolution.finally(() => { settled = true; });
-		await Promise.resolve();
-		assert.equal(settled, false);
-		assert.equal(probes, 1);
-
-		resolveProbe(availableAccount);
-		assert.deepEqual(await resolution, { auth: {}, source: "Claude Code" });
+		assert.deepEqual(await provider.auth.apiKey!.resolve(authInput), { auth: {}, source: "Claude Code" });
+		assert.equal(probes, 0);
 	});
 
-	it("returns unavailable only after a completed logged-out probe while retrying in the background", async () => {
-		const resolvers: Array<(snapshot: AccountSnapshot) => void> = [];
-		const provider = providerWith(undefined, () => new Promise((resolve) => { resolvers.push(resolve); }));
-		assert.ok(await provider.auth.apiKey!.check!(authInput));
-		resolvers.shift()!(unavailableAccount);
+	it("probes only when the catalog asks and withdraws auth once it reports logout", async () => {
+		let probes = 0;
+		let snapshot = availableAccount;
+		const provider = providerWith(undefined, async () => { probes++; return snapshot; });
+		const store = memoryStore();
+
+		await provider.refreshModels!({ store, allowNetwork: false });
+		assert.equal(probes, 0);
+
+		snapshot = unavailableAccount;
+		await provider.refreshModels!({ store, allowNetwork: true });
+		assert.equal(probes, 1);
+		assert.equal(await provider.auth.apiKey!.check!(authInput), undefined);
 		assert.equal(await provider.auth.apiKey!.resolve(authInput), undefined);
 
-		assert.equal(await provider.auth.apiKey!.check!(authInput), undefined);
-		assert.equal(resolvers.length, 1);
-		resolvers.shift()!(availableAccount);
-		assert.deepEqual(await provider.auth.apiKey!.resolve(authInput), { auth: {}, source: "Claude Code" });
+		snapshot = availableAccount;
+		await provider.refreshModels!({ store, allowNetwork: true });
+		assert.equal(probes, 2);
+		assert.deepEqual(await provider.auth.apiKey!.check!(authInput), { type: "api_key", source: "Claude Code" });
 	});
 
-	it("retains probe failures for resolve without creating an unhandled rejection", async () => {
-		let rejectProbe: (error: Error) => void = () => {};
-		const provider = providerWith(undefined, () => new Promise((_resolve, reject) => { rejectProbe = reject; }));
-		assert.ok(await provider.auth.apiKey!.check!(authInput));
-		rejectProbe(new Error("Run `claude auth login`"));
-		await new Promise((resolve) => setImmediate(resolve));
-		await assert.rejects(provider.auth.apiKey!.resolve(authInput), /claude auth login/);
+	it("surfaces probe failure to Pi's refresh instead of swallowing it", async () => {
+		const provider = providerWith(undefined, async () => {
+			throw new Error("Claude Code authentication check failed. Run `claude auth login` and try again.");
+		});
+		await assert.rejects(
+			provider.refreshModels!({ store: memoryStore(), allowNetwork: true }),
+			/claude auth login/,
+		);
+		assert.deepEqual(await provider.auth.apiKey!.check!(authInput), { type: "api_key", source: "Claude Code" });
 	});
 
-	it("shares one in-flight account probe across concurrent checks", async () => {
+	it("shares one in-flight account probe across concurrent refreshes", async () => {
 		let resolveProbe: (snapshot: AccountSnapshot) => void = () => {};
 		let probes = 0;
 		const provider = providerWith(undefined, () => {
 			probes++;
 			return new Promise<AccountSnapshot>((resolve) => { resolveProbe = resolve; });
 		});
-		assert.deepEqual(await Promise.all([
-			provider.auth.apiKey!.check!(authInput),
-			provider.auth.apiKey!.check!(authInput),
-		]), [
-			{ type: "api_key", source: "Claude Code" },
-			{ type: "api_key", source: "Claude Code" },
+		const refreshes = Promise.all([
+			provider.refreshModels!({ store: memoryStore(), allowNetwork: true }),
+			provider.refreshModels!({ store: memoryStore(), allowNetwork: true }),
 		]);
-		assert.equal(probes, 1);
+		await Promise.resolve();
 		resolveProbe(availableAccount);
+		await refreshes;
+		assert.equal(probes, 1);
 	});
 });
 

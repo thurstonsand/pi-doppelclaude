@@ -6,15 +6,12 @@ export const PROVIDER_NAME = "Anthropic Agent SDK";
 export const PROVIDER_API = "anthropic-agent-sdk";
 export const PROVIDER_BASE_URL = "claude-code://local";
 
-export const MODEL_IDS_IN_ORDER = ["claude-fable-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-5", "claude-sonnet-4-6", "claude-haiku-4-5"] as const;
-
 // The marker survives modelOverrides but cannot be supplied by models.json, so user-defined
 // replacements never cross the provider boundary as catalog-confirmed models.
 const BRIDGE_MODEL = Symbol("pi-claude-bridge.model");
 const MODEL_FAMILIES_IN_ORDER = ["fable", "opus", "sonnet", "haiku"];
 const NUMERIC_MODEL_VERSION = /^\d+$/u;
 const SHORT_MODEL_VERSION_PART = /^\d{1,2}$/u;
-const BARE_ONE_M_MODEL_IDS = new Set<string>(["claude-opus-4-7"]);
 const TWO_HUNDRED_K_CONTEXT = 200_000;
 
 export interface BridgeModel extends Model<typeof PROVIDER_API> {
@@ -79,17 +76,7 @@ export function compareModels(left: Model<any>, right: Model<any>): number {
 export function projectCatalogModels(canonicalModels: readonly Model<any>[], allowedIds: ReadonlySet<string>): BridgeModel[] {
 	return canonicalModels
 		.filter((model) => allowedIds.has(model.id) && isStableClaudeModelId(model.id))
-		.map(projectModel)
-		.sort(compareModels);
-}
-
-export function buildModels(canonicalModels: readonly Model<any>[]): BridgeModel[] {
-	for (const id of MODEL_IDS_IN_ORDER) {
-		if (!canonicalModels.some((model) => model.id === id)) {
-			throw new Error(`Pi's Anthropic catalog is missing required model ${id}`);
-		}
-	}
-	return MODEL_IDS_IN_ORDER.map((id) => projectModel(canonicalModels.find((model) => model.id === id)!));
+		.map(projectModel);
 }
 
 const REASONING_TO_EFFORT: Record<string, EffortLevel> = {
@@ -111,8 +98,5 @@ export function resolveThinkingEffort(
 
 export function claudeCodeModelId(model: Model<any>): string {
 	if (!isSupportedModel(model)) throw new Error(unsupportedModelMessage(model));
-	if (model.contextWindow > TWO_HUNDRED_K_CONTEXT && !BARE_ONE_M_MODEL_IDS.has(model.id)) {
-		return `${model.id}[1m]`;
-	}
-	return model.id;
+	return model.contextWindow > TWO_HUNDRED_K_CONTEXT ? `${model.id}[1m]` : model.id;
 }

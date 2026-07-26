@@ -2,22 +2,34 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
 import {
-	buildModels,
 	claudeCodeModelId,
-	MODEL_IDS_IN_ORDER,
+	compareModels,
+	isStableClaudeModelId,
 	PROVIDER_API,
 	PROVIDER_BASE_URL,
 	PROVIDER_ID,
+	projectCatalogModels,
 	resolveThinkingEffort,
 } from "../src/models.js";
 
 const canonicalModels = getBuiltinModels("anthropic");
+const project = (...ids: string[]) => projectCatalogModels(canonicalModels, new Set(ids));
 const find = <T extends { id: string }>(models: readonly T[], id: string): T => models.find((model) => model.id === id)!;
 
 describe("native model projection", () => {
-	it("projects the seven canonical models in the declared order", () => {
-		const models = buildModels(canonicalModels);
-		assert.deepEqual(models.map((model) => model.id), MODEL_IDS_IN_ORDER);
+	// Ordering belongs to compareModels, which the catalog applies once after merging its sources.
+	it("orders models newest family version first", () => {
+		const models = project("claude-haiku-4-5", "claude-opus-4-6", "claude-fable-5", "claude-opus-4-8");
+		assert.deepEqual([...models].sort(compareModels).map((model) => model.id), [
+			"claude-fable-5", "claude-opus-4-8", "claude-opus-4-6", "claude-haiku-4-5",
+		]);
+	});
+
+	it("projects only allowed stable IDs under the bridge provider identity", () => {
+		const models = project("claude-haiku-4-5", "claude-opus-4-6", "claude-fable-5", "claude-opus-4-8");
+		assert.deepEqual([...models].map((model) => model.id).sort(), [
+			"claude-fable-5", "claude-haiku-4-5", "claude-opus-4-6", "claude-opus-4-8",
+		]);
 		for (const model of models) {
 			assert.equal(model.provider, PROVIDER_ID);
 			assert.equal(model.api, PROVIDER_API);
@@ -26,7 +38,7 @@ describe("native model projection", () => {
 	});
 
 	it("preserves every canonical metadata field other than provider identity", () => {
-		for (const model of buildModels(canonicalModels)) {
+		for (const model of project("claude-fable-5", "claude-sonnet-5", "claude-haiku-4-5")) {
 			const canonical = find(canonicalModels, model.id);
 			assert.equal(model.name, canonical.name);
 			assert.equal(model.reasoning, canonical.reasoning);
@@ -38,16 +50,21 @@ describe("native model projection", () => {
 		}
 	});
 
-	it("fails if Pi's canonical catalog is missing a required model", () => {
-		assert.throws(
-			() => buildModels(canonicalModels.filter((model) => model.id !== "claude-fable-5")),
-			/catalog is missing required model claude-fable-5/,
-		);
+	it("drops allowed IDs that Pi's canonical catalog cannot describe", () => {
+		assert.deepEqual(project("claude-sonnet-5", "claude-future-9-9").map((model) => model.id), ["claude-sonnet-5"]);
+	});
+
+	it("rejects mutable and dated identifiers as unstable", () => {
+		for (const id of ["sonnet", "default", "claude-haiku-4-5-20251001"]) {
+			assert.equal(isStableClaudeModelId(id), false, id);
+		}
+		assert.equal(isStableClaudeModelId("claude-haiku-4-5"), true);
+		assert.deepEqual(project("claude-haiku-4-5-20251001"), []);
 	});
 });
 
 describe("thinking effort", () => {
-	const models = buildModels(canonicalModels);
+	const models = project("claude-sonnet-5", "claude-opus-4-6");
 
 	it("uses native per-model mappings before generic effort aliases", () => {
 		assert.equal(resolveThinkingEffort(find(models, "claude-sonnet-5"), "xhigh"), "xhigh");
@@ -62,15 +79,12 @@ describe("thinking effort", () => {
 });
 
 describe("Claude Code model argument", () => {
-	const models = buildModels(canonicalModels);
+	const models = project("claude-fable-5", "claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5");
 
-	it("uses [1m] for canonical long-context models except bare Opus 4.7", () => {
+	it("uses [1m] for long-context models and the bare ID otherwise", () => {
 		assert.equal(claudeCodeModelId(find(models, "claude-fable-5")), "claude-fable-5[1m]");
 		assert.equal(claudeCodeModelId(find(models, "claude-opus-4-8")), "claude-opus-4-8[1m]");
-		assert.equal(claudeCodeModelId(find(models, "claude-opus-4-7")), "claude-opus-4-7");
-		assert.equal(claudeCodeModelId(find(models, "claude-opus-4-6")), "claude-opus-4-6[1m]");
 		assert.equal(claudeCodeModelId(find(models, "claude-sonnet-5")), "claude-sonnet-5[1m]");
-		assert.equal(claudeCodeModelId(find(models, "claude-sonnet-4-6")), "claude-sonnet-4-6[1m]");
 		assert.equal(claudeCodeModelId(find(models, "claude-haiku-4-5")), "claude-haiku-4-5");
 	});
 

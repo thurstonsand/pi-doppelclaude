@@ -4,7 +4,7 @@ import type { Model, ModelsStoreEntry, ProviderModelsStore, RefreshModelsContext
 import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
 import type { ModelInfo } from "@anthropic-ai/claude-agent-sdk";
 import { createBridgeModelCatalog, type ModelCatalogDependencies } from "../src/model-catalog.js";
-import { claudeCodeModelId, MODEL_IDS_IN_ORDER, PROVIDER_ID } from "../src/models.js";
+import { claudeCodeModelId, PROVIDER_ID } from "../src/models.js";
 
 const builtinModels = getBuiltinModels("anthropic");
 const opus48 = builtinModels.find((model) => model.id === "claude-opus-4-8")!;
@@ -38,6 +38,17 @@ function context(store: ProviderModelsStore, allowNetwork: boolean): RefreshMode
 	return { store, allowNetwork, force: true };
 }
 
+const advertises = (models: readonly ModelInfo[]) => async () => models;
+const neverAsked = async (): Promise<readonly ModelInfo[]> => {
+	throw new Error("Claude Code must not be asked when the store can answer");
+};
+const dated: ModelInfo[] = [{
+	value: "haiku",
+	resolvedModel: "claude-haiku-4-5-20251001",
+	displayName: "Haiku",
+	description: "Haiku 4.5",
+}];
+
 function response(models: readonly Model<any>[]): Response {
 	return new Response(JSON.stringify(models), {
 		status: 200,
@@ -50,46 +61,73 @@ const testDependencies: ModelCatalogDependencies = {
 	now: Date.now,
 	builtinGeneratedAt: 0,
 	builtinModels,
-	readSharedCatalog: async () => undefined,
 };
 
 describe("dynamic bridge model catalog", () => {
-	it("initializes from Pi's shared Anthropic cache before model selection", async () => {
-		const catalog = createBridgeModelCatalog({
-			...testDependencies,
-			readSharedCatalog: async () => ({
-				models: [...builtinModels, opus5],
-				checkedAt: Date.parse("2026-07-25T00:00:00Z"),
-				lastModified: Date.parse("2026-07-24T19:15:06Z"),
-			}),
-		});
-		await catalog.initialize(supportedModels);
+	it("restores the last confirmed allowlist on a cold offline start", async () => {
+		const store = memoryStore({
+			models: [...builtinModels, opus5],
+			checkedAt: Date.parse("2026-07-25T00:00:00Z"),
+			lastModified: Date.parse("2026-07-24T19:15:06Z"),
+			supportedModelIds: ["claude-opus-5"],
+		} as ModelsStoreEntry);
+		const catalog = createBridgeModelCatalog(testDependencies);
+		await catalog.refresh(context(store, false), neverAsked);
 		assert.equal(catalog.getModels().some((model) => model.id === "claude-opus-5"), true);
 	});
 
-	it("uses a newly published built-in model without requiring a remote cache", async () => {
-		let fetches = 0;
+	it("uses a newly published built-in model offline without a remote cache", async () => {
+		const store = memoryStore({ models: [], supportedModelIds: ["claude-opus-5"] } as unknown as ModelsStoreEntry);
 		const catalog = createBridgeModelCatalog({
 			...testDependencies,
 			builtinModels: [...builtinModels, opus5],
 			builtinGeneratedAt: Date.parse("2026-07-25T00:00:00Z"),
-			requestCatalog: async () => { fetches++; return response([...builtinModels, opus5]); },
+			requestCatalog: async () => { throw new Error("network must remain unused"); },
 		});
-		await catalog.initialize(supportedModels);
-		assert.equal(fetches, 0);
+		await catalog.refresh(context(store, false), neverAsked);
 		assert.equal(catalog.getModels().some((model) => model.id === "claude-opus-5"), true);
 	});
 
-	it("fetches the canonical catalog when Pi's shared cache is unusable", async () => {
-		let fetches = 0;
+	it("records a newly advertised model against a still-fresh canonical catalog", async () => {
+		const checkedAt = Date.parse("2026-07-25T00:00:00Z");
+		const store = memoryStore({
+			models: [...builtinModels, opus5],
+			checkedAt,
+			lastModified: checkedAt,
+			supportedModelIds: [],
+		} as ModelsStoreEntry);
 		const catalog = createBridgeModelCatalog({
 			...testDependencies,
-			readSharedCatalog: async () => { throw new Error("corrupt shared cache"); },
-			requestCatalog: async () => { fetches++; return response([...builtinModels, opus5]); },
+			now: () => checkedAt,
+			requestCatalog: async () => { throw new Error("a fresh catalog must not be refetched"); },
 		});
-		await catalog.initialize(supportedModels);
-		assert.equal(fetches, 1);
+
+		await catalog.refresh({ ...context(store, true), force: false }, advertises(supportedModels));
 		assert.equal(catalog.getModels().some((model) => model.id === "claude-opus-5"), true);
+		assert.deepEqual((store.entry as ModelsStoreEntry & { supportedModelIds: string[] }).supportedModelIds, ["claude-opus-5"]);
+		assert.equal(store.entry?.checkedAt, checkedAt);
+	});
+
+	it("refetches when a fresh canonical catalog cannot describe an advertised model", async () => {
+		const checkedAt = Date.parse("2026-07-25T00:00:00Z");
+		const store = memoryStore({
+			models: builtinModels,
+			checkedAt,
+			lastModified: Date.parse("2026-07-20T00:00:00Z"),
+			supportedModelIds: [],
+		} as ModelsStoreEntry);
+		const catalog = createBridgeModelCatalog({
+			...testDependencies,
+			now: () => checkedAt,
+			requestCatalog: async () => response([...builtinModels, opus5]),
+		});
+
+		await catalog.refresh({ ...context(store, true), force: false }, advertises(supportedModels));
+		assert.equal(
+			catalog.getModels().some((model) => model.id === "claude-opus-5"),
+			true,
+			"a model nothing on hand can describe must be fetched rather than left invisible",
+		);
 	});
 
 	it("adds only stable models advertised by Claude Code and preserves canonical metadata", async () => {
@@ -100,18 +138,9 @@ describe("dynamic bridge model catalog", () => {
 			requestCatalog: async () => response([...builtinModels, opus5, future]),
 		});
 
-		await catalog.refresh(context(store, true), supportedModels);
+		await catalog.refresh(context(store, true), advertises(supportedModels));
 		const models = catalog.getModels();
-		assert.deepEqual(models.map((model) => model.id), [
-			"claude-fable-5",
-			"claude-opus-5",
-			"claude-opus-4-8",
-			"claude-opus-4-7",
-			"claude-opus-4-6",
-			"claude-sonnet-5",
-			"claude-sonnet-4-6",
-			"claude-haiku-4-5",
-		]);
+		assert.deepEqual(models.map((model) => model.id), ["claude-opus-5"]);
 		const added = models.find((model) => model.id === "claude-opus-5")!;
 		assert.equal(added.provider, PROVIDER_ID);
 		assert.deepEqual(added.cost, opus5.cost);
@@ -123,10 +152,10 @@ describe("dynamic bridge model catalog", () => {
 		assert.ok(persisted.models.some((model) => model.id === "claude-opus-6"));
 		assert.deepEqual(persisted.supportedModelIds, ["claude-opus-5"]);
 
-		await catalog.refresh(context(store, true), [
+		await catalog.refresh(context(store, true), advertises([
 			...supportedModels,
 			{ ...supportedModels[0], resolvedModel: "claude-opus-6" },
-		]);
+		]));
 		assert.ok(catalog.getModels().some((model) => model.id === "claude-opus-6"));
 	});
 
@@ -136,20 +165,128 @@ describe("dynamic bridge model catalog", () => {
 			...testDependencies,
 			requestCatalog: async () => response([...builtinModels, opus5]),
 		});
-		await online.refresh(context(store, true), supportedModels);
+		await online.refresh(context(store, true), advertises(supportedModels));
 
 		const offline = createBridgeModelCatalog({
 			...testDependencies,
 			requestCatalog: async () => { throw new Error("network must remain unused"); },
 		});
-		await offline.refresh(context(store, false), []);
+		await offline.refresh(context(store, false), neverAsked);
 		assert.equal(offline.getModels().some((model) => model.id === "claude-opus-5"), true);
 	});
 
-	it("retains the seven-model baseline when no refreshed cache exists", async () => {
-		const catalog = createBridgeModelCatalog(testDependencies);
-		await catalog.refresh(context(memoryStore(), false), []);
-		assert.deepEqual(catalog.getModels().map((model) => model.id), MODEL_IDS_IN_ORDER);
+	it("normalizes a dated snapshot onto the family ID Pi describes", async () => {
+		const store = memoryStore();
+		const catalog = createBridgeModelCatalog({
+			...testDependencies,
+			requestCatalog: async () => response(builtinModels),
+		});
+		await catalog.refresh(context(store, true), advertises(dated));
+		assert.deepEqual(catalog.getModels().map((model) => model.id), ["claude-haiku-4-5"]);
+		assert.deepEqual((store.entry as ModelsStoreEntry & { supportedModelIds: string[] }).supportedModelIds, ["claude-haiku-4-5"]);
+	});
+
+	it("drops mutable aliases that name no model family", async () => {
+		const catalog = createBridgeModelCatalog({
+			...testDependencies,
+			requestCatalog: async () => response(builtinModels),
+		});
+		await catalog.refresh(context(memoryStore(), true), advertises([
+			{ value: "default", displayName: "Default", description: "" },
+			{ value: "sonnet", resolvedModel: "claude-sonnet-5", displayName: "Sonnet", description: "" },
+		]));
+		assert.deepEqual(catalog.getModels().map((model) => model.id), ["claude-sonnet-5"]);
+	});
+});
+
+describe("first load", () => {
+	it("discovers once when the installation has never asked, even while Pi replays caches", async () => {
+		const store = memoryStore();
+		let asked = 0;
+		const catalog = createBridgeModelCatalog({
+			...testDependencies,
+			requestCatalog: async () => response([...builtinModels, opus5]),
+		});
+		const ask = async () => { asked++; return supportedModels; };
+
+		await catalog.refresh(context(store, false), ask);
+		assert.equal(asked, 1);
+		assert.deepEqual(catalog.getModels().map((model) => model.id), ["claude-opus-5"]);
+
+		await catalog.refresh(context(store, false), ask);
+		assert.equal(asked, 1, "a bootstrapped installation replays its store instead of asking again");
+		assert.deepEqual(catalog.getModels().map((model) => model.id), ["claude-opus-5"]);
+	});
+
+	it("rediscovers instead of stranding the provider on an unusable store entry", async () => {
+		const store = memoryStore({ models: [{ id: "claude-opus-5" }], supportedModelIds: ["claude-opus-5"] } as unknown as ModelsStoreEntry);
+		const catalog = createBridgeModelCatalog({
+			...testDependencies,
+			requestCatalog: async () => response([...builtinModels, opus5]),
+		});
+		await catalog.refresh(context(store, false), advertises(supportedModels));
+		assert.deepEqual(catalog.getModels().map((model) => model.id), ["claude-opus-5"]);
+		assert.ok(store.entry?.models.length, "the unusable entry is replaced");
+	});
+
+	it("does not retry a failed first load on every start", async () => {
+		const store = memoryStore();
+		let asked = 0;
+		const catalog = createBridgeModelCatalog({
+			...testDependencies,
+			requestCatalog: async () => { throw new Error("offline"); },
+		});
+		const ask = async () => { asked++; return supportedModels; };
+
+		await assert.rejects(catalog.refresh(context(store, false), ask), /offline/);
+		assert.equal(asked, 1);
+		assert.ok(store.entry, "the failed attempt is recorded");
+
+		await catalog.refresh(context(store, false), ask);
+		assert.equal(asked, 1);
+		assert.deepEqual(catalog.getModels(), []);
+	});
+
+	it("keeps a confirmed allowlist that the built-ins can already describe when the fetch fails", async () => {
+		const store = memoryStore();
+		const catalog = createBridgeModelCatalog({
+			...testDependencies,
+			requestCatalog: async () => { throw new Error("offline"); },
+		});
+		await assert.rejects(catalog.refresh(context(store, false), advertises(dated)), /offline/);
+
+		const restarted = createBridgeModelCatalog({
+			...testDependencies,
+			requestCatalog: async () => { throw new Error("network must remain unused"); },
+		});
+		await restarted.refresh(context(store, false), neverAsked);
+		assert.deepEqual(
+			restarted.getModels().map((model) => model.id),
+			["claude-haiku-4-5"],
+			"the probe already confirmed the model, so a failed catalog fetch must not discard it",
+		);
+	});
+
+	it("records the newly advertised allowlist when the fetch fails", async () => {
+		const checkedAt = Date.parse("2026-07-24T00:00:00Z");
+		const store = memoryStore({
+			models: builtinModels,
+			checkedAt,
+			lastModified: checkedAt,
+			supportedModelIds: ["claude-sonnet-5"],
+		} as ModelsStoreEntry);
+		const catalog = createBridgeModelCatalog({
+			...testDependencies,
+			now: () => Date.parse("2026-07-25T00:00:00Z"),
+			requestCatalog: async () => { throw new Error("offline"); },
+		});
+
+		await assert.rejects(catalog.refresh(context(store, true), advertises(dated)), /offline/);
+		assert.deepEqual(
+			(store.entry as ModelsStoreEntry & { supportedModelIds: string[] }).supportedModelIds,
+			["claude-haiku-4-5"],
+			"a failed fetch must not replay a stale allowlist on every later start",
+		);
 	});
 
 	it("records failed attempts separately from successful checks", async () => {
@@ -161,7 +298,7 @@ describe("dynamic bridge model catalog", () => {
 			now: () => failedAt,
 			requestCatalog: async () => { throw new Error("offline"); },
 		});
-		await assert.rejects(catalog.refresh(context(store, true), supportedModels), /offline/);
+		await assert.rejects(catalog.refresh(context(store, true), advertises(supportedModels)), /offline/);
 		assert.equal(store.entry?.checkedAt, checkedAt);
 		assert.equal((store.entry as ModelsStoreEntry & { failedAt: number }).failedAt, failedAt);
 	});
@@ -171,7 +308,7 @@ describe("dynamic bridge model catalog", () => {
 			...testDependencies,
 			requestCatalog: async () => new Response(JSON.stringify([{ id: "claude-opus-5" }]), { status: 200 }),
 		});
-		await assert.rejects(catalog.refresh(context(memoryStore(), true), supportedModels), /malformed metadata/);
-		assert.deepEqual(catalog.getModels().map((model) => model.id), MODEL_IDS_IN_ORDER);
+		await assert.rejects(catalog.refresh(context(memoryStore(), true), advertises(supportedModels)), /malformed metadata/);
+		assert.deepEqual(catalog.getModels(), []);
 	});
 });

@@ -9,7 +9,7 @@ The Pi provider backed by Claude Code subscription authentication and Agent SDK 
 _Avoid_: Anthropic provider, Claude Code provider
 
 **Supported model catalog**:
-The closed set of stable model IDs with explicit Agent SDK runtime and context-window policy in this extension.
+The stable model IDs Claude Code currently advertises, described by Pi's canonical Anthropic metadata and cached per installation.
 _Avoid_: Anthropic catalog, SDK model list
 
 **First-party Claude Code account**:

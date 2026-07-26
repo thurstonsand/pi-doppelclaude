@@ -27,7 +27,7 @@ Authenticate with Claude Code first:
 claude auth login
 ```
 
-Use `/model` to select a model under the `anthropic-agent-sdk` provider, such as `anthropic-agent-sdk/claude-opus-5` or `anthropic-agent-sdk/claude-sonnet-5`. The bridge retains seven bundled models as its offline baseline and adds newer stable model IDs only when they appear in both Pi's canonical Anthropic catalog and Claude Code's public supported-model list. Pi refreshes and caches that catalog automatically; run `pi update --models` to force an immediate refresh.
+Use `/model` to select a model under the `anthropic-agent-sdk` provider, such as `anthropic-agent-sdk/claude-opus-5` or `anthropic-agent-sdk/claude-sonnet-5`. The bridge just exposes whatever models Claude Code currently does. It asks Claude Code once per installation and caches the answer; run `pi update --models` to pick up a model Claude Code has started serving since.
 
 Claude Code owns authentication; Pi stores no key for this provider. Run `claude auth login` in a terminal.
 

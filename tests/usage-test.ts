@@ -137,6 +137,7 @@ function setupEnv(): NodeJS.ProcessEnv {
 		PI_CODING_AGENT_DIR: agentDir,
 		CLAUDE_BRIDGE_DEBUG: "1",
 		CLAUDE_BRIDGE_DEBUG_PATH: join(LOGDIR, "usage-test-debug.log"),
+		CLAUDE_CODE_SAFE_MODE: "1",
 	};
 }
 

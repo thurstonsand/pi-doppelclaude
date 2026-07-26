@@ -1,11 +1,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { createCompaction } from "../src/compaction.js";
-import { buildModels } from "../src/models.js";
+import { bridgeModel } from "./lib/models.js";
 
-const model = buildModels(getBuiltinModels("anthropic")).find((candidate) => candidate.id === "claude-haiku-4-5")!;
+const model = bridgeModel("claude-haiku-4-5");
 const usage = {
 	input_tokens: 11,
 	output_tokens: 7,

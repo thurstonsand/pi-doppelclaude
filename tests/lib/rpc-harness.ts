@@ -217,7 +217,15 @@ export function createRpcHarness(opts: RpcHarnessOptions) {
 		pi = spawn("pi", spawnArgs, {
 			cwd,
 			stdio: ["pipe", "pipe", "pipe"],
-			env: { ...process.env, ...env, PATH: cleanPath, PI_CODING_AGENT_DIR: AGENT_DIR, CLAUDE_BRIDGE_DEBUG: "1", CLAUDE_BRIDGE_DEBUG_PATH: DEBUG_LOG },
+			env: {
+				...process.env,
+				...env,
+				PATH: cleanPath,
+				PI_CODING_AGENT_DIR: AGENT_DIR,
+				CLAUDE_BRIDGE_DEBUG: "1",
+				CLAUDE_BRIDGE_DEBUG_PATH: DEBUG_LOG,
+				CLAUDE_CODE_SAFE_MODE: "1",
+			},
 		});
 
 		pi.stderr.on("data", (d) => rpcLog.write(d));
@@ -248,9 +256,20 @@ export function createRpcHarness(opts: RpcHarnessOptions) {
 
 	async function stop() {
 		if (pi && pi.exitCode === null) {
-			const closed = new Promise((resolve) => pi.once("close", resolve));
-			pi.kill();
-			await closed;
+			const closed = new Promise<void>((resolve) => pi.once("close", () => resolve()));
+			pi.stdin.end();
+			let timeout: ReturnType<typeof setTimeout> | undefined;
+			const exited = await Promise.race([
+				closed.then(() => true),
+				new Promise<false>((resolve) => {
+					timeout = setTimeout(() => resolve(false), 10_000);
+				}),
+			]);
+			if (timeout) clearTimeout(timeout);
+			if (!exited) {
+				pi.kill();
+				await closed;
+			}
 		}
 		if (rpcLog) await new Promise((resolve) => rpcLog.end(resolve));
 	}

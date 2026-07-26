@@ -59,7 +59,7 @@ cat > "$PI_CODING_AGENT_DIR/models.json" <<'JSON'
   "providers": {
     "anthropic-agent-sdk": {
       "modelOverrides": {
-        "claude-opus-4-8": { "contextWindow": 200000 }
+        "claude-sonnet-5": { "contextWindow": 200000 }
       },
       "models": [
         { "id": "claude-future-9-9", "api": "anthropic-agent-sdk", "baseUrl": "claude-code://local" }
@@ -78,14 +78,20 @@ run "provider: print mode responds" \
 run "provider: --provider flag works" \
   bash -c "pi --no-session -ne -e '$DIR' --provider anthropic-agent-sdk --model claude-haiku-4-5 -p 'Reply with only the word yes' 2>&1 | grep -qiE '^[[:space:]]*yes[[:space:]]*\$' && echo ok"
 
-run "provider: model list includes all seven baseline models" \
-  bash -c "[ \"\$(pi --no-session -ne -e '$DIR' --list-models 2>&1 | grep -Ec '^anthropic-agent-sdk[[:space:]]+claude-(fable-5|haiku-4-5|opus-4-(6|7|8)|sonnet-(5|4-6))[[:space:]]')\" -eq 7 ] && echo ok"
+# Startup replays the cached catalog without asking Claude Code, so the sandbox must offer the
+# models its copied store recorded.
+run "provider: cached catalog is replayed without a probe" \
+  bash -c "[ \"\$(pi --no-session -ne -e '$DIR' --list-models 2>&1 | grep -Ec '^anthropic-agent-sdk[[:space:]]+claude-')\" -ge 3 ] && echo ok"
 
 run "provider: dynamic model list includes Opus 5" \
   bash -c "pi --no-session -ne -e '$DIR' --list-models 2>&1 | grep -Eq '^anthropic-agent-sdk[[:space:]]+claude-opus-5[[:space:]]+1M[[:space:]]+128K[[:space:]]' && echo ok"
 
+# Claude Code advertises Haiku only as a dated snapshot; it must be cached as the family model.
+run "provider: dated snapshot resolves to its family model" \
+  bash -c "output=\$(pi --no-session -ne -e '$DIR' --list-models 2>&1) && grep -Eq '^anthropic-agent-sdk[[:space:]]+claude-haiku-4-5[[:space:]]' <<<\"\$output\" && ! grep -Eq '^anthropic-agent-sdk[[:space:]]+claude-haiku-4-5-' <<<\"\$output\" && echo ok"
+
 run "provider: modelOverrides apply and additions stay hidden" \
-  bash -c "output=\$(pi --no-session -ne -e '$DIR' --list-models 2>&1) && grep -Eq '^anthropic-agent-sdk[[:space:]]+claude-opus-4-8[[:space:]]+200K[[:space:]]' <<<\"\$output\" && ! grep -q 'claude-future-9-9' <<<\"\$output\" && echo ok"
+  bash -c "output=\$(pi --no-session -ne -e '$DIR' --list-models 2>&1) && grep -Eq '^anthropic-agent-sdk[[:space:]]+claude-sonnet-5[[:space:]]+200K[[:space:]]' <<<\"\$output\" && ! grep -q 'claude-future-9-9' <<<\"\$output\" && echo ok"
 
 CLAUDE_EXECUTABLE=$(command -v claude)
 CLAUDE_SPAWN_LOG="$LOGDIR/rejected-model-claude-spawns.log"

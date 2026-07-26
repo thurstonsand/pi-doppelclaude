@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
-import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
 import type { AssistantMessage, AssistantMessageEvent, Context } from "@earendil-works/pi-ai";
-import { buildModels } from "../src/models.js";
+import { bridgeModel } from "./lib/models.js";
 import { createBridgeRuntime } from "../src/bridge-runtime.js";
 import { BridgeSessionStore, type SessionStoreWriter } from "../src/session-store.js";
 
@@ -43,7 +42,7 @@ async function terminalMessage(stream: AsyncIterable<AssistantMessageEvent>): Pr
 	throw new Error("provider stream ended without a terminal event");
 }
 
-const model = buildModels(getBuiltinModels("anthropic")).find((candidate) => candidate.id === "claude-haiku-4-5")!;
+const model = bridgeModel("claude-haiku-4-5");
 const store = new BlockingMirrorStore();
 const runtime = createBridgeRuntime({ providerSettings: { systemPromptMode: "claude-code" }, sessionStore: store });
 const context: Context = {

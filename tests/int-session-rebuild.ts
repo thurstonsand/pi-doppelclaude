@@ -25,6 +25,7 @@ async function run(store: BridgeSessionStore, sessionId: string, prompt: string,
 		options: {
 			resume: sessionId,
 			sessionStore: writer,
+			env: { ...process.env, CLAUDE_CODE_SAFE_MODE: "1" },
 			cwd: CWD,
 			model: MODEL,
 			permissionMode: "bypassPermissions",

@@ -25,49 +25,35 @@ interface ProviderDependencies {
 	modelCatalog?: BridgeModelCatalog;
 }
 
-export interface AnthropicAgentSdkProvider extends Provider<typeof PROVIDER_API> {
-	initializeModels(): Promise<void>;
-}
-
 const THINKING_LEVELS = new Set<string>(["minimal", "low", "medium", "high", "xhigh", "max"]);
 
 function compatibleReasoning(reasoning: unknown): ThinkingLevel | undefined {
 	return typeof reasoning === "string" && THINKING_LEVELS.has(reasoning) ? reasoning as ThinkingLevel : undefined;
 }
 
-export function createAnthropicAgentSdkProvider(dependencies: ProviderDependencies): AnthropicAgentSdkProvider {
+export function createAnthropicAgentSdkProvider(dependencies: ProviderDependencies): Provider<typeof PROVIDER_API> {
 	const catalog = dependencies.modelCatalog ?? createBridgeModelCatalog();
 	let lastSnapshot: AccountSnapshot | undefined;
-	let lastProbe: Promise<AccountSnapshot> | undefined;
 	let inFlightProbe: Promise<AccountSnapshot> | undefined;
 
-	const launchProbe = (): Promise<AccountSnapshot> => {
-		const tracked = dependencies.accountProbe().then((snapshot) => {
+	// Asking Claude Code what it serves costs a full CLI boot, so the probe runs only when the
+	// catalog asks for it. Every other path replays the catalog Pi already persisted.
+	const probeAccount = (): Promise<AccountSnapshot> => {
+		const tracked = inFlightProbe ?? dependencies.accountProbe().then((snapshot) => {
 			lastSnapshot = snapshot;
 			return snapshot;
 		}).finally(() => {
 			if (inFlightProbe === tracked) inFlightProbe = undefined;
 		});
-		lastProbe = tracked;
 		inFlightProbe = tracked;
-		void tracked.catch(() => {});
 		return tracked;
 	};
 
-	const startProbe = (fresh: boolean): Promise<AccountSnapshot> =>
-		inFlightProbe ?? (!fresh ? lastProbe : undefined) ?? launchProbe();
-
-	const check = async () => {
-		const unavailable = lastSnapshot?.available === false;
-		void startProbe(true);
-		return unavailable ? undefined : { type: "api_key" as const, source: "Claude Code" };
-	};
-
-	const resolve = async () => {
-		const snapshot = await startProbe(false);
-		if (!snapshot.available) return undefined;
-		return { auth: {}, source: "Claude Code" };
-	};
+	// Claude Code authenticates its own subprocess, so the bridge holds no credential to validate.
+	// Ambient auth stands until a completed probe reports the account logged out.
+	const authenticated = () => lastSnapshot?.available !== false;
+	const check = async () => authenticated() ? { type: "api_key" as const, source: "Claude Code" } : undefined;
+	const resolve = async () => authenticated() ? { auth: {}, source: "Claude Code" } : undefined;
 
 	const validatedStream = (
 		model: Model<any>,
@@ -83,10 +69,6 @@ export function createAnthropicAgentSdkProvider(dependencies: ProviderDependenci
 	};
 
 	return {
-		async initializeModels() {
-			const snapshot = await startProbe(false);
-			await catalog.initialize(snapshot.supportedModels);
-		},
 		id: PROVIDER_ID,
 		name: PROVIDER_NAME,
 		baseUrl: PROVIDER_BASE_URL,
@@ -99,8 +81,7 @@ export function createAnthropicAgentSdkProvider(dependencies: ProviderDependenci
 		},
 		getModels: catalog.getModels,
 		async refreshModels(context) {
-			const snapshot = context.allowNetwork ? await startProbe(true) : undefined;
-			await catalog.refresh(context, snapshot?.supportedModels ?? []);
+			await catalog.refresh(context, async () => (await probeAccount()).supportedModels);
 		},
 		filterModels: (candidates) => candidates.filter(isSupportedModel),
 		stream(model, context, options) {
