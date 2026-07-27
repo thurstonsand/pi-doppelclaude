@@ -471,6 +471,11 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
 			if (c.sessionStoreWriter === storeWriter) c.sessionStoreWriter = null;
 			if (c.localSessionFragment === localSessionFragment) c.localSessionFragment = null;
 			if (c.closeCompletion === closeCompletion) c.closeCompletion = null;
+			// A subprocess that died rejects its completion, and this close swallows that rejection by
+			// passing finishClose to both arms. Leaving the rejected promise on the context would let the
+			// nothing-to-close guard above hand it back raw, so the next caller to ask "anything to close?"
+			// inherits the corpse of a query that died long before it got here.
+			if (c.completion === completion) c.completion = null;
 		};
 		const closeCompletion = completion.then(finishClose, finishClose);
 		c.closeCompletion = closeCompletion;

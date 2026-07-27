@@ -117,6 +117,28 @@ describe("bridge runtime isolation", () => {
 		await closing;
 	});
 
+	it("does not replay a dead query's rejection to the next caller that closes", async () => {
+		const runtime = makeRuntime();
+		const context = runtime.test.rootContext;
+		context.persistent = true;
+		const query = Object.create(null) as Query;
+		query.close = () => {};
+		context.activeQuery = query;
+		context.inputQueue = new PushQueue();
+		let killQuery: (error: Error) => void;
+		const completion = new Promise<void>((_resolve, reject) => { killQuery = reject; });
+		context.completion = completion;
+		completion.catch(() => {});
+
+		// The child dies on its own, and the consumer's own close absorbs the rejection.
+		const closing = runtime.test.closeQueryContext(context, "child exited", "force");
+		killQuery!(new Error("Claude Code process exited with code 1"));
+		await closing;
+
+		// A later provider switch has nothing left to close and must not inherit that failure.
+		await runtime.closePersistent("provider switch");
+	});
+
 	it("reuses an interrupted query only after an empty receipt and terminal abort metadata", () => {
 		const runtime = makeRuntime();
 		const context = runtime.test.rootContext;
