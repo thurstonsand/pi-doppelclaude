@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-// Context continuity test for pi-claude-bridge provider.
+// Context continuity test for pi-doppelclaude provider.
 // Verifies that switching away from the provider and back correctly
 // preserves conversation context (all messages are flattened into
 // each query, so "missed" messages are automatically included).
 //
 // Requires: pi CLI, Claude Code (for Agent SDK subprocess).
-// Requires: CLAUDE_BRIDGE_TESTING_ALT_PROVIDER and CLAUDE_BRIDGE_TESTING_ALT_MODEL
+// Requires: DOPPELCLAUDE_TESTING_ALT_PROVIDER and DOPPELCLAUDE_TESTING_ALT_MODEL
 // naming any authenticated non-bridge model available to pi.
 
 console.log("=== session-resume-test.ts ===");
@@ -15,18 +15,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRpcHarness, requireEnv } from "./lib/rpc-harness.js";
 
-const OTHER_PROVIDER = requireEnv("CLAUDE_BRIDGE_TESTING_ALT_PROVIDER");
-const OTHER_MODEL = requireEnv("CLAUDE_BRIDGE_TESTING_ALT_MODEL");
+const OTHER_PROVIDER = requireEnv("DOPPELCLAUDE_TESTING_ALT_PROVIDER");
+const OTHER_MODEL = requireEnv("DOPPELCLAUDE_TESTING_ALT_MODEL");
 
 const TIMEOUT = 180_000;
-const BRIDGE_MODEL = "anthropic-agent-sdk/claude-haiku-4-5";
+const BRIDGE_MODEL = "doppelclaude/claude-haiku-4-5";
 
 // Random words to avoid Claude memorizing test values across runs
 const WORD_A = `alpha${Math.random().toString(36).slice(2, 6)}`;
 const WORD_B = `beta${Math.random().toString(36).slice(2, 6)}`;
 const WORD_C = `gamma${Math.random().toString(36).slice(2, 6)}`;
 
-const TEST_CWD_PREFIX = join(tmpdir(), "pi-claude-bridge-session-resume-");
+const TEST_CWD_PREFIX = join(tmpdir(), "pi-doppelclaude-session-resume-");
 const TEST_CWD = mkdtempSync(TEST_CWD_PREFIX);
 mkdirSync(join(TEST_CWD, ".pi"));
 

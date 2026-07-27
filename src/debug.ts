@@ -6,9 +6,9 @@ import { dirname, join } from "path";
 import type { BridgeSettings } from "./settings.js";
 
 export let DEBUG = false;
-let debugLogPath = join(getAgentDir(), "claude-bridge.log");
-const DIAG_LOG_PATH = join(getAgentDir(), "claude-bridge-diag.log");
-const BRIDGE_CLIENT_APP = "pi-claude-bridge/0.6.2";
+let debugLogPath = join(getAgentDir(), "doppelclaude.log");
+const DIAG_LOG_PATH = join(getAgentDir(), "doppelclaude-diag.log");
+const BRIDGE_CLIENT_APP = "pi-doppelclaude/0.6.2";
 
 export function configureDebug(settings: BridgeSettings["debug"]): void {
 	DEBUG = settings.enabled;
@@ -37,7 +37,7 @@ export function debug(...args: unknown[]) {
 	appendFileSync(debugLogPath, `[${ts}] [${moduleInstanceId}] ${msg}\n`);
 }
 
-// Per-query CLI debug capture. When CLAUDE_BRIDGE_DEBUG=1, ask the Claude Code
+// Per-query CLI debug capture. When DOPPELCLAUDE_DEBUG=1, ask the Claude Code
 // CLI subprocess to write its own debug log to a file we choose, and also
 // forward its stderr into our debug stream. Drops straight into the real SDK's
 // Options — see @anthropic-ai/claude-agent-sdk sdk.d.ts:1245 (debug, debugFile,

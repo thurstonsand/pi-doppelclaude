@@ -6,7 +6,7 @@ import { createRpcHarness } from "./lib/rpc-harness.js";
 const harness = createRpcHarness({
 	name: "mcp-reconcile",
 	args: [
-		"--model", "anthropic-agent-sdk/claude-haiku-4-5",
+		"--model", "doppelclaude/claude-haiku-4-5",
 		"-e", `${process.cwd()}/tests/fixtures/tool-set-extension.ts`,
 	],
 	defaultTimeout: 120_000,

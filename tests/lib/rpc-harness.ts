@@ -175,7 +175,7 @@ export function isolateAgentDir(name: string, logdir: string, customAgentDir?: s
 		: {};
 	writeFileSync(settingsPath, JSON.stringify({
 		...settings,
-		claudeBridge: { provider: { systemPromptMode: "claude-code" } },
+		doppelclaude: { provider: { systemPromptMode: "claude-code" } },
 	}, null, 2));
 	return sandbox;
 }
@@ -222,8 +222,8 @@ export function createRpcHarness(opts: RpcHarnessOptions) {
 				...env,
 				PATH: cleanPath,
 				PI_CODING_AGENT_DIR: AGENT_DIR,
-				CLAUDE_BRIDGE_DEBUG: "1",
-				CLAUDE_BRIDGE_DEBUG_PATH: DEBUG_LOG,
+				DOPPELCLAUDE_DEBUG: "1",
+				DOPPELCLAUDE_DEBUG_PATH: DEBUG_LOG,
 				CLAUDE_CODE_SAFE_MODE: "1",
 			},
 		});

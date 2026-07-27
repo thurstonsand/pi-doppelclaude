@@ -16,12 +16,22 @@ Pi documentation (read only when the user asks about pi itself, its SDK, extensi
 - When reading pi docs or examples, resolve docs/... under Additional docs and examples/... under Examples, not the current working directory
 - Always read pi .md files completely and follow links to related docs (e.g., tui.md for TUI API details)`;
 
+const REPLACEMENTS = {
+	identity: "Custom identity.",
+	toolNameNote: "Custom tool note.",
+	documentation: {
+		heading: "Custom docs:",
+		instructions: ["Custom instructions."],
+	},
+};
+
 describe("rewritePiSystemPrompt", () => {
 	it("uses custom documentation prose while preserving discovered paths", () => {
 		const rewritten = rewritePiSystemPrompt(SYSTEM_PROMPT, {
+			...REPLACEMENTS,
 			documentation: {
 				heading: "Custom implementation references:",
-				instructions: "Consult them quietly and only when required.",
+				instructions: ["Consult them quietly and only when required."],
 			},
 		});
 
@@ -32,27 +42,27 @@ describe("rewritePiSystemPrompt", () => {
 		assert.doesNotMatch(rewritten, /Assistant implementation docs/);
 	});
 
-	it("applies optional identity and tool-note replacements", () => {
+	it("joins each instruction line under the preserved paths", () => {
 		const rewritten = rewritePiSystemPrompt(SYSTEM_PROMPT, {
-			identity: "Custom identity.",
-			toolNameNote: "Custom tool note.",
+			...REPLACEMENTS,
 			documentation: {
 				heading: "Custom docs:",
-				instructions: "Custom instructions.",
+				instructions: ["- First line.", "- Second line."],
 			},
 		});
+
+		assert.match(rewritten, /- Examples: \/opt\/pi\/examples\n- First line\.\n- Second line\./);
+	});
+
+	it("applies identity and tool-note replacements", () => {
+		const rewritten = rewritePiSystemPrompt(SYSTEM_PROMPT, REPLACEMENTS);
 
 		assert.ok(rewritten.startsWith("Custom identity."));
 		assert.match(rewritten, /Custom tool note\.\n\nAvailable tools:/);
 	});
 
 	it("uses only the rewritten Pi system prompt in pi mode", () => {
-		const systemPrompt = buildClaudeSystemPrompt(SYSTEM_PROMPT, "pi", {
-			documentation: {
-				heading: "Custom docs:",
-				instructions: "Custom instructions.",
-			},
-		});
+		const systemPrompt = buildClaudeSystemPrompt(SYSTEM_PROMPT, "pi", REPLACEMENTS);
 
 		assert(typeof systemPrompt === "string");
 		assert.doesNotMatch(systemPrompt, /Pi documentation/);
@@ -60,12 +70,7 @@ describe("rewritePiSystemPrompt", () => {
 	});
 
 	it("appends the rewritten Pi system prompt to Claude Code's preset", () => {
-		const systemPrompt = buildClaudeSystemPrompt(SYSTEM_PROMPT, "append", {
-			documentation: {
-				heading: "Custom docs:",
-				instructions: "Custom instructions.",
-			},
-		});
+		const systemPrompt = buildClaudeSystemPrompt(SYSTEM_PROMPT, "append", REPLACEMENTS);
 
 		assert(typeof systemPrompt !== "string");
 		assert.equal(systemPrompt.type, "preset");

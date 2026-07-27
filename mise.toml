@@ -26,3 +26,11 @@ run = "npm run lint"
 [tasks.test]
 description = "Run the test suite"
 run = "npm test"
+
+[tasks."test:unit"]
+description = "Run the offline unit tests"
+run = "npm run test:unit"
+
+[tasks.check]
+description = "Run offline verification (integration tests via `mise run test` hit live APIs)"
+depends = ["lint", "test:unit"]

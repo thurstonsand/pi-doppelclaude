@@ -8,7 +8,7 @@ import type { Model } from "@earendil-works/pi-ai";
 import { PushQueue, QueryContext } from "../src/query-state.js";
 
 // Minimal stand-in for pi-ai's Model; resetTurnState only records identity here.
-const fakeModel = { api: "anthropic-agent-sdk", provider: "anthropic-agent-sdk", id: "test-model" } as Model<any>;
+const fakeModel = { api: "doppelclaude", provider: "doppelclaude", id: "test-model" } as Model<any>;
 
 describe("QueryContext class", () => {
 	it("turnBlocks throws before resetTurnState", () => {

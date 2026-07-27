@@ -9,7 +9,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { createRpcHarness } from "./lib/rpc-harness.js";
 
-const BRIDGE_MODEL = "anthropic-agent-sdk/claude-haiku-4-5";
+const BRIDGE_MODEL = "doppelclaude/claude-haiku-4-5";
 const TEST_TIMEOUT = 240_000;
 const NESTED_AGENT_EXTENSION = resolve("tests/fixtures/nested-agent-extension.ts");
 const REENTRANT_MARKER = /provider: fresh streaming query[^\n]*persistent=false/g;

@@ -8,10 +8,10 @@ import { join } from "node:path";
 import { getProjectDir } from "cc-session-io";
 import { createRpcHarness } from "./lib/rpc-harness.js";
 
-const cwd = mkdtempSync(join(tmpdir(), "pi-claude-bridge-fragment-cleanup-"));
+const cwd = mkdtempSync(join(tmpdir(), "pi-doppelclaude-fragment-cleanup-"));
 const harness = createRpcHarness({
 	name: "session-fragment-cleanup",
-	args: ["--model", "anthropic-agent-sdk/claude-haiku-4-5"],
+	args: ["--model", "doppelclaude/claude-haiku-4-5"],
 	cwd,
 	defaultTimeout: 120_000,
 });

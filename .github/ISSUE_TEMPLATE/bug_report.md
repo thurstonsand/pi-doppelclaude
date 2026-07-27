@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Report something broken in pi-claude-bridge
+about: Report something broken in pi-doppelclaude
 labels: bug
 ---
 
@@ -16,9 +16,9 @@ ideal. -->
 
 ## Debug log
 
-Run the failing scenario again with `CLAUDE_BRIDGE_DEBUG=1` set. This writes:
+Run the failing scenario again with `DOPPELCLAUDE_DEBUG=1` set. This writes:
 
-- `~/.pi/agent/claude-bridge.log` — the main bridge log.
+- `~/.pi/agent/doppelclaude.log` — the main bridge log.
 - `~/.pi/agent/cc-cli-logs/<timestamp>-<tag>-<seq>.log` — one file per
   Claude Code CLI invocation, matched by timestamp to the bridge log.
 
@@ -44,5 +44,5 @@ paste here
 
 ## Environment
 
-- **pi-claude-bridge version:**
+- **pi-doppelclaude version:**
 - **Platform:** <!-- macOS 14 / Ubuntu 24.04 / WSL2 / etc. -->

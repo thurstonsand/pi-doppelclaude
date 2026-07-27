@@ -1,5 +1,60 @@
 # Changelog
 
+---
+
+> ## `pi-claude-bridge` is now `pi-doppelclaude`
+>
+> Version 0.7.0 is the first release published from this fork, under a new name and a new npm package: **`pi-doppelclaude`**.
+>
+> Everything below 0.7.0 was released by [Eli Dickinson](https://github.com/elidickinson) as [`pi-claude-bridge`](https://github.com/elidickinson/pi-claude-bridge), which was itself based on [`claude-agent-sdk-pi`](https://github.com/prateekmedia/claude-agent-sdk-pi) by [Prateek Sunal](https://github.com/prateekmedia). That history is preserved here in full. The two packages are independent from 0.7.0 forward.
+>
+> The provider ID, settings key, environment variables, and log paths all changed with the name. See the 0.7.0 entry for the migration.
+
+---
+
+## 0.7.0 — 2026-07-28
+
+The fork's first release. Between 0.6.2 and here, essentially every layer was rewritten: the provider registration, the model catalog, the settings surface, the session store, and the tool dispatch path.
+
+### Renamed
+
+- **Rename: `pi-claude-bridge` → `pi-doppelclaude`** — new npm package, new GitHub repository, new provider identity. Nothing is aliased and nothing migrates automatically:
+  - Provider ID `claude-bridge` → `doppelclaude`, so `claude-bridge/claude-opus-4-8` becomes `doppelclaude/claude-opus-4-8`. Update `/model` selections, `defaultProvider`, and `defaultModel`. Sessions pinned to the old provider will not resolve.
+  - `~/.pi/agent/claude-bridge.json` and project-level `.pi/claude-bridge.json` are gone. Move their contents under a `doppelclaude` key in `~/.pi/agent/settings.json`.
+  - `CLAUDE_BRIDGE_DEBUG` → `DOPPELCLAUDE_DEBUG`, `CLAUDE_BRIDGE_DEBUG_PATH` → `DOPPELCLAUDE_DEBUG_PATH`.
+  - Default log path `~/.pi/agent/claude-bridge.log` → `~/.pi/agent/doppelclaude.log`.
+- **Docs: README rewritten** — reorganized around the system prompt requirement, with the model catalog, cost accounting, and debugging surfaces documented against the current implementation rather than the pre-rewrite one.
+
+### Added
+
+- **Add: native pi Provider** — replaces the legacy `registerProvider(name, config)` shape and its fake API key, synthetic base URL markers, and partial model projection. Authentication is ambient: a closed, no-prompt Agent SDK control query validates a first-party Claude Code account, concurrent checks share one in-flight probe, and `/login doppelclaude` opens an informational dialog instead of asking for a key pi will never hold.
+- **Add: bring-your-own system prompt** — Anthropic matches on pi's system prompt to detect and refuse the Agent SDK running under another harness. The identifying passages are now replaceable through `provider.systemPromptReplacements`. Every replacement is required, since a bundled fallback would just be one more fixed string to match on.
+- **Add: dynamic model catalog** — the hardcoded model IDs are gone. The catalog is what Claude Code advertises intersected with what pi can describe, with bundled metadata as the floor and pi's canonical remote catalog overlaid on top. Dated snapshots normalize onto the family ID so sessions persist; mutable aliases like `sonnet` name no family and never enter the catalog. Discovery costs a Claude Code boot, so it runs once on an installation with no cached allowlist and not again.
+- **Add: Anthropic Agent SDK 0.3 integrity signals** — served-model accounting now diffs cumulative per-model `modelUsage` at each terminal result, so a fallback turn is priced from the model actually served while keeping the requested model as message identity. Structured rate-limit buckets, `api_retry` status, and assistant error categories map to pi warnings and 429/529 terminal errors. Where the SDK's declarations fall short, the bridge fails closed rather than reconstructing private wire contracts.
+- **Add: live MCP reconciliation** — a changed pi tool set reconciles through verified `setMcpServers()` receipts on the running process instead of rotating the Claude Code session.
+- **Add: persistent streaming query** — one streaming-input query stays alive across compatible top-level turns, with steering routed through a typed push queue and model-only changes applied via `setModel`. Reentrant work still uses one-shot queries.
+
+### Changed
+
+- **Refactor: configuration moved into pi's settings** — the dedicated `claude-bridge.json` files (global and project) are no longer read at all. Configuration is one `doppelclaude` key in global `~/.pi/agent/settings.json`.
+- **Refactor: SDK-backed session store** — session state is an authoritative in-memory `SessionStore` keyed by session UUID with per-query revision fencing, replacing direct Claude Code JSONL rewriting and its path hashing, filesystem verification, and post-abort UUID rotation. Completed queries drain to natural EOF before replacement so every mirror frame flushes; first-spawn JSONL fragments are deleted after the writer provably exits, so stale sessions stop appearing in `claude --resume`.
+- **Change: `models.json` overrides now apply** — 0.6.2 could not be tuned without editing `src/models.ts`, because pi did not apply `modelOverrides` to extension-registered providers. pi 0.82 does, and the composed result drives display, compaction threshold, and the Claude Code request form. Adding models, or overriding `api` or `baseUrl`, remains unsupported and hides the model.
+- **Refactor: typed test suite** — Node tests and the RPC harness moved to TypeScript, and the shell/Python usage diagnostic became typed Node.
+- **Bump: Claude Agent SDK 0.3.219, pi 0.82** — the minimum peer floor for `@earendil-works/pi-ai` and `@earendil-works/pi-coding-agent` is now 0.82.0.
+
+### Removed
+
+- **Remove: AskClaude** — There are plenty of other ways to implement the subagent pattern.
+- **Remove: `provider.plan` and `provider.longContextExtraUsage`** — 1M context is now decided by the composed `contextWindow` after `modelOverrides`, so a model above 200K requests Claude Code's `[1m]` form and Claude Code remains responsible for authorization.
+- **Remove: `provider.strictMcpConfig` and `provider.settingSources`** — MCP isolation is unconditional, since pi is the tool-execution layer. `settingSources` is now implied by `systemPromptMode`: `"pi"` mode isolates Claude Code from its own settings files, and the other modes leave its defaults alone.
+
+- **Change: bridged `bash` no longer gets a 120-second timeout** — 0.6.2 injected one whenever the model omitted the argument, mirroring Claude Code's own Bash tool. But pi advertises its schema to the model verbatim, and that schema says `Timeout in seconds (optional, no default timeout)`. Omitting the argument now means what it says, so a long-running command runs to completion and the model asks for a bound when it wants one.
+
+### Fixed
+
+- **Fix: SDK failures surfacing as successful empty turns** — SDK and MCP failures propagate as terminal pi errors, fatal MCP failures survive stream handoff, and handlers match on Claude Code's native tool-use ID rather than call position, so parallel calls cannot be misrouted.
+- **Fix: compaction summary usage lost** — isolated Claude Code summaries reported synthetic zero usage, leaving compaction unaccounted for in session totals. They now share the same usage mapper as ordinary turns.
+
 ## 0.6.2 — 2026-07-06
 
 - **Fix: Sonnet 5 and Fable 5 with 1M context** — bare model IDs (`claude-sonnet-5`, `claude-fable-5`) are 200K context. Must pass `[1m]` suffix for both, similar to Opus 4.8.

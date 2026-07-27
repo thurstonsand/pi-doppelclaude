@@ -5,7 +5,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import type { Message as PiMessage } from "@earendil-works/pi-ai";
 import type { ContentBlock, Message as SessionMessage } from "cc-session-io";
-import { convertPiMessages, mapPiToolNameToSdk, mapSdkToolArgsToPi, mapSdkToolNameToPi } from "../src/convert.js";
+import { convertPiMessages, mapPiToolNameToSdk, mapSdkToolNameToPi } from "../src/convert.js";
 
 // Narrow a converted message's content to its block array. The converter returns
 // cc-session-io's `string | ContentBlock[]` union; the block-indexing tests only
@@ -54,13 +54,6 @@ describe("SDK tool conversion", () => {
 	it("materializes a mangled name back to the literal CC name", () => {
 		assert.equal(mapPiToolNameToSdk("cc_no_such_tool__bash"), "bash");
 		assert.equal(mapPiToolNameToSdk("cc_no_such_tool__mcp__custom-tools__bassh"), "mcp__custom-tools__bassh");
-	});
-
-	it("passes SDK arguments through and applies the pi bash timeout", () => {
-		assert.deepEqual(mapSdkToolArgsToPi("edit", { file_path: "a.ts", old_string: "a", new_string: "b" }), {
-			file_path: "a.ts", old_string: "a", new_string: "b",
-		});
-		assert.deepEqual(mapSdkToolArgsToPi("bash", { command: "pwd" }), { command: "pwd", timeout: 120 });
 	});
 
 	it("round-trips a rejected call through pi history", () => {
@@ -186,7 +179,7 @@ describe("thinking block filtering", () => {
 
 	it("Anthropic provider thinking with signature preserved", () => {
 		const msgs = [
-			{ role: "assistant", provider: "anthropic-agent-sdk", content: [
+			{ role: "assistant", provider: "doppelclaude", content: [
 				{ type: "thinking", thinking: "reasoning...", thinkingSignature: "sig123" },
 				{ type: "text", text: "answer" },
 			]},
@@ -210,7 +203,7 @@ describe("thinking block filtering", () => {
 
 	it("Anthropic provider thinking WITHOUT signature → dropped", () => {
 		const msgs = [
-			{ role: "assistant", provider: "anthropic-agent-sdk", content: [
+			{ role: "assistant", provider: "doppelclaude", content: [
 				{ type: "thinking", thinking: "no sig" },
 				{ type: "text", text: "answer" },
 			]},

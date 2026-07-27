@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// A/B usage comparison: pi-claude-bridge vs Claude Code direct.
+// A/B usage comparison: pi-doppelclaude vs Claude Code direct.
 // Runs the same conversation through both paths and compares subscription usage
 // delta and token metrics.
 //
@@ -135,8 +135,8 @@ function setupEnv(): NodeJS.ProcessEnv {
 		...process.env,
 		PATH: cleanPath,
 		PI_CODING_AGENT_DIR: agentDir,
-		CLAUDE_BRIDGE_DEBUG: "1",
-		CLAUDE_BRIDGE_DEBUG_PATH: join(LOGDIR, "usage-test-debug.log"),
+		DOPPELCLAUDE_DEBUG: "1",
+		DOPPELCLAUDE_DEBUG_PATH: join(LOGDIR, "usage-test-debug.log"),
 		CLAUDE_CODE_SAFE_MODE: "1",
 	};
 }
@@ -363,7 +363,7 @@ function runClaudeTurn(env: NodeJS.ProcessEnv, prompt: string, resumeId: string 
 
 async function runBridge(env: NodeJS.ProcessEnv, token: string): Promise<{ metrics: Metrics; delta: number }> {
 	console.log("==========================================");
-	console.log("  Run A: pi-claude-bridge");
+	console.log("  Run A: pi-doppelclaude");
 	console.log("==========================================");
 
 	console.log("Fetching usage before...");

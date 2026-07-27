@@ -53,7 +53,7 @@ describe("shared session sync planning", () => {
 		try {
 			const messages = [
 				{ role: "user", content: "remember one", timestamp: 1 },
-				{ role: "assistant", content: [{ type: "text", text: "one" }], api: "anthropic-agent-sdk", provider: "anthropic-agent-sdk", model: "claude-haiku-4-5", timestamp: 2 },
+				{ role: "assistant", content: [{ type: "text", text: "one" }], api: "doppelclaude", provider: "doppelclaude", model: "claude-haiku-4-5", timestamp: 2 },
 				{ role: "user", content: "next", timestamp: 3 },
 			] as unknown as PiMessage[];
 			const first = test.syncSharedSession(messages, cwd);

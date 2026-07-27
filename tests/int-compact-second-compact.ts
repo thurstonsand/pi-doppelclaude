@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { createRpcHarness, parseCompactionResult } from "./lib/rpc-harness.js";
 
 const TIMEOUT = 180_000;
-const BRIDGE_MODEL = "anthropic-agent-sdk/claude-haiku-4-5";
+const BRIDGE_MODEL = "doppelclaude/claude-haiku-4-5";
 
 // Force each /compact to discard older turns instead of summarizing an empty
 // prefix while preserving all recent context.

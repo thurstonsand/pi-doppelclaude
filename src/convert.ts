@@ -24,15 +24,6 @@ export function mapSdkToolNameToPi(name: string, customToolNameToPi?: Map<string
 	return `${CC_REJECTED_TOOL_PREFIX}${name}`;
 }
 
-export function mapSdkToolArgsToPi(
-	toolName: string,
-	args: Record<string, unknown> | undefined,
-): Record<string, unknown> {
-	const result: Record<string, unknown> = { ...(args ?? {}) };
-	if (toolName.toLowerCase() === "bash" && result.timeout == null) result.timeout = 120;
-	return result;
-}
-
 export function sanitizeToolId(id: string, cache: Map<string, string>): string {
 	const existing = cache.get(id);
 	if (existing) return existing;

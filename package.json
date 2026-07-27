@@ -1,8 +1,8 @@
 {
-  "name": "pi-claude-bridge",
-  "version": "0.6.2",
+  "name": "pi-doppelclaude",
+  "version": "0.7.0",
   "private": false,
-  "description": "Pi extension that uses Claude Code (via Agent SDK) as a model provider.",
+  "description": "Pi provider that runs your Claude Code subscription as pi models via the Claude Agent SDK.",
   "keywords": [
     "pi-package",
     "pi",
@@ -10,11 +10,15 @@
     "claude-code",
     "claude-agent-sdk"
   ],
-  "author": "Eli Dickinson",
+  "author": "Thurston Sandberg",
+  "contributors": [
+    "Eli Dickinson",
+    "Prateek Sunal"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/elidickinson/pi-claude-bridge.git"
+    "url": "git+https://github.com/thurstonsand/pi-doppelclaude.git"
   },
   "engines": {
     "node": ">=20"

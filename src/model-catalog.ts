@@ -13,6 +13,8 @@ import { parseValue } from "./validation.js";
 
 const CATALOG_URL = "https://pi.dev/api/models/providers/anthropic";
 const REFRESH_INTERVAL_MS = 4 * 60 * 60 * 1000;
+// Matches pi's built-in metadata refresh time
+const CATALOG_TIMEOUT_MS = 15_000;
 
 const RATE_SCHEMA = Type.Number({ minimum: 0 });
 const COST_RATES_SCHEMA = {
@@ -155,7 +157,8 @@ export function createBridgeModelCatalog(dependencies: ModelCatalogDependencies 
 	};
 
 	const fetchCatalog = async (signal?: AbortSignal): Promise<StoredCatalog> => {
-		const response = await dependencies.requestCatalog(signal);
+		const deadline = AbortSignal.timeout(CATALOG_TIMEOUT_MS);
+		const response = await dependencies.requestCatalog(signal ? AbortSignal.any([signal, deadline]) : deadline);
 		if (!response.ok) throw new Error(`Pi Anthropic model catalog request failed: ${response.status}`);
 		const canonical = parseCanonicalModels(await response.json());
 		const parsedLastModified = Date.parse(response.headers.get("last-modified") ?? "");

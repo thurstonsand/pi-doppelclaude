@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Prompt cache efficiency test for pi-claude-bridge.
+# Prompt cache efficiency test for pi-doppelclaude.
 # Runs a multi-turn conversation and verifies Anthropic prompt caching is working.
 # Expects: the cached prefix remains large across turns, with cacheRead
 # dominating cacheWrite after warmup. Cache breakpoints can move tokens between
@@ -22,11 +22,11 @@ LOGFILE="$LOGDIR/cache-test.ndjson"
 trap kill_descendants EXIT
 
 TMPFILE="$LOGDIR/cache-test-scratch.txt"
-rm -f "$TMPFILE" "$CLAUDE_BRIDGE_DEBUG_PATH"
+rm -f "$TMPFILE" "$DOPPELCLAUDE_DEBUG_PATH"
 
 echo "Running 5-turn conversation (text + tool use)..."
 timeout 180 pi --no-session -ne -e "$DIR" \
-  --model "anthropic-agent-sdk/claude-haiku-4-5" \
+  --model "doppelclaude/claude-haiku-4-5" \
   --mode json \
   -p "The secret number is 42. Acknowledge briefly." \
      "Write the secret number to $TMPFILE. Just the number, nothing else." \
@@ -138,7 +138,7 @@ while IFS= read -r line; do
   if [ -n "$sid" ]; then
     SESSION_IDS+=("$sid")
   fi
-done < <(grep "syncResult:" "$CLAUDE_BRIDGE_DEBUG_PATH" 2>/dev/null || true)
+done < <(grep "syncResult:" "$DOPPELCLAUDE_DEBUG_PATH" 2>/dev/null || true)
 
 UNIQUE_SIDS=$(printf "%s\n" "${SESSION_IDS[@]}" | sort -u | grep -c . || true)
 UNIQUE_SIDS=${UNIQUE_SIDS:-0}
@@ -181,6 +181,6 @@ if [ "$FAIL" -eq 0 ]; then
 else
   echo "FAIL: $FAIL assertions failed"
   echo "  Log: $LOGFILE"
-  echo "  Debug: $CLAUDE_BRIDGE_DEBUG_PATH"
+  echo "  Debug: $DOPPELCLAUDE_DEBUG_PATH"
   exit 1
 fi

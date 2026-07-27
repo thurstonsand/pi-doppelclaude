@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Smoke tests for pi-claude-bridge provider.
+# Smoke tests for pi-doppelclaude provider.
 # Requires: pi CLI, Claude Code (for Agent SDK subprocess).
 
 source "$(dirname "$0")/lib/bash-setup.sh"
@@ -57,12 +57,12 @@ run() {
 cat > "$PI_CODING_AGENT_DIR/models.json" <<'JSON'
 {
   "providers": {
-    "anthropic-agent-sdk": {
+    "doppelclaude": {
       "modelOverrides": {
         "claude-sonnet-5": { "contextWindow": 200000 }
       },
       "models": [
-        { "id": "claude-future-9-9", "api": "anthropic-agent-sdk", "baseUrl": "claude-code://local" }
+        { "id": "claude-future-9-9", "api": "doppelclaude", "baseUrl": "claude-code://local" }
       ]
     }
   }
@@ -73,25 +73,25 @@ JSON
 # `yesterday`, explanatory prose, or a `Not logged in · Please run /login` banner
 # all fail instead of passing.
 run "provider: print mode responds" \
-  bash -c "pi --no-session -ne -e '$DIR' --model 'anthropic-agent-sdk/claude-haiku-4-5' -p 'Reply with only the word yes' 2>&1 | grep -qiE '^[[:space:]]*yes[[:space:]]*\$' && echo ok"
+  bash -c "pi --no-session -ne -e '$DIR' --model 'doppelclaude/claude-haiku-4-5' -p 'Reply with only the word yes' 2>&1 | grep -qiE '^[[:space:]]*yes[[:space:]]*\$' && echo ok"
 
 run "provider: --provider flag works" \
-  bash -c "pi --no-session -ne -e '$DIR' --provider anthropic-agent-sdk --model claude-haiku-4-5 -p 'Reply with only the word yes' 2>&1 | grep -qiE '^[[:space:]]*yes[[:space:]]*\$' && echo ok"
+  bash -c "pi --no-session -ne -e '$DIR' --provider doppelclaude --model claude-haiku-4-5 -p 'Reply with only the word yes' 2>&1 | grep -qiE '^[[:space:]]*yes[[:space:]]*\$' && echo ok"
 
 # Startup replays the cached catalog without asking Claude Code, so the sandbox must offer the
 # models its copied store recorded.
 run "provider: cached catalog is replayed without a probe" \
-  bash -c "[ \"\$(pi --no-session -ne -e '$DIR' --list-models 2>&1 | grep -Ec '^anthropic-agent-sdk[[:space:]]+claude-')\" -ge 3 ] && echo ok"
+  bash -c "[ \"\$(pi --no-session -ne -e '$DIR' --list-models 2>&1 | grep -Ec '^doppelclaude[[:space:]]+claude-')\" -ge 3 ] && echo ok"
 
 run "provider: dynamic model list includes Opus 5" \
-  bash -c "pi --no-session -ne -e '$DIR' --list-models 2>&1 | grep -Eq '^anthropic-agent-sdk[[:space:]]+claude-opus-5[[:space:]]+1M[[:space:]]+128K[[:space:]]' && echo ok"
+  bash -c "pi --no-session -ne -e '$DIR' --list-models 2>&1 | grep -Eq '^doppelclaude[[:space:]]+claude-opus-5[[:space:]]+1M[[:space:]]+128K[[:space:]]' && echo ok"
 
 # Claude Code advertises Haiku only as a dated snapshot; it must be cached as the family model.
 run "provider: dated snapshot resolves to its family model" \
-  bash -c "output=\$(pi --no-session -ne -e '$DIR' --list-models 2>&1) && grep -Eq '^anthropic-agent-sdk[[:space:]]+claude-haiku-4-5[[:space:]]' <<<\"\$output\" && ! grep -Eq '^anthropic-agent-sdk[[:space:]]+claude-haiku-4-5-' <<<\"\$output\" && echo ok"
+  bash -c "output=\$(pi --no-session -ne -e '$DIR' --list-models 2>&1) && grep -Eq '^doppelclaude[[:space:]]+claude-haiku-4-5[[:space:]]' <<<\"\$output\" && ! grep -Eq '^doppelclaude[[:space:]]+claude-haiku-4-5-' <<<\"\$output\" && echo ok"
 
 run "provider: modelOverrides apply and additions stay hidden" \
-  bash -c "output=\$(pi --no-session -ne -e '$DIR' --list-models 2>&1) && grep -Eq '^anthropic-agent-sdk[[:space:]]+claude-sonnet-5[[:space:]]+200K[[:space:]]' <<<\"\$output\" && ! grep -q 'claude-future-9-9' <<<\"\$output\" && echo ok"
+  bash -c "output=\$(pi --no-session -ne -e '$DIR' --list-models 2>&1) && grep -Eq '^doppelclaude[[:space:]]+claude-sonnet-5[[:space:]]+200K[[:space:]]' <<<\"\$output\" && ! grep -q 'claude-future-9-9' <<<\"\$output\" && echo ok"
 
 CLAUDE_EXECUTABLE=$(command -v claude)
 CLAUDE_SPAWN_LOG="$LOGDIR/rejected-model-claude-spawns.log"
@@ -103,10 +103,10 @@ printf '%s\\n' "\$*" >> "$CLAUDE_SPAWN_LOG"
 exec "$CLAUDE_EXECUTABLE" "\$@"
 EOF
 chmod +x "$CLAUDE_WRAPPER"
-printf '{"claudeBridge":{"provider":{"systemPromptMode":"claude-code","pathToClaudeCodeExecutable":"%s"}}}\n' "$CLAUDE_WRAPPER" > "$PI_CODING_AGENT_DIR/settings.json"
+printf '{"doppelclaude":{"provider":{"systemPromptMode":"claude-code","pathToClaudeCodeExecutable":"%s"}}}\n' "$CLAUDE_WRAPPER" > "$PI_CODING_AGENT_DIR/settings.json"
 
 run "provider: rejected model emits terminal error before model spawn" \
-  bash -c "if pi --no-session -ne -e '$DIR' --model 'anthropic-agent-sdk/claude-future-9-9' -p yes >'$LOGDIR/rejected-model.out' 2>&1; then exit 1; fi; grep -q 'Unsupported Anthropic Agent SDK model' '$LOGDIR/rejected-model.out' && ! grep -q -- '--model' '$CLAUDE_SPAWN_LOG' && echo ok"
+  bash -c "if pi --no-session -ne -e '$DIR' --model 'doppelclaude/claude-future-9-9' -p yes >'$LOGDIR/rejected-model.out' 2>&1; then exit 1; fi; grep -q 'Unsupported Doppelclaude model' '$LOGDIR/rejected-model.out' && ! grep -q -- '--model' '$CLAUDE_SPAWN_LOG' && echo ok"
 
 # --- Summary ---
 

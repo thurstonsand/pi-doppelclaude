@@ -1,14 +1,14 @@
 import type { Model } from "@earendil-works/pi-ai";
 import type { EffortLevel } from "@anthropic-ai/claude-agent-sdk";
 
-export const PROVIDER_ID = "anthropic-agent-sdk";
-export const PROVIDER_NAME = "Anthropic Agent SDK";
-export const PROVIDER_API = "anthropic-agent-sdk";
+export const PROVIDER_ID = "doppelclaude";
+export const PROVIDER_NAME = "Doppelclaude";
+export const PROVIDER_API = "doppelclaude";
 export const PROVIDER_BASE_URL = "claude-code://local";
 
 // The marker survives modelOverrides but cannot be supplied by models.json, so user-defined
 // replacements never cross the provider boundary as catalog-confirmed models.
-const BRIDGE_MODEL = Symbol("pi-claude-bridge.model");
+const BRIDGE_MODEL = Symbol("pi-doppelclaude.model");
 const MODEL_FAMILIES_IN_ORDER = ["fable", "opus", "sonnet", "haiku"];
 const NUMERIC_MODEL_VERSION = /^\d+$/u;
 const SHORT_MODEL_VERSION_PART = /^\d{1,2}$/u;
@@ -31,8 +31,8 @@ export function unsupportedModelMessage(model: {
 	api?: string;
 	baseUrl?: string;
 }): string {
-	if (model.provider === undefined) return `Unsupported Anthropic Agent SDK model: ${model.id}`;
-	return `Unsupported Anthropic Agent SDK model: ${model.provider}/${model.id} (api=${model.api}, baseUrl=${model.baseUrl})`;
+	if (model.provider === undefined) return `Unsupported Doppelclaude model: ${model.id}`;
+	return `Unsupported Doppelclaude model: ${model.provider}/${model.id} (api=${model.api}, baseUrl=${model.baseUrl})`;
 }
 
 function modelOrder(id: string): [number, number[]] | undefined {

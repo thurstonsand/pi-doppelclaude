@@ -37,7 +37,7 @@ chmod +x "$CLAUDE_WRAPPER"
 
 cat > "$AGENT_DIR/settings.json" <<EOF
 {
-  "claudeBridge": {
+  "doppelclaude": {
     "provider": {
       "systemPromptMode": "claude-code",
       "pathToClaudeCodeExecutable": "$CLAUDE_WRAPPER"
@@ -50,9 +50,9 @@ cat > "$AGENT_DIR/settings.json" <<EOF
 }
 EOF
 
-unset CLAUDE_BRIDGE_DEBUG CLAUDE_BRIDGE_DEBUG_PATH
+unset DOPPELCLAUDE_DEBUG DOPPELCLAUDE_DEBUG_PATH
 if ! timeout 90 env PI_CODING_AGENT_DIR="$AGENT_DIR" \
-	pi --no-session -ne -e "$DIR" --model anthropic-agent-sdk/claude-haiku-4-5 \
+	pi --no-session -ne -e "$DIR" --model doppelclaude/claude-haiku-4-5 \
 	-p 'Reply with only the word yes' > "$OUTPUT_LOG" 2>&1; then
 	cat "$OUTPUT_LOG"
 	exit 1

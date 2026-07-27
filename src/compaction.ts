@@ -1,6 +1,6 @@
 // Compaction: isolated summary generation and prior-compaction file-op reinjection.
 //
-// When pi asks an Anthropic Agent SDK model to compact, the bridge takes over: it runs
+// When pi asks a Doppelclaude model to compact, the bridge takes over: it runs
 // the split-turn summary as an isolated Claude Code subprocess (never through the
 // live provider stream — see issue #18) and carries forward file operations from
 // the previous compaction so <read-files>/<modified-files> stay accurate.

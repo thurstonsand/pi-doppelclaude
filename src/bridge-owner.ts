@@ -12,7 +12,7 @@
 
 import type { Provider } from "@earendil-works/pi-ai";
 
-const OWNER_KEY = Symbol.for("claude-bridge:owner");
+const OWNER_KEY = Symbol.for("doppelclaude:owner");
 
 export interface BridgeOwner<TRuntime extends object, TProvider extends Provider> {
 	provider: TProvider;

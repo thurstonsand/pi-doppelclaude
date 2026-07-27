@@ -11,8 +11,8 @@ const runtime = createBridgeRuntime({
 
 // Minimal stand-in for pi-ai's Model; the stream path only reads api/provider/id/cost.
 const fakeModel = {
-	api: "anthropic-agent-sdk",
-	provider: "anthropic-agent-sdk",
+	api: "doppelclaude",
+	provider: "doppelclaude",
 	id: "claude-test",
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 } as Model<any>;

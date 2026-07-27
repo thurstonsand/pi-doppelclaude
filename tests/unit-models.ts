@@ -97,6 +97,6 @@ describe("Claude Code model argument", () => {
 
 	it("rejects unknown IDs instead of guessing a context window", () => {
 		const unknown = { ...find(models, "claude-opus-4-8"), id: "claude-future-9-9" };
-		assert.throws(() => claudeCodeModelId(unknown), /Unsupported Anthropic Agent SDK model/);
+		assert.throws(() => claudeCodeModelId(unknown), /Unsupported Doppelclaude model/);
 	});
 });

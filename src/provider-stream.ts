@@ -2,7 +2,7 @@ import { type AssistantMessageEventStream, type Model } from "@earendil-works/pi
 import { parse as parsePartialJsonText } from "partial-json";
 import { type Query, type SDKAssistantMessage, type SDKMessage, type SDKMirrorErrorMessage, type SDKResultMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { QueryContext } from "./query-state.js";
-import { isCcRejectedToolName, mapSdkToolArgsToPi, mapSdkToolNameToPi } from "./convert.js";
+import { isCcRejectedToolName, mapSdkToolNameToPi } from "./convert.js";
 import { logServedContextWindow, resultErrorText } from "./sdk-result.js";
 import { applySdkUsage, debugSdkUsage, diffSdkModelUsage, reconcileSdkModelUsage } from "./sdk-usage.js";
 import { apiStatusFailure, assistantApiFailure, classifyResult, formatRateLimitMessage } from "./sdk-signals.js";
@@ -221,9 +221,7 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
 				c.currentPiStream!.push({ type: "thinking_end", contentIndex: index, content: block.thinking, partial: c.turnOutput });
 			} else if (block.type === "toolCall") {
 				c.turnSawToolCall = true;
-				block.arguments = mapSdkToolArgsToPi(
-					block.name, parsePartialJson(block.partialJson, block.arguments),
-				);
+				block.arguments = parsePartialJson(block.partialJson, block.arguments);
 				delete block.partialJson;
 				c.currentPiStream!.push({ type: "toolcall_end", contentIndex: index, toolCall: block, partial: c.turnOutput });
 			}
@@ -291,7 +289,7 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
 				ensureTurnStarted(c);
 				c.turnSawToolCall = true;
 				c.shownToolCallIds.add(block.id);
-				const mappedArgs = mapSdkToolArgsToPi(mapSdkToolNameToPi(block.name, customToolNameToPi), block.input as Record<string, unknown>);
+				const mappedArgs = { ...(block.input as Record<string, unknown> | undefined) };
 				c.turnBlocks.push({
 					type: "toolCall", id: block.id,
 					name: mapSdkToolNameToPi(block.name, customToolNameToPi),

@@ -7,14 +7,14 @@
 // stale closure's context.messages.length (=1), causing a spurious rebuild
 // on the next turn.
 //
-// See: https://github.com/elidickinson/pi-claude-bridge/issues/4
+// See: https://github.com/elidickinson/pi-doppelclaude/issues/4
 
 import { test } from "node:test";
 import assert from "node:assert";
 import { readFileSync } from "node:fs";
 import { createRpcHarness } from "./lib/rpc-harness.js";
 
-const BRIDGE_MODEL = "anthropic-agent-sdk/claude-haiku-4-5";
+const BRIDGE_MODEL = "doppelclaude/claude-haiku-4-5";
 
 test("turn 2 reuses session after tool-using turn 1 (no spurious rebuild)", { timeout: 120_000 }, async () => {
 	const harness = createRpcHarness({

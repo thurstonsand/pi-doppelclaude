@@ -39,6 +39,18 @@
   A proper diagnostic channel (NDJSON or dedicated diagLog entries) would be
   cleaner and resilient to log-format churn.
 
+## Upstream Gaps
+
+- **No reachable networked model refresh**: the catalog discovers only when
+  `context.allowNetwork` is true or the store has no entry, and pi 0.82.1's sole
+  `allowNetwork: true` caller is `refreshModelCatalogs()` in
+  `package-manager-cli.ts`, which builds a bare `ModelRuntime` with no
+  extensions loaded. So `pi update --models` cannot reach an
+  extension-registered provider, and a bootstrapped installation never
+  rediscovers. The documented workaround is deleting the `doppelclaude` entry
+  from `models-store.json`. Either ask pi to load extensions for that command,
+  or register our own refresh command.
+
 ## Downstream Integration
 
 - **pi-librarian nested runtimes**: Pass `ctx.modelRegistry.getRegisteredNativeProvider(providerId)` into each fresh `ModelRuntime` with `registerNativeProvider()` so nested calls retain the registered Provider object's runtime closure.
@@ -47,6 +59,6 @@
 
 ## Deferred
 
-- **CC CLI debug log accumulation**: When `CLAUDE_BRIDGE_DEBUG=1`, every
+- **CC CLI debug log accumulation**: When `DOPPELCLAUDE_DEBUG=1`, every
   `query()` call writes a new file under `~/.pi/agent/cc-cli-logs/`. These
   accumulate indefinitely.

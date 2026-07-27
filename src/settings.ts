@@ -3,15 +3,17 @@ import { join } from "path";
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
 
+const NONBLANK = Type.String({ minLength: 1, pattern: "\\S" });
+
 const DOCUMENTATION_REPLACEMENT_SCHEMA = Type.Object({
-	heading: Type.String({ minLength: 1 }),
-	instructions: Type.String({ minLength: 1 }),
+	heading: NONBLANK,
+	instructions: Type.Array(NONBLANK, { minItems: 1 }),
 });
 
 const SYSTEM_PROMPT_REPLACEMENTS_SCHEMA = Type.Object({
-	identity: Type.Optional(Type.String()),
-	toolNameNote: Type.Optional(Type.String()),
-	documentation: Type.Optional(DOCUMENTATION_REPLACEMENT_SCHEMA),
+	identity: NONBLANK,
+	toolNameNote: NONBLANK,
+	documentation: DOCUMENTATION_REPLACEMENT_SCHEMA,
 });
 
 const PROVIDER_SETTINGS_SCHEMA = Type.Object({
@@ -35,7 +37,7 @@ const BRIDGE_FILE_SETTINGS_SCHEMA = Type.Object({
 });
 
 const ROOT_SETTINGS_SCHEMA = Type.Object({
-	claudeBridge: Type.Optional(BRIDGE_FILE_SETTINGS_SCHEMA),
+	doppelclaude: Type.Optional(BRIDGE_FILE_SETTINGS_SCHEMA),
 });
 
 export type SystemPromptReplacements = Static<typeof SYSTEM_PROMPT_REPLACEMENTS_SCHEMA>;
@@ -61,34 +63,26 @@ interface LoadSettingsOptions {
 
 function formatTypeBoxError(value: unknown, path: string): string {
 	const firstError = Value.Errors(ROOT_SETTINGS_SCHEMA, value)[0];
-	if (!firstError) return `claude-bridge: invalid settings in ${path}`;
-	return `claude-bridge: invalid settings in ${path}: ${firstError.instancePath || "/"} ${firstError.message}`;
+	if (!firstError) return `doppelclaude: invalid settings in ${path}`;
+	return `doppelclaude: invalid settings in ${path}: ${firstError.instancePath || "/"} ${firstError.message}`;
 }
 
 function parseScopedSettings(value: unknown, path: string): BridgeFileSettings {
 	if (!Value.Check(ROOT_SETTINGS_SCHEMA, value)) {
 		throw new Error(formatTypeBoxError(value, path));
 	}
-	return (value as Static<typeof ROOT_SETTINGS_SCHEMA>).claudeBridge ?? {};
+	return (value as Static<typeof ROOT_SETTINGS_SCHEMA>).doppelclaude ?? {};
 }
 
 function validateSettings(settings: BridgeFileSettings): void {
-	const systemPromptMode = settings.provider?.systemPromptMode ?? "append";
-	if (systemPromptMode !== "claude-code") {
-		const documentation = settings.provider?.systemPromptReplacements?.documentation;
-		if (!documentation) {
-			throw new Error(
-				`claude-bridge: claudeBridge.provider.systemPromptMode="${systemPromptMode}" requires claudeBridge.provider.systemPromptReplacements.documentation.heading and .instructions`,
-			);
-		}
-		if (!documentation.heading.trim() || !documentation.instructions.trim()) {
-			throw new Error(
-				"claude-bridge: claudeBridge.provider.systemPromptReplacements.documentation.heading and .instructions must not be blank",
-			);
-		}
+	const systemPromptMode = settings.provider?.systemPromptMode ?? "pi";
+	if (systemPromptMode !== "claude-code" && !settings.provider?.systemPromptReplacements) {
+		throw new Error(
+			`doppelclaude: doppelclaude.provider.systemPromptMode="${systemPromptMode}" requires doppelclaude.provider.systemPromptReplacements with identity, toolNameNote, and documentation`,
+		);
 	}
 	if (settings.debug?.logPath !== undefined && !settings.debug.logPath.trim()) {
-		throw new Error("claude-bridge: claudeBridge.debug.logPath must not be blank");
+		throw new Error("doppelclaude: doppelclaude.debug.logPath must not be blank");
 	}
 }
 
@@ -96,7 +90,7 @@ function debugEnabledFromEnvironment(value: string | undefined): boolean | undef
 	if (value === undefined || value === "") return undefined;
 	if (value === "1") return true;
 	if (value === "0") return false;
-	throw new Error('claude-bridge: CLAUDE_BRIDGE_DEBUG must be "1" or "0"');
+	throw new Error('doppelclaude: DOPPELCLAUDE_DEBUG must be "1" or "0"');
 }
 
 export function loadBridgeSettings(cwd: string, options: LoadSettingsOptions = {}): BridgeSettings {
@@ -107,7 +101,7 @@ export function loadBridgeSettings(cwd: string, options: LoadSettingsOptions = {
 	const loadError = manager.drainErrors().find((error) => error.scope === "global");
 	if (loadError) {
 		throw new Error(
-			`claude-bridge: failed to load global Pi settings from ${globalSettingsPath}: ${loadError.error.message}`,
+			`doppelclaude: failed to load global Pi settings from ${globalSettingsPath}: ${loadError.error.message}`,
 			{ cause: loadError.error },
 		);
 	}
@@ -118,11 +112,11 @@ export function loadBridgeSettings(cwd: string, options: LoadSettingsOptions = {
 	return {
 		provider: {
 			...settings.provider,
-			systemPromptMode: settings.provider?.systemPromptMode ?? "append",
+			systemPromptMode: settings.provider?.systemPromptMode ?? "pi",
 		},
 		debug: {
-			enabled: debugEnabledFromEnvironment(env.CLAUDE_BRIDGE_DEBUG) ?? settings.debug?.enabled ?? false,
-			logPath: env.CLAUDE_BRIDGE_DEBUG_PATH || settings.debug?.logPath || join(agentDir, "claude-bridge.log"),
+			enabled: debugEnabledFromEnvironment(env.DOPPELCLAUDE_DEBUG) ?? settings.debug?.enabled ?? false,
+			logPath: env.DOPPELCLAUDE_DEBUG_PATH || settings.debug?.logPath || join(agentDir, "doppelclaude.log"),
 		},
 	};
 }

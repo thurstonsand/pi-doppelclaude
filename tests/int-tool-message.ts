@@ -11,7 +11,7 @@ const TEST_TIMEOUT = 40_000;
 
 const harness = createRpcHarness({
 	name: "tool-message",
-	args: ["-e", "./tests/fixtures/slow-tool-extension.ts", "--model", "anthropic-agent-sdk/claude-haiku-4-5"],
+	args: ["-e", "./tests/fixtures/slow-tool-extension.ts", "--model", "doppelclaude/claude-haiku-4-5"],
 	defaultTimeout: TEST_TIMEOUT,
 });
 

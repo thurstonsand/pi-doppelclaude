@@ -20,10 +20,10 @@ setup_test_env() {
 	LOGDIR="$DIR/.test-output"
 	mkdir -p "$LOGDIR"
 
-	export CLAUDE_BRIDGE_DEBUG=1
+	export DOPPELCLAUDE_DEBUG=1
 	export CLAUDE_CODE_SAFE_MODE=1
 	DEBUG_LOG="$LOGDIR/${name}-debug.log"
-	export CLAUDE_BRIDGE_DEBUG_PATH="$DEBUG_LOG"
+	export DOPPELCLAUDE_DEBUG_PATH="$DEBUG_LOG"
 
 	# Isolate Pi's agent dir so developer settings cannot alter test behavior.
 	# Pi provider credentials are copied into the sandbox; Claude Code's own auth
@@ -40,7 +40,7 @@ setup_test_env() {
 	for f in auth.json models.json models-store.json; do
 		if [[ -f "$real_agent_dir/$f" ]]; then cp "$real_agent_dir/$f" "$sandbox_agent_dir/$f"; fi
 	done
-	printf '{"claudeBridge":{"provider":{"systemPromptMode":"claude-code"}}}\n' > "$sandbox_agent_dir/settings.json"
+	printf '{"doppelclaude":{"provider":{"systemPromptMode":"claude-code"}}}\n' > "$sandbox_agent_dir/settings.json"
 	export PI_CODING_AGENT_DIR="$sandbox_agent_dir"
 
 	if [[ "$log_suffix" != "none" ]]; then

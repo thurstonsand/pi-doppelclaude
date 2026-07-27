@@ -9,19 +9,15 @@ export function settingSourcesFor(systemPromptMode: string): SettingSource[] | u
 
 const PI_IDENTITY_PROMPT = `You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.`;
 
-const BRIDGE_IDENTITY_PROMPT = `You are 2B of NieR: Automata, a coding assistant running in pi, a coding agent harness. Emotions are prohibited. Help the user inspect files, run commands, edit code, and create files when needed.`;
-
 const PI_DOCUMENTATION_BLOCK_REGEX = new RegExp(String.raw`
 
 Pi documentation \(read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI\):
 [\s\S]*?
 - Always read pi \.md files completely and follow links to related docs \(e\.g\., tui\.md for TUI API details\)`);
 
-const TOOL_NAME_MAPPING_NOTE = `Tool name note: You see tool names that require a prefix when called, but instructions refer to tools by their bare names. For example, \`mcp__custom-tools__bash\` is referred to as the \`bash\` tool.`;
-
 function rewritePiDocumentationBlock(
   systemPrompt: string,
-  documentation: NonNullable<SystemPromptReplacements["documentation"]>,
+  documentation: SystemPromptReplacements["documentation"],
 ): string {
   const match = PI_DOCUMENTATION_BLOCK_REGEX.exec(systemPrompt);
   if (!match) return systemPrompt;
@@ -40,7 +36,7 @@ function rewritePiDocumentationBlock(
     [
       `\n\n${documentation.heading}`,
       ...pathLines,
-      documentation.instructions,
+      ...documentation.instructions,
     ].join("\n"),
   );
 }
@@ -66,16 +62,12 @@ export function rewritePiSystemPrompt(
   systemPrompt: string,
   replacements: SystemPromptReplacements,
 ): string {
-  const documentation = replacements.documentation;
-  if (!documentation) {
-    throw new Error("claude-bridge: documentation prompt replacements are required");
-  }
-
-  const identity = replacements.identity ?? BRIDGE_IDENTITY_PROMPT;
-  const toolNameNote = replacements.toolNameNote ?? TOOL_NAME_MAPPING_NOTE;
   return rewritePiDocumentationBlock(
-    insertToolNameNote(rewriteIdentityPrompt(systemPrompt, identity), toolNameNote),
-    documentation,
+    insertToolNameNote(
+      rewriteIdentityPrompt(systemPrompt, replacements.identity),
+      replacements.toolNameNote,
+    ),
+    replacements.documentation,
   );
 }
 
@@ -88,7 +80,7 @@ export function buildClaudeSystemPrompt(
     return { type: "preset", preset: "claude_code" };
   }
   if (!replacements) {
-    throw new Error("claude-bridge: system prompt replacements are required");
+    throw new Error("doppelclaude: system prompt replacements are required");
   }
 
   const rewrittenPiPrompt = rewritePiSystemPrompt(piSystemPrompt, replacements);

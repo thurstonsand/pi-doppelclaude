@@ -207,7 +207,7 @@ describe("stream boundaries", () => {
 			assert.equal(events.length, 1);
 			assert.equal(events[0].type, "error");
 			assert.equal(result.stopReason, "error");
-			assert.match(result.errorMessage!, /Unsupported Anthropic Agent SDK model/);
+			assert.match(result.errorMessage!, /Unsupported Doppelclaude model/);
 		});
 	}
 });
