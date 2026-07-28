@@ -91,6 +91,7 @@ export class QueryContext {
 	turnResultVerdict: ResultVerdict | null = null;
 	turnApiFailure: string | null = null;
 	turnRateLimitRejection: string | null = null;
+	turnSyntheticText: string | null = null;
 	pendingToolCalls = new Map<string, PendingToolCall>();
 	pendingResults = new Map<string, McpResult>();
 	// Reconciliation is order-independent: a tool call is shown to pi when it is
@@ -145,6 +146,7 @@ export class QueryContext {
 		this.turnResultVerdict = null;
 		this.turnApiFailure = null;
 		this.turnRateLimitRejection = null;
+		this.turnSyntheticText = null;
 		this.readyForInput = false;
 	}
 }

@@ -5,7 +5,7 @@ import type { QueryContext } from "./query-state.js";
 import { isCcRejectedToolName, mapSdkToolNameToPi } from "./convert.js";
 import { logServedContextWindow, resultErrorText } from "./sdk-result.js";
 import { applySdkUsage, debugSdkUsage, diffSdkModelUsage, reconcileSdkModelUsage } from "./sdk-usage.js";
-import { apiStatusFailure, assistantApiFailure, classifyResult, formatRateLimitMessage } from "./sdk-signals.js";
+import { apiStatusFailure, assistantApiFailure, classifyResult, formatRateLimitMessage, isSyntheticModelId } from "./sdk-signals.js";
 
 interface ProviderStreamDependencies {
 	debug(...args: unknown[]): void;
@@ -266,6 +266,18 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
 	function processAssistantMessage(message: SDKAssistantMessage, model: Model<any>, customToolNameToPi: Map<string, string>, c: QueryContext): void {
 		if (message.aborted) c.turnSawAbortedAssistant = true;
 		c.turnApiFailure ??= assistantApiFailure(message.error);
+		// A synthetic message is Claude Code talking about the request, not the model answering
+		// it. Its text belongs to the turn's failure, so it is captured here and never enters
+		// the transcript; a turn that ends fine instead reports the result message's own text.
+		const synthetic = isSyntheticModelId(message.message?.model);
+		if (synthetic) {
+			const text = (message.message?.content ?? [])
+				.flatMap((block: any) => (block.type === "text" && block.text ? [block.text as string] : []))
+				.join("\n").trim();
+			if (text) c.turnSyntheticText = text;
+			debug(`provider: synthetic message withheld from transcript: ${text || "(no text)"}`);
+			return;
+		}
 		if (c.turnSawStreamEvent) return;
 		const assistantMsg = message.message;
 		if (!assistantMsg?.content) return;
@@ -338,7 +350,9 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
 
 		const statusFailure = message.subtype === "success" ? apiStatusFailure(message.api_error_status) : null;
 		const structuredFailure = queryCtx.turnRateLimitRejection ?? queryCtx.turnApiFailure ?? statusFailure;
-		const detail = message.subtype !== "success" || message.is_error ? resultErrorText(message) : null;
+		const detail = message.subtype !== "success" || message.is_error
+			? queryCtx.turnSyntheticText ?? resultErrorText(message)
+			: null;
 		queryCtx.turnResultVerdict = classifyResult(message, structuredFailure, detail);
 		const verdict = queryCtx.turnResultVerdict;
 		if (!queryCtx.turnOutput) return;

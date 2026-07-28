@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
+import type { ModelUsage } from "@anthropic-ai/claude-agent-sdk";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { accountSdkModelUsage, applySdkUsage, diffSdkModelUsage } from "../src/sdk-usage.js";
 
@@ -92,6 +93,19 @@ describe("SDK usage mapping", () => {
 		assert.ok(Math.abs(accounting.usage.cost.total - 0.00035) < 1e-12);
 		assert.ok(accounting.usage.cost.input > 0, "component pricing should use Pi's served-model catalogs");
 		assert.deepEqual(accounting.fallbackModels, ["claude-opus-4-8"]);
+		assert.deepEqual(accounting.unknownModels, []);
+	});
+
+	it("does not read Claude Code's synthetic marker as a served model", () => {
+		const synthetic: ModelUsage = {
+			inputTokens: 0, outputTokens: 1, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+			webSearchRequests: 0, costUSD: 0, contextWindow: 0, maxOutputTokens: 0,
+			provider: "firstParty",
+		};
+		const accounting = accountSdkModelUsage({ "<synthetic>": synthetic }, model);
+
+		assert.deepEqual(accounting.servedModels, []);
+		assert.deepEqual(accounting.fallbackModels, []);
 		assert.deepEqual(accounting.unknownModels, []);
 	});
 });

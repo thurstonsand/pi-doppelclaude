@@ -5,11 +5,13 @@
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { Model } from "@earendil-works/pi-ai";
 
-export function resultErrorText(message: SDKMessage): string {
-	const result = message as SDKMessage & { subtype?: string; errors?: unknown; error?: unknown };
+/** The failure as the result message stated it, or null when it stated none. Naming the subtype
+ *  in its place is left to the caller, which is the only one that knows what it was asking for. */
+export function resultErrorText(message: SDKMessage): string | null {
+	const result = message as SDKMessage & { errors?: unknown; error?: unknown };
 	if (Array.isArray(result.errors) && result.errors.length > 0) return result.errors.map(String).join("\n");
 	if (typeof result.error === "string") return result.error;
-	return `Claude Code failed: ${result.subtype ?? "unknown result"}`;
+	return null;
 }
 
 // Log the *served* context window reported by an SDK result message

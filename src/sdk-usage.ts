@@ -1,6 +1,7 @@
 import { calculateCost, type AssistantMessage, type Model, type Usage } from "@earendil-works/pi-ai";
 import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
 import type { ModelUsage } from "@anthropic-ai/claude-agent-sdk";
+import { isSyntheticModelId } from "./sdk-signals.js";
 
 export interface SdkUsage {
 	input_tokens?: number | null;
@@ -83,6 +84,8 @@ export function accountSdkModelUsage(
 
 	for (const [rawModel, usage] of Object.entries(modelUsage)) {
 		const servedModel = usage.canonicalModel ?? rawModel;
+		// Nothing served a fabricated message; its tokens are not the account of a turn.
+		if (isSyntheticModelId(servedModel)) continue;
 		servedModels.add(servedModel);
 		aggregate.input += usage.inputTokens;
 		aggregate.output += usage.outputTokens;

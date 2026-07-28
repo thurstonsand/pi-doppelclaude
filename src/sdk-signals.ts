@@ -7,6 +7,14 @@ import type {
 	SDKResultMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 
+/** Claude Code stamps messages it fabricated locally — API error envelopes, placeholder
+ *  turns — with this in place of a model id. It never names a model that served anything. */
+export const SYNTHETIC_MODEL_ID = "<synthetic>";
+
+export function isSyntheticModelId(id: string | undefined): boolean {
+	return id === SYNTHETIC_MODEL_ID;
+}
+
 function assertMcpResult(action: string, result: McpSetServersResult, expectedServer: string, expectedField: "added" | "removed"): void {
 	const errors = Object.entries(result.errors);
 	if (errors.length > 0) {
@@ -108,8 +116,13 @@ export function classifyResult(
 		(result.terminal_reason === undefined || result.terminal_reason === "completed")) {
 		return { type: "reusable" };
 	}
-	return {
-		type: "terminal",
-		message: failure ?? `Claude query ended with ${result.terminal_reason ?? result.subtype}`,
-	};
+	return { type: "terminal", message: failure ?? describeBareFailure(result) };
+}
+
+/** Last resort: the result flagged a failure and nothing anywhere said what it was. Naming a
+ *  terminal_reason of `completed` or a subtype of `success` would contradict the failure. */
+function describeBareFailure(result: SDKResultMessage): string {
+	if (result.terminal_reason && result.terminal_reason !== "completed") return `Claude query ended with ${result.terminal_reason}`;
+	if (result.subtype !== "success") return `Claude query ended with ${result.subtype}`;
+	return "Claude Code reported a failed turn without saying why";
 }

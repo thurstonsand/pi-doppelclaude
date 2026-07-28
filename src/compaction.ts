@@ -153,7 +153,7 @@ export function createCompaction(dependencies: CompactionDependencies) {
 						finalText = message.result || assistantText;
 						terminalUsage = message.usage;
 					} else {
-						errorText = resultErrorText(message);
+						errorText = resultErrorText(message) ?? `Claude Code summary failed: ${message.subtype}`;
 					}
 				}
 			}
