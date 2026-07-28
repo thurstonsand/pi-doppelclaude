@@ -39,6 +39,23 @@
   A proper diagnostic channel (NDJSON or dedicated diagLog entries) would be
   cleaner and resilient to log-format churn.
 
+## Upstream Gaps
+
+- **No session-scoped model selection**: `AgentSession.setModel` writes the
+  *global* default — `settingsManager.setDefaultModelAndProvider(...)` at
+  `core/agent-session.ts:1587` marks `defaultProvider`/`defaultModel` modified
+  and saves `~/.pi/agent/settings.json`. The extension API's `setModel` routes
+  to the same method, so a provider extension cannot change the session's model
+  without changing what every future session starts on, for every provider.
+  This blocks matching Claude Code's refusal behavior, which swaps its own
+  `mainLoopModel` to the fallback and restores it when the session id changes.
+  We do not follow the reroute for that reason: the refusal entry reports it and
+  the user picks. Until upstream offers a `persistModelSelection: false` setting
+  or a session-scoped setter, the footer, the context-window budget, and the
+  in-flight cost figure all name the requested model while Claude serves another
+  (the settled turn is re-priced from the served model, so the billed total is
+  correct).
+
 ## Downstream Integration
 
 - **pi-librarian nested runtimes**: Pass `ctx.modelRegistry.getRegisteredNativeProvider(providerId)` into each fresh `ModelRuntime` with `registerNativeProvider()` so nested calls retain the registered Provider object's runtime closure.
@@ -46,6 +63,29 @@
 - **pi-sessions nested runtimes**: Apply the same registered-native-Provider propagation when constructing fresh `ModelRuntime` instances.
 
 ## Deferred
+
+- **Refused partial output stays in the transcript**: `SDKModelRefusalFallbackMessage`
+  carries `retracted_message_uuids` and `refused_user_message_uuid`; Claude Code
+  splices those messages out of its own transcript. We cannot act on either
+  field yet, and three things are missing.
+  First, evidence: it is unconfirmed whether a refused partial ever reaches pi.
+  Claude Code's telemetry distinguishes `midStream` refusals and counts
+  `discardedBlockCount`, so partials clearly exist upstream — but if the SDK
+  withholds them from us until after the refusal, there is nothing to retract
+  and this item is moot. Determine this with a live probe before building.
+  Second, correlation: the bridge never records SDK assistant message uuids, so
+  a retracted uuid cannot be mapped to the content we emitted. Cheap to fix — a
+  map in `query-state.ts` keyed by uuid.
+  Third, a retraction primitive, which does not exist on either side of the
+  boundary. `AssistantMessageEvent` (pi-ai `types.d.ts:365`) has no event
+  meaning "discard what I streamed for this message"; once `text_delta` is
+  emitted, `partial` carries it to `done`. The extension API offers only
+  `appendEntry` (`core/extensions/types.ts:1295`) with no remove or replace, so
+  a committed entry cannot be rewritten either. The only mechanism available
+  today is buffering each SDK assistant message until the next message proves
+  it survived, which trades live streaming for a rare correction. Not worth it.
+  Pending upstream support, the refusal entry describing what happened is the
+  honest substitute.
 
 - **CC CLI debug log accumulation**: When `DOPPELCLAUDE_DEBUG=1`, every
   `query()` call writes a new file under `~/.pi/agent/cc-cli-logs/`. These

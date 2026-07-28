@@ -5,8 +5,10 @@ import { createBridgeRuntime } from "./bridge-runtime.js";
 import { acquireBridgeOwner } from "./bridge-owner.js";
 import { createCompaction } from "./compaction.js";
 import { configureDebug, debug, errorMessage, moduleInstanceId } from "./debug.js";
+import { createBridgeModelCatalog } from "./model-catalog.js";
 import { PROVIDER_ID } from "./models.js";
 import { createAnthropicAgentSdkProvider } from "./provider.js";
+import { REFUSAL_CUSTOM_TYPE, renderRefusalEntry } from "./refusal.js";
 import { loadBridgeSettings } from "./settings.js";
 
 export default function activate(pi: ExtensionAPI): void {
@@ -25,10 +27,14 @@ export default function activate(pi: ExtensionAPI): void {
 	});
 
 	const { owner, ownsLifecycle, release } = acquireBridgeOwner(() => {
-		const runtime = createBridgeRuntime({ providerSettings });
+		// The runtime teaches the catalog which models Claude actually serves and the provider
+		// publishes them, so both sides of that exchange hold the same catalog.
+		const modelCatalog = createBridgeModelCatalog();
+		const runtime = createBridgeRuntime({ providerSettings, modelCatalog });
 		const provider = createAnthropicAgentSdkProvider({
 			stream: runtime.stream,
 			accountProbe: createDefaultAccountProbe(providerSettings),
+			modelCatalog,
 		});
 		return { runtime, provider };
 	});
@@ -36,6 +42,7 @@ export default function activate(pi: ExtensionAPI): void {
 	debug(`owner: ${ownsLifecycle ? "created" : "borrowing"} shared Provider/runtime (module=${moduleInstanceId})`);
 
 	pi.registerProvider(provider);
+	pi.registerEntryRenderer(REFUSAL_CUSTOM_TYPE, renderRefusalEntry);
 
 	pi.on("session_before_compact", async (event, ctx) => {
 		if (ctx.model?.provider !== PROVIDER_ID) return undefined;
@@ -70,7 +77,10 @@ export default function activate(pi: ExtensionAPI): void {
 	if (!ownsLifecycle) return;
 
 	pi.on("session_start", async (event, ctx) => {
-		runtime.setUI(ctx.ui);
+		runtime.setHost({
+			ui: ctx.ui,
+			appendEntry: (customType, data) => pi.appendEntry(customType, data),
+		});
 		if (event.reason === "new" || event.reason === "resume" || event.reason === "fork") {
 			await runtime.clear(`session_start:${event.reason}`);
 		}
@@ -84,6 +94,10 @@ export default function activate(pi: ExtensionAPI): void {
 			await runtime.closePersistent("provider switch");
 		}
 	});
-	pi.on("session_compact", (event) => runtime.markRebuild(`session_compact:${event.reason}:willRetry=${event.willRetry}`));
-	pi.on("session_tree", () => runtime.markRebuild("session_tree"));
+	pi.on("session_compact", async (event) => {
+		await runtime.markRebuild(`session_compact:${event.reason}:willRetry=${event.willRetry}`);
+	});
+	pi.on("session_tree", async () => {
+		await runtime.markRebuild("session_tree");
+	});
 }

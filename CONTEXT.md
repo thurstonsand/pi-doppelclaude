@@ -18,7 +18,8 @@
 
 ## Models and usage
 
-- **Model catalog**: Pi's canonical Anthropic metadata intersected with the model IDs Claude Code reports it serves.
+- **Model catalog**: Pi's canonical Anthropic metadata intersected with the model IDs Claude Code reports it serves, plus any **refused fallbacks**
+- **Refusal fallback**: CC's safeguards decline a request and the API retries on another model, keeping that conversation on it. Pi still shows the original model, even as Claude Code uses the fallback.
 - **Account probe**: A one-shot CC query for `accountInfo`/`supportedModels`.
 - **First-party account**: Claude Code authentication whose Agent SDK account reports subscription auth, not an API key.
 

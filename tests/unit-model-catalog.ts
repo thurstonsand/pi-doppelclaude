@@ -303,6 +303,125 @@ describe("first load", () => {
 		assert.equal((store.entry as ModelsStoreEntry & { failedAt: number }).failedAt, failedAt);
 	});
 
+	it("offers a model Claude served but never advertised, and replays it on the next start", async () => {
+		const store = memoryStore();
+		const catalog = createBridgeModelCatalog({
+			...testDependencies,
+			now: () => Date.parse("2026-07-25T00:00:00Z"),
+			requestCatalog: async () => response([...builtinModels, opus5]),
+		});
+		await catalog.refresh(context(store, true), advertises(supportedModels));
+		assert.deepEqual(catalog.getModels().map((model) => model.id), ["claude-opus-5"]);
+
+		await catalog.noteServedModel("claude-opus-4-8");
+		assert.deepEqual(catalog.getModels().map((model) => model.id), ["claude-opus-5", "claude-opus-4-8"]);
+		assert.deepEqual(
+			(store.entry as ModelsStoreEntry & { observedModelIds: string[] }).observedModelIds,
+			["claude-opus-4-8"],
+		);
+
+		const restarted = createBridgeModelCatalog(testDependencies);
+		await restarted.refresh(context(store, false), neverAsked);
+		assert.deepEqual(restarted.getModels().map((model) => model.id), ["claude-opus-5", "claude-opus-4-8"]);
+	});
+
+	it("refetches when nothing on hand can describe a model Claude served", async () => {
+		const checkedAt = Date.parse("2026-07-25T00:00:00Z");
+		const store = memoryStore();
+		let fetches = 0;
+		const catalog = createBridgeModelCatalog({
+			...testDependencies,
+			now: () => checkedAt,
+			requestCatalog: async () => {
+				fetches += 1;
+				return response(fetches === 1 ? [...builtinModels, opus5] : [...builtinModels, opus5, future]);
+			},
+		});
+		await catalog.refresh(context(store, true), advertises(supportedModels));
+		await catalog.noteServedModel("claude-opus-6");
+		assert.equal(catalog.getModels().some((model) => model.id === "claude-opus-6"), false);
+
+		// The catalog on hand is minutes old, but it cannot name the model that just answered.
+		await catalog.refresh({ ...context(store, true), force: false }, advertises(supportedModels));
+		assert.equal(fetches, 2);
+		assert.equal(catalog.getModels().some((model) => model.id === "claude-opus-6"), true);
+	});
+
+	it("persists a served model with the confirmed allowlist, not as a never-probed entry", async () => {
+		const store = memoryStore();
+		const catalog = createBridgeModelCatalog({
+			...testDependencies,
+			now: () => Date.parse("2026-07-25T00:00:00Z"),
+			requestCatalog: async () => response([...builtinModels, opus5]),
+		});
+		await catalog.refresh(context(store, true), advertises(supportedModels));
+		await catalog.noteServedModel("claude-opus-4-8");
+
+		// A note that dropped supportedModelIds would read as a never-probed installation next start,
+		// forcing discovery to collapse the catalog to the observed model alone.
+		const persisted = store.entry as ModelsStoreEntry & { supportedModelIds: string[]; observedModelIds: string[] };
+		assert.deepEqual(persisted.supportedModelIds, ["claude-opus-5"]);
+		assert.deepEqual(persisted.observedModelIds, ["claude-opus-4-8"]);
+
+		const restarted = createBridgeModelCatalog(testDependencies);
+		await restarted.refresh(context(store, false), neverAsked);
+		assert.deepEqual(restarted.getModels().map((model) => model.id), ["claude-opus-5", "claude-opus-4-8"]);
+	});
+
+	it("keeps an observation that lands while the catalog is being refetched", async () => {
+		const store = memoryStore();
+		const catalog = createBridgeModelCatalog({
+			...testDependencies,
+			now: () => Date.parse("2026-07-25T00:00:00Z"),
+			requestCatalog: async () => {
+				// Mid-fetch, Claude serves a model the catalog does not yet name.
+				await catalog.noteServedModel("claude-opus-4-8");
+				return response([...builtinModels, opus5]);
+			},
+		});
+		await catalog.refresh(context(store, true), advertises(supportedModels));
+
+		const persisted = store.entry as ModelsStoreEntry & { observedModelIds: string[] };
+		assert.deepEqual(persisted.observedModelIds, ["claude-opus-4-8"], "the refresh write must not clobber a concurrent observation");
+	});
+
+	it("keeps persisting after a single store write fails", async () => {
+		const store = memoryStore();
+		const catalog = createBridgeModelCatalog({
+			...testDependencies,
+			now: () => Date.parse("2026-07-25T00:00:00Z"),
+			requestCatalog: async () => response([...builtinModels, opus5]),
+		});
+		await catalog.refresh(context(store, true), advertises(supportedModels));
+
+		let failNext = true;
+		store.write = async function (entry) {
+			if (failNext) { failNext = false; throw new Error("disk full"); }
+			this.entry = structuredClone(entry);
+		};
+		await assert.rejects(catalog.noteServedModel("claude-opus-4-8"), /disk full/);
+		// A poisoned write chain would silently skip this second write; it must still land.
+		await catalog.noteServedModel("claude-sonnet-5");
+		assert.deepEqual(
+			(store.entry as ModelsStoreEntry & { observedModelIds: string[] }).observedModelIds,
+			["claude-opus-4-8", "claude-sonnet-5"],
+		);
+	});
+
+	it("ignores a served name that identifies no model family", async () => {
+		const store = memoryStore();
+		const catalog = createBridgeModelCatalog({
+			...testDependencies,
+			now: () => Date.parse("2026-07-25T00:00:00Z"),
+			requestCatalog: async () => response([...builtinModels, opus5]),
+		});
+		await catalog.refresh(context(store, true), advertises(supportedModels));
+
+		await catalog.noteServedModel("sonnet");
+		assert.deepEqual(catalog.getModels().map((model) => model.id), ["claude-opus-5"]);
+		assert.deepEqual((store.entry as ModelsStoreEntry & { observedModelIds: string[] }).observedModelIds, []);
+	});
+
 	it("rejects malformed remote metadata without replacing the baseline", async () => {
 		const catalog = createBridgeModelCatalog({
 			...testDependencies,

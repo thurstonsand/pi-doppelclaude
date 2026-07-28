@@ -61,7 +61,10 @@ describe("provider SDK result errors", () => {
 	it("reports a synthetic error envelope once, as the turn's error", async () => {
 		const notifications: string[] = [];
 		const failure = "Failed to authenticate. API Error: 401 OAuth access token has been revoked.";
-		runtime.setUI({ notify: (text: string) => notifications.push(text) } as unknown as ExtensionUIContext);
+		runtime.setHost({
+			ui: { notify: (text: string) => notifications.push(text) } as unknown as ExtensionUIContext,
+			appendEntry() {},
+		});
 
 		const sdkQuery = (async function* () {
 			yield {

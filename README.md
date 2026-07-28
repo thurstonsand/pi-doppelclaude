@@ -158,7 +158,7 @@ Available tools:
 
 Use `/model` and pick from the `doppelclaude` provider — `doppelclaude/claude-opus-*`, `doppelclaude/claude-sonnet-*`, and so on.
 
-The catalog is whatever Claude Code currently lists in its own model selector (so no older models).
+The catalog is whatever Claude Code currently lists in its own model selector (so no older models), plus any model Claude reroutes to on refusals.
 
 To pick up a model Claude Code has started, open `/model`. It refreshes catalogs in the background, which re-asks Claude Code what it serves and rewrites the cached entry (`pi update --models` doesn't load extensions so cannot load these models).
 

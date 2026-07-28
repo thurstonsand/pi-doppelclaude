@@ -7,6 +7,7 @@
 import { randomUUID } from "node:crypto";
 import { createAssistantMessageEventStream, type AssistantMessageEventStream, type Context, type Model, type SimpleStreamOptions, type Tool } from "@earendil-works/pi-ai";
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
+import type { RefusalEntryData } from "./refusal.js";
 import { query, type McpServerConfig, type Options, type Query, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 // Server's @deprecated tag steers high-level users toward McpServer, whose
 // pre-handler validation is exactly what buildMcpServers must escape; the tag
@@ -18,6 +19,7 @@ import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { createSession, deleteSession, repairToolPairing } from "cc-session-io";
 import { messageContentToText, convertPiMessages } from "./convert.js";
+import type { BridgeModelCatalog } from "./model-catalog.js";
 import { claudeCodeModelId, resolveThinkingEffort } from "./models.js";
 import { MCP_SERVER_NAME, MCP_TOOL_PREFIX } from "./skills.js";
 import { extractAllToolResults as _extractAllToolResults, type McpResult } from "./extract-tool-results.js";
@@ -33,6 +35,18 @@ export interface BridgeRuntimeDependencies {
 	providerSettings: ProviderSettings;
 	queryFactory?(request: { prompt: AsyncIterable<SDKUserMessage>; options?: Options }): Query;
 	sessionStore?: BridgeSessionStore;
+	/** Absent in tests that exercise streaming without a provider; then a served model teaches nothing. */
+	modelCatalog?: BridgeModelCatalog;
+}
+
+/**
+ * What the runtime needs from Pi while a session is open. `ui` comes from the session event and
+ * `appendEntry` from the extension API, gathered into one surface the runtime holds or drops as a
+ * unit and the owning activation refreshes on each `session_start`.
+ */
+export interface BridgeHost {
+	ui: ExtensionUIContext;
+	appendEntry(customType: string, data: RefusalEntryData): void;
 }
 
 interface SessionState {
@@ -100,7 +114,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
 
 	let sharedSession: SessionState | null = null;
 	const sessionStore = dependencies.sessionStore ?? new BridgeSessionStore(debug);
-	let piUI: ExtensionUIContext | null = null;
+	let host: BridgeHost | null = null;
 	const activeQueryContexts = new Set<QueryContext>();
 	// The persistent (root) query context. Each runtime owns its own, so two
 	// runtimes never share query/session state through a module global.
@@ -114,7 +128,11 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
 		consumeQuery,
 	} = createProviderStreamRuntime({
 		debug,
-		notify: (message, level) => piUI?.notify(message, level),
+		notify: (message, level) => host?.ui.notify(message, level),
+		appendEntry: (customType, data) => host?.appendEntry(customType, data),
+		observeServedModel: (id) => {
+			dependencies.modelCatalog?.noteServedModel(id).catch((error) => debug("provider: recording the served model failed", error));
+		},
 	});
 
 	// Convert pi messages to Anthropic API format for session import.
@@ -354,7 +372,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
 	function failMcpBridge(queryCtx: QueryContext): void {
 		const message = "Claude bridge incompatible with this Claude Code version: CLI no longer sends claudecode/toolUseId in MCP tool metadata";
 		debug(`provider: fatal MCP bridge error: ${message}`);
-		piUI?.notify(message, "error");
+		host?.ui.notify(message, "error");
 		queryCtx.fatalError = message;
 		emitTerminalError(queryCtx, "error", message);
 		void closeQueryContext(queryCtx, message, "force");
@@ -629,7 +647,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
 				},
 				onMirrorError(message) {
 					invalidateStoredSession(message.key.sessionId, `mirror_error: ${message.error}`);
-					piUI?.notify(`Claude transcript mirror failed: ${message.error}`, "error");
+					host?.ui.notify(`Claude transcript mirror failed: ${message.error}`, "error");
 					if (!queryCtx.closing) failQuery(queryCtx, "error", `Claude transcript mirror failed: ${message.error}`, "rebuild");
 				},
 			});
@@ -903,8 +921,8 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
 		}
 	}
 
-	function setUI(ui: ExtensionUIContext | null): void {
-		piUI = ui;
+	function setHost(next: BridgeHost | null): void {
+		host = next;
 	}
 
 	return {
@@ -912,7 +930,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
 		clear,
 		closePersistent,
 		markRebuild,
-		setUI,
+		setHost,
 		// @internal — surface for tests that exercise session sync and MCP routing
 		// by instantiating the factory directly (no extension activation).
 		test: {
@@ -935,6 +953,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
 			syncSharedSession,
 			consumeQuery,
 			finalizeCurrentStream,
+			emitTerminalError,
 			closeQueryContext,
 			settleInterruptedQuery,
 			createMcpToolHandler,

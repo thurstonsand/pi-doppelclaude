@@ -46,10 +46,18 @@ export async function awaitQueryInitialization(sdkQuery: Query): Promise<void> {
 	await sdkQuery.initializationResult();
 }
 
+// No limit window runs longer than a week, so the year would never disambiguate anything.
+const RESET_FORMAT: Intl.DateTimeFormatOptions = {
+	month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short",
+};
+
 function resetText(resetsAt: number | undefined): string | null {
 	if (resetsAt === undefined) return null;
 	const reset = new Date(resetsAt < 1_000_000_000_000 ? resetsAt * 1000 : resetsAt);
-	return Number.isNaN(reset.valueOf()) ? String(resetsAt) : reset.toISOString();
+	if (Number.isNaN(reset.valueOf())) return String(resetsAt);
+	// The reader has to decide whether to wait it out, so the wall clock they are reading it on
+	// is the only useful frame.
+	return reset.toLocaleString(undefined, RESET_FORMAT);
 }
 
 function limitName(type: SDKRateLimitInfo["rateLimitType"]): string {
@@ -68,7 +76,9 @@ export function formatRateLimitMessage(info: SDKRateLimitInfo): string {
 	const parts = [`Claude ${limitName(info.rateLimitType)}`];
 	if (info.status === "allowed_warning") parts.push("warning");
 	else if (info.status === "rejected") parts.push("rejected");
-	if (info.utilization !== undefined) parts.push(`${Math.round(info.utilization)}% used`);
+	// The CLI reports the consumed fraction, 0.0-1.0 — unlike the `/usage` endpoint, which
+	// reports the same quantity already scaled to 0-100.
+	if (info.utilization !== undefined) parts.push(`${Math.round(info.utilization * 100)}% used`);
 	const reset = resetText(info.resetsAt);
 	if (reset) parts.push(`resets ${reset}`);
 	if (info.errorCode === "credits_required") {

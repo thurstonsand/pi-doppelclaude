@@ -12,6 +12,8 @@ const BRIDGE_MODEL = Symbol("pi-doppelclaude.model");
 const MODEL_FAMILIES_IN_ORDER = ["fable", "opus", "sonnet", "haiku"];
 const NUMERIC_MODEL_VERSION = /^\d+$/u;
 const SHORT_MODEL_VERSION_PART = /^\d{1,2}$/u;
+const LONG_CONTEXT_FORM = /\[1m\]$/u;
+const DATED_SNAPSHOT = /-\d{8}$/u;
 const TWO_HUNDRED_K_CONTEXT = 200_000;
 
 export interface BridgeModel extends Model<typeof PROVIDER_API> {
@@ -45,6 +47,13 @@ function modelOrder(id: string): [number, number[]] | undefined {
 		!remainingVersion.every((part) => SHORT_MODEL_VERSION_PART.test(part))
 	) return undefined;
 	return [familyIndex, [firstVersion, ...remainingVersion].map(Number)];
+}
+
+// Claude names a model by whichever form the caller met it in: a long-context form
+// (`claude-opus-5[1m]`) or a dated snapshot (`claude-haiku-4-5-20251001`). Pi names the
+// family, and Claude serves it, so both forms normalize onto the family ID.
+export function canonicalClaudeModelId(advertised: string): string {
+	return advertised.replace(LONG_CONTEXT_FORM, "").replace(DATED_SNAPSHOT, "");
 }
 
 export function isStableClaudeModelId(id: string): boolean {

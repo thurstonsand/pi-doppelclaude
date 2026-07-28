@@ -82,14 +82,17 @@ describe("Agent SDK runtime signals", () => {
 		const message = formatRateLimitMessage({
 			status: "rejected",
 			rateLimitType: "seven_day_opus",
-			utilization: 100,
+			utilization: 1,
 			resetsAt: Date.parse("2026-07-25T12:00:00.000Z"),
 			errorCode: "credits_required",
 			canUserPurchaseCredits: false,
 		});
 		assert.match(message, /Opus weekly limit/);
 		assert.match(message, /100% used/);
-		assert.match(message, /2026-07-25T12:00:00.000Z/);
+		const localReset = new Date(Date.parse("2026-07-25T12:00:00.000Z")).toLocaleString(undefined, {
+			month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short",
+		});
+		assert.ok(message.includes(`resets ${localReset}`), message);
 		assert.match(message, /credits required/);
 	});
 

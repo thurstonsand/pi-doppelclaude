@@ -79,6 +79,9 @@ export class QueryContext {
 	cliModel: string | null = null;
 	modelUsageSnapshot: SdkModelUsage = {};
 	commandOutputs: AssistantMessage[] = [];
+	announcedServedPairs = new Set<string>();
+	servedModelAnnouncement: { requested: string; served: string } | null = null;
+	commandFallbackRecapPending = false;
 	activeModel: Model<any> | null = null;
 	abortCleanup: (() => void) | null = null;
 	completion: Promise<void> | null = null;
@@ -120,6 +123,7 @@ export class QueryContext {
 
 	beginCommand(model: Model<any>): void {
 		this.commandOutputs = [];
+		this.commandFallbackRecapPending = false;
 		// The buffer belongs to the command that opened its window; a new command
 		// must never inherit the previous one's unreplayed messages.
 		this.rejectionWindowOpen = false;

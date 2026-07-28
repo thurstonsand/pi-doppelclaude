@@ -71,6 +71,7 @@ const discoveredModels = [bridgeModel("claude-opus-4-8"), bridgeModel("claude-so
 function stubCatalog(models: readonly BridgeModel[] = discoveredModels): BridgeModelCatalog {
 	return {
 		getModels: () => models,
+		async noteServedModel() {},
 		// Stands in for the real catalog's contract: it asks Claude Code only when it needs discovery.
 		async refresh(context, requestSupportedModels) {
 			if (context.allowNetwork) await requestSupportedModels();

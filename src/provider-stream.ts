@@ -1,19 +1,23 @@
 import { type AssistantMessageEventStream, type Model } from "@earendil-works/pi-ai";
 import { parse as parsePartialJsonText } from "partial-json";
-import { type Query, type SDKAssistantMessage, type SDKMessage, type SDKMirrorErrorMessage, type SDKResultMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import { type Query, type SDKAssistantMessage, type SDKMessage, type SDKMirrorErrorMessage, type SDKModelRefusalFallbackMessage, type SDKModelRefusalNoFallbackMessage, type SDKResultMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { QueryContext } from "./query-state.js";
 import { isCcRejectedToolName, mapSdkToolNameToPi } from "./convert.js";
 import { logServedContextWindow, resultErrorText } from "./sdk-result.js";
 import { applySdkUsage, debugSdkUsage, diffSdkModelUsage, reconcileSdkModelUsage } from "./sdk-usage.js";
 import { apiStatusFailure, assistantApiFailure, classifyResult, formatRateLimitMessage, isSyntheticModelId } from "./sdk-signals.js";
+import { canonicalClaudeModelId } from "./models.js";
+import { REFUSAL_CUSTOM_TYPE, refusalEntryData, type RefusalEntryData } from "./refusal.js";
 
 interface ProviderStreamDependencies {
 	debug(...args: unknown[]): void;
 	notify?(message: string, level: "warning"): void;
+	appendEntry?(customType: string, data: RefusalEntryData): void;
+	observeServedModel?(id: string): void;
 }
 
 export function createProviderStreamRuntime(dependencies: ProviderStreamDependencies) {
-	const { debug, notify } = dependencies;
+	const { debug, notify, appendEntry, observeServedModel } = dependencies;
 
 	// --- Provider helpers: misc ---
 
@@ -111,6 +115,68 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
 		}
 	}
 
+	/** A turn can be answered by a model other than the one asked for — a refusal reroute, or a
+	 *  transient fallback while the requested model is overloaded. The result message's usage
+	 *  totals are the authoritative record but land only when the command ends, so the routing is
+	 *  reported from the first message naming a model — for a streaming request, `message_start`,
+	 *  which the API stamps before the stream opens. */
+	function noteServedModel(advertised: string | undefined, requested: Model<any>, c: QueryContext): void {
+		if (!advertised || !c.turnOutput) return;
+		const served = canonicalClaudeModelId(advertised);
+		if (served === requested.id) return;
+		c.turnOutput.responseModel = served;
+		observeServedModel?.(served);
+		c.servedModelAnnouncement = { requested: requested.id, served };
+		// Announced once for the life of the query. A pair seen in an earlier command is neither
+		// re-announced now nor recapped when this turn ends — the conversation staying on the fallback
+		// is not news every turn.
+		const pair = `${requested.id}>${served}`;
+		if (c.announcedServedPairs.has(pair)) return;
+		c.announcedServedPairs.add(pair);
+		// A demotion detected mid-turn scrolls away behind the turn's own output, so it is repeated
+		// once when the turn settles.
+		c.commandFallbackRecapPending = true;
+		const warning = `Claude served ${served} instead of requested ${requested.id}; usage priced from served model`;
+		debug(`usage: fallback ${warning}`);
+		notify?.(warning, "warning");
+	}
+
+	/** Claude declining a request is a durable fact about the session — the conversation stays on
+	 *  whatever served the retry — so it is recorded as a session entry rather than a notification
+	 *  that a reload would erase. The entry also stands in for `noteServedModel`'s warning: the
+	 *  reroute it would announce is the one this entry already describes. */
+	function announceRefusal(message: SDKModelRefusalFallbackMessage | SDKModelRefusalNoFallbackMessage, c: QueryContext): void {
+		const data = refusalEntryData(message);
+		debug(`refusal: ${data.requestedModel} category=${data.category ?? "none"} served=${data.servedModel ?? "none"} persistent=${c.persistent}`);
+		// A reentrant (subagent) query shares this runtime with the root but not the root's session, so
+		// recording its refusal against the root would misfile the entry. Only the persistent query
+		// touches durable state.
+		if (!c.persistent) return;
+		// The SDK also hands us `retracted_message_uuids` — messages (the refused partial, possibly
+		// including tombstoned tool results) that the retry replaces and that should be evicted. We do
+		// not act on it, and that is a real gap, not only a display one: the refused blocks stay in the
+		// finalized assistant message and are replayed into the next rebuilt Claude session. Evicting
+		// them safely needs a transactional buffer for the refusal-capable leg, or a Pi stream-reset
+		// primitive keyed to the SDK UUIDs — clearing the accumulated blocks here would desync the
+		// content-block indices Pi has already rendered from.
+		appendEntry?.(REFUSAL_CUSTOM_TYPE, data);
+		if (!data.servedModel) return;
+		c.servedModelAnnouncement = { requested: data.requestedModel, served: data.servedModel };
+		c.commandFallbackRecapPending = false;
+		c.announcedServedPairs.add(`${data.requestedModel}>${data.servedModel}`);
+		observeServedModel?.(data.servedModel);
+	}
+
+	/** A demotion detected mid-turn scrolls away behind the turn's own output, so it is repeated
+	 *  once when the turn settles — and only for the command that discovered it. */
+	function recapServedModel(c: QueryContext): void {
+		if (!c.commandFallbackRecapPending) return;
+		c.commandFallbackRecapPending = false;
+		const announced = c.servedModelAnnouncement;
+		if (!announced) return;
+		notify?.(`Turn served by ${announced.served}, not ${announced.requested}; usage priced from served model`, "warning");
+	}
+
 	function ensureTurnStarted(c: QueryContext): void {
 		if (!c.turnStarted && c.currentPiStream && c.turnOutput) {
 			c.currentPiStream!.push({ type: "start", partial: c.turnOutput });
@@ -119,6 +185,7 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
 	}
 
 	function emitTerminalError(c: QueryContext, reason: "aborted" | "error", message: string): void {
+		recapServedModel(c);
 		if (!c.turnOutput) return;
 		c.turnOutput.stopReason = reason;
 		c.turnOutput.errorMessage = message;
@@ -160,6 +227,7 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
 		const event = (message as SDKMessage & { event: any }).event;
 
 		if (event?.type === "message_start") {
+			noteServedModel(event.message?.model, model, c);
 			if (event.message?.usage && c.turnOutput) applySdkUsage(c.turnOutput, event.message.usage, model);
 			return;
 		}
@@ -278,6 +346,9 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
 			debug(`provider: synthetic message withheld from transcript: ${text || "(no text)"}`);
 			return;
 		}
+		// Ordered after the synthetic guard: a fabricated message names no model that served
+		// anything, so reading it as a reroute is the demotion warning that fix removed.
+		noteServedModel(message.message?.model, model, c);
 		if (c.turnSawStreamEvent) return;
 		const assistantMsg = message.message;
 		if (!assistantMsg?.content) return;
@@ -360,11 +431,8 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
 		const accounting = reconcileSdkModelUsage(queryCtx.commandOutputs, modelUsage, currentModel);
 		debugSdkUsage(debug, queryCtx.turnOutput, currentModel);
 		debug(`usage: served=${accounting.servedModels.join(",") || "none"} sdkCostUSD=${accounting.costUSD}`);
-		if (accounting.fallbackModels.length > 0) {
-			const fallback = `Claude served ${accounting.fallbackModels.join(", ")} instead of requested ${currentModel.id}; usage priced from served model`;
-			debug(`usage: fallback ${fallback}`);
-			notify?.(fallback, "warning");
-		}
+		for (const served of accounting.fallbackModels) noteServedModel(served, currentModel, queryCtx);
+		recapServedModel(queryCtx);
 		if (accounting.unknownModels.length > 0) {
 			debug(`usage: no Pi catalog pricing for served model(s): ${accounting.unknownModels.join(", ")}; preserving SDK total cost`);
 		}
@@ -414,6 +482,10 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
 						if (failure) notify?.(`${failure}; retrying attempt ${message.attempt}/${message.max_retries}`, "warning");
 						break;
 					}
+					case "model_refusal_fallback":
+					case "model_refusal_no_fallback":
+						announceRefusal(message, queryCtx);
+						break;
 				}
 				break;
 			case "rate_limit_event": {

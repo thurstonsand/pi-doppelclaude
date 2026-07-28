@@ -12,7 +12,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Provider } from "@earendil-works/pi-ai";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
 
 // Isolate the bridge settings and seed a valid claude-code prompt mode that
 // needs no documentation replacements.
@@ -31,11 +31,18 @@ const MUTATING_EVENTS = ["session_start", "session_shutdown", "model_select", "s
 function fakePi() {
 	const handlers = new Map<string, (...args: unknown[]) => unknown>();
 	const providers: Provider[] = [];
+	const entryRenderers: string[] = [];
 	const pi = {
 		registerProvider(provider: Provider) { providers.push(provider); },
+		registerEntryRenderer(customType: string) { entryRenderers.push(customType); },
 		on(event: string, handler: (...args: unknown[]) => unknown) { handlers.set(event, handler); },
 	} as unknown as ExtensionAPI;
-	return { pi, handlers, providers };
+	return { pi, handlers, providers, entryRenderers };
+}
+
+// Shutdown releases the model pin before exit, so it reads the branch it would restore from.
+function shutdownContext(): ExtensionContext {
+	return { model: undefined, sessionManager: { getBranch: (): SessionEntry[] => [] } } as unknown as ExtensionContext;
 }
 
 afterEach(() => {
@@ -84,7 +91,7 @@ describe("extension activation ownership", () => {
 		assert.equal(borrower.handlers.has("session_shutdown"), false);
 
 		// Root shutdown clears the shared runtime and releases the owner.
-		await first.handlers.get("session_shutdown")();
+		await first.handlers.get("session_shutdown")({ type: "session_shutdown" }, shutdownContext());
 		assert.equal(ownerRegistry[OWNER_KEY], undefined);
 
 		// Next activation builds a fresh runtime with a distinct stream closure.
