@@ -1,6 +1,6 @@
 {
   "name": "pi-doppelclaude",
-  "version": "0.7.0",
+  "version": "0.0.0",
   "private": false,
   "description": "Pi provider that runs your Claude Code subscription as pi models via the Claude Agent SDK.",
   "keywords": [
