@@ -25,4 +25,3 @@
 ## Tool bridge
 
 - **MCP bridge**: Pi's tools exposed to Claude Code as an in-process MCP server named `custom-tools`, so every tool call flows back through Pi. CC-native tools are disabled (`tools: []`).
-

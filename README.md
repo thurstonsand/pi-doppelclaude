@@ -160,13 +160,7 @@ Use `/model` and pick from the `doppelclaude` provider — `doppelclaude/claude-
 
 The catalog is whatever Claude Code currently lists in its own model selector (so no older models).
 
-To pick up a model Claude Code has started serving since, delete the provider's entry and restart pi:
-
-```sh
-jq 'del(.doppelclaude)' ~/.pi/agent/models-store.json > /tmp/ms.json && mv /tmp/ms.json ~/.pi/agent/models-store.json
-```
-
-`pi update --models` does not work here. pi 0.82.1 builds a bare model runtime for that command with no extensions loaded, so it cannot reach a provider that an extension registers.
+To pick up a model Claude Code has started, open `/model`. It refreshes catalogs in the background, which re-asks Claude Code what it serves and rewrites the cached entry (`pi update --models` doesn't load extensions so cannot load these models).
 
 **Cost display** — pi applies canonical Anthropic API prices as an API-equivalent reference. Accounting follows the concrete models in Claude Code's `modelUsage`, so if Anthropic downgrades your model mid-turn, it's still accounted for correctly. This is just for display, and you are still using your subscription (unless you enable Extra Usage on your billing account).
 
