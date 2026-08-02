@@ -1,8 +1,9 @@
-import { type AssistantMessageEventStream, type Model } from "@earendil-works/pi-ai";
+import { type AssistantMessageEventStream, type Model, type StopReason } from "@earendil-works/pi-ai";
 import { parse as parsePartialJsonText } from "partial-json";
 import { type Query, type SDKAssistantMessage, type SDKMessage, type SDKMirrorErrorMessage, type SDKModelRefusalFallbackMessage, type SDKModelRefusalNoFallbackMessage, type SDKResultMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { QueryContext } from "./query-state.js";
 import { isCcRejectedToolName, mapSdkToolNameToPi } from "./convert.js";
+import { withReloginHint } from "./dead-query.js";
 import { logServedContextWindow, resultErrorText } from "./sdk-result.js";
 import { applySdkUsage, debugSdkUsage, diffSdkModelUsage, reconcileSdkModelUsage } from "./sdk-usage.js";
 import { apiStatusFailure, assistantApiFailure, classifyResult, formatRateLimitMessage, isSyntheticModelId } from "./sdk-signals.js";
@@ -21,11 +22,25 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
 
 	// --- Provider helpers: misc ---
 
-	function mapStopReason(reason: string | undefined): "stop" | "length" | "toolUse" {
+	/** Mirrors Pi's own Anthropic mapping: every terminal reason is named, and anything
+	 *  unrecognized fails loudly. Defaulting unknown reasons to "stop" would report a
+	 *  refused or truncated turn as a complete one. */
+	function mapStopReason(reason: string | undefined): { stopReason: StopReason; errorMessage?: string } {
 		switch (reason) {
-			case "tool_use": return "toolUse";
-			case "max_tokens": return "length";
-			case "end_turn": default: return "stop";
+			case "end_turn":
+			case "stop_sequence":
+			case "pause_turn": // Pi resubmits; a plain stop is good enough here too.
+				return { stopReason: "stop" };
+			case "max_tokens": return { stopReason: "length" };
+			case "tool_use": return { stopReason: "toolUse" };
+			case "refusal":
+				return { stopReason: "error", errorMessage: "The model refused to complete the request" };
+			case "sensitive":
+				return { stopReason: "error", errorMessage: "Provider stopped with: sensitive" };
+			case "model_context_window_exceeded":
+				return { stopReason: "error", errorMessage: "The conversation exceeded the model's context window" };
+			default:
+				return { stopReason: "error", errorMessage: `Unhandled stop reason: ${reason}` };
 		}
 	}
 
@@ -188,7 +203,7 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
 		recapServedModel(c);
 		if (!c.turnOutput) return;
 		c.turnOutput.stopReason = reason;
-		c.turnOutput.errorMessage = message;
+		c.turnOutput.errorMessage = reason === "error" ? withReloginHint(message) : message;
 		if (!c.currentPiStream) return;
 		ensureTurnStarted(c);
 		const stream = c.currentPiStream;
@@ -201,6 +216,12 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
 	function finalizeCurrentStream(c: QueryContext): void {
 		if (!c.currentPiStream || !c.turnOutput) return;
 		debug(`provider: finalizeCurrentStream called, turnOutput=${JSON.stringify({stopReason: c.turnOutput.stopReason, error: c.turnOutput.errorMessage})}`);
+		// Still pending means the query ended without ever reporting a terminal state —
+		// a dead subprocess or a truncated stream. Whatever was accumulated is partial.
+		if (c.turnOutput.stopReason === "pending") {
+			emitTerminalError(c, "error", "Claude Code ended the turn without a stop reason");
+			return;
+		}
 		if (c.turnOutput.stopReason === "error") {
 			emitTerminalError(c, "error", c.turnOutput.errorMessage ?? "Query failed");
 			return;
@@ -297,7 +318,12 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
 		}
 
 		if (event?.type === "message_delta") {
-			c.turnOutput.stopReason = mapStopReason(event.delta?.stop_reason);
+			const rawStopReason = event.delta?.stop_reason;
+			const { stopReason, errorMessage } = mapStopReason(rawStopReason);
+			c.turnOutput.stopReason = stopReason;
+			// Kept verbatim so the transcript and diagnostics can name what Claude actually said.
+			if (rawStopReason) c.turnOutput.rawStopReason = rawStopReason;
+			if (errorMessage) c.turnOutput.errorMessage = errorMessage;
 			if (event.usage) applySdkUsage(c.turnOutput, event.usage, model);
 			return;
 		}
@@ -442,6 +468,7 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
 			queryCtx.turnOutput.errorMessage = verdict.message;
 			return;
 		}
+		if (queryCtx.turnOutput.stopReason === "pending") queryCtx.turnOutput.stopReason = "stop";
 		if (!queryCtx.turnSawStreamEvent) {
 			ensureTurnStarted(queryCtx);
 			const text = message.subtype === "success" ? message.result : "";

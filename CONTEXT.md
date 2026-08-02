@@ -12,6 +12,10 @@
 - **Provider**: The native `pi-ai` Provider registered as `doppelclaude`. Pi's canonical model metadata is authoritative for display and behavior; Claude Code executes the requests.
 - **Bridge owner**: The process-scoped singleton Provider/runtime pair. The first activation builds and owns it; later activations borrow it, so all provider calls route through one runtime.
 
+## Failure handling
+
+- **Dead query**: a Claude Code query that expired out from under a turn, either by a control request rejected by SDK teardown, or OAuth credentials revoked by a sibling process.
+
 ## Session sync
 
 - **Sync paths**: `reuse` (Pi's history matches the live session; send only the new tail), `rebuild` (history diverged; synthesize a complete CC transcript and atomically replace the store entry), and `clean-start` (no prior context).

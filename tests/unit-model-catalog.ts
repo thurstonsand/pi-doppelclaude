@@ -25,6 +25,13 @@ const supportedModels: ModelInfo[] = [{
 	description: "Opus 5",
 }];
 
+const undescribedModels: ModelInfo[] = [{
+	value: "opus[1m]",
+	resolvedModel: "claude-opus-99[1m]",
+	displayName: "Opus",
+	description: "Opus 99",
+}];
+
 function memoryStore(initial?: ModelsStoreEntry): ProviderModelsStore & { entry?: ModelsStoreEntry } {
 	return {
 		entry: initial,
@@ -236,7 +243,7 @@ describe("first load", () => {
 			...testDependencies,
 			requestCatalog: async () => { throw new Error("offline"); },
 		});
-		const ask = async () => { asked++; return supportedModels; };
+		const ask = async () => { asked++; return undescribedModels; };
 
 		await assert.rejects(catalog.refresh(context(store, false), ask), /offline/);
 		assert.equal(asked, 1);
@@ -427,7 +434,7 @@ describe("first load", () => {
 			...testDependencies,
 			requestCatalog: async () => new Response(JSON.stringify([{ id: "claude-opus-5" }]), { status: 200 }),
 		});
-		await assert.rejects(catalog.refresh(context(memoryStore(), true), advertises(supportedModels)), /malformed metadata/);
+		await assert.rejects(catalog.refresh(context(memoryStore(), true), advertises(undescribedModels)), /malformed metadata/);
 		assert.deepEqual(catalog.getModels(), []);
 	});
 });

@@ -95,6 +95,10 @@ export class QueryContext {
 	turnApiFailure: string | null = null;
 	turnRateLimitRejection: string | null = null;
 	turnSyntheticText: string | null = null;
+	// Respawns and replays the turn once when the query dies before any of it reaches pi.
+	// Live only from the turn's start until the turn advances, so a failure after pi has
+	// moved on cannot replay a stale context.
+	turnRetry: (() => void) | null = null;
 	pendingToolCalls = new Map<string, PendingToolCall>();
 	pendingResults = new Map<string, McpResult>();
 	// Reconciliation is order-independent: a tool call is shown to pi when it is
@@ -137,7 +141,7 @@ export class QueryContext {
 			api: model.api, provider: model.provider, model: model.id,
 			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-			stopReason: "stop", timestamp: Date.now(),
+			stopReason: "pending", timestamp: Date.now(),
 		};
 		this.commandOutputs.push(this.turnOutput);
 		this.turnStarted = false;
@@ -151,6 +155,7 @@ export class QueryContext {
 		this.turnApiFailure = null;
 		this.turnRateLimitRejection = null;
 		this.turnSyntheticText = null;
+		this.turnRetry = null;
 		this.readyForInput = false;
 	}
 }
