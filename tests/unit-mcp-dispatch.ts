@@ -10,7 +10,8 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { Tool } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { createBridgeRuntime } from "../src/bridge-runtime.js";
-import { QueryContext } from "../src/query-state.js";
+import { Doppel } from "../src/doppel.js";
+import type { QueryContext } from "../src/query-state.js";
 import { MCP_SERVER_NAME } from "../src/skills.js";
 
 const parameters = Type.Object({
@@ -32,7 +33,7 @@ async function connect(queryCtx: QueryContext) {
 
 describe("MCP tool dispatch", () => {
 	it("advertises pi's TypeBox schema verbatim", async () => {
-		const client = await connect(new QueryContext());
+		const client = await connect(new Doppel("test-doppel", "guest").context);
 		const { tools } = await client.listTools();
 		assert.equal(tools.length, 1);
 		assert.equal(tools[0].name, "read");
@@ -42,7 +43,7 @@ describe("MCP tool dispatch", () => {
 	});
 
 	it("dispatches arguments pi would reject instead of validating them away", async () => {
-		const queryCtx = new QueryContext();
+		const queryCtx = new Doppel("test-doppel", "guest").context;
 		const client = await connect(queryCtx);
 		const call = client.callTool({
 			name: "read",
@@ -62,7 +63,7 @@ describe("MCP tool dispatch", () => {
 	});
 
 	it("rejects a tool name it never registered", async () => {
-		const client = await connect(new QueryContext());
+		const client = await connect(new Doppel("test-doppel", "guest").context);
 		await assert.rejects(
 			client.callTool({ name: "nope", arguments: {}, _meta: { "claudecode/toolUseId": "toolu_x" } }),
 			/Tool nope not found/,

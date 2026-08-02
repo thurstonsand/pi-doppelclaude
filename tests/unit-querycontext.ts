@@ -5,19 +5,20 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import type { Model } from "@earendil-works/pi-ai";
-import { PushQueue, QueryContext } from "../src/query-state.js";
+import { Doppel } from "../src/doppel.js";
+import { PushQueue } from "../src/query-state.js";
 
 // Minimal stand-in for pi-ai's Model; resetTurnState only records identity here.
 const fakeModel = { api: "doppelclaude", provider: "doppelclaude", id: "test-model" } as Model<any>;
 
 describe("QueryContext class", () => {
 	it("turnBlocks throws before resetTurnState", () => {
-		const c = new QueryContext();
+		const c = new Doppel("test-doppel", "guest").context;
 		assert.throws(() => c.turnBlocks, /turnBlocks accessed before resetTurnState/);
 	});
 
 	it("turnBlocks reflects turnOutput.content after resetTurnState", () => {
-		const c = new QueryContext();
+		const c = new Doppel("test-doppel", "guest").context;
 		c.resetTurnState(fakeModel);
 		assert.ok(Array.isArray(c.turnBlocks));
 		assert.strictEqual(c.turnBlocks.length, 0);
@@ -32,7 +33,7 @@ describe("QueryContext class", () => {
 	});
 
 	it("resetTurnState preserves query-scoped tool call tracking", () => {
-		const c = new QueryContext();
+		const c = new Doppel("test-doppel", "guest").context;
 		c.shownToolCallIds.add("id1");
 		c.dispatchedToolCallIds.add("id1");
 		c.rejectedToolCallIds.add("id2");
@@ -44,8 +45,8 @@ describe("QueryContext class", () => {
 	});
 
 	it("fresh instances share no query state", () => {
-		const a = new QueryContext();
-		const b = new QueryContext();
+		const a = new Doppel("test-doppel", "guest").context;
+		const b = new Doppel("test-doppel", "guest").context;
 		a.pendingToolCalls.set("t1", { toolName: "read", resolve: () => {} });
 		a.latestCursor = 42;
 		assert.strictEqual(b.pendingToolCalls.size, 0);

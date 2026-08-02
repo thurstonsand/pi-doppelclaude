@@ -13,7 +13,7 @@ import type { Query } from "@anthropic-ai/claude-agent-sdk";
 import type { Message as PiMessage, Model } from "@earendil-works/pi-ai";
 import { extractAllToolResults as _extractAllToolResults } from "../src/extract-tool-results.js";
 import { createBridgeRuntime } from "../src/bridge-runtime.js";
-import { QueryContext } from "../src/query-state.js";
+import { Doppel } from "../src/doppel.js";
 
 // Loose pi-message fixtures fed to the extractor: role plus the optional fields
 // the walk inspects. Extra per-block fields ride along as unknown content.
@@ -32,9 +32,12 @@ type QueueFallback = { content: TextResultBlock[]; isError?: boolean };
 type QueueDelivery = QueueResult | QueueFallback;
 
 function makeRuntime() {
-	return createBridgeRuntime({
+	const runtime = createBridgeRuntime({
 		providerSettings: { systemPromptMode: "claude-code" },
 	});
+	// These turns are the host conversation's, so the runtime is told the host is this caller.
+	void runtime.designateHost("host-session-id");
+	return runtime;
 }
 
 // Test wrapper: real extract returns { results, stopIdx }; tests only want results.
@@ -101,7 +104,7 @@ function createBridge() {
 
 describe("production MCP handlers", () => {
 	it("matches parallel calls to the same tool by ID when results resolve out of order", async () => {
-		const queryCtx = new QueryContext();
+		const queryCtx = new Doppel("test-doppel", "guest").context;
 		const handler = makeRuntime().test.createMcpToolHandler("read", queryCtx);
 		const first = handler({}, { _meta: { "claudecode/toolUseId": "tool-1" } });
 		const second = handler({}, { _meta: { "claudecode/toolUseId": "tool-2" } });
@@ -121,7 +124,7 @@ describe("production MCP handlers", () => {
 
 	it("preserves a metadata failure until pi claims the orphaned tool-result stream", async () => {
 		const runtime = makeRuntime();
-		const queryCtx = runtime.test.rootContext;
+		const queryCtx = runtime.test.hostContext;
 		let closeCount = 0;
 		const activeQuery = Object.create(null) as Query;
 		activeQuery.close = () => { closeCount++; };
@@ -143,6 +146,7 @@ describe("production MCP handlers", () => {
 				messages: [{ role: "toolResult", toolCallId: "tool-1", content: [{ type: "text", text: "result" }], isError: false }] as unknown as PiMessage[],
 				tools: [],
 			},
+			{ sessionId: "host-session-id" },
 		);
 		const events = [];
 		for await (const event of stream) events.push(event);

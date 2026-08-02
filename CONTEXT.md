@@ -12,13 +12,27 @@
 - **Provider**: The native `pi-ai` Provider registered as `doppelclaude`. Pi's canonical model metadata is authoritative for display and behavior; Claude Code executes the requests.
 - **Bridge owner**: The process-scoped singleton Provider/runtime pair. The first activation builds and owns it; later activations borrow it, so all provider calls route through one runtime.
 
+## Doppels
+
+- **Doppel**: the Claude Code counterpart of one conversation — its session, query lifecycle, and transcript — keyed by the pi session id the caller sends, or a synthetic key when absent.
+- **Host doppel**: the doppel of the pi session hosting this process, designated by `session_start`.
+- **Guest doppel**: a doppel keyed by any other pi session id.
+- **Ephemeral doppel**: the doppel of a keyless call — title, working vibe.
+
+### Relationships
+
+- One host **doppel** per pi session, for the main conversation
+- guest **doppels** are other pi sessions within the same process, different from the host
+- ephemeral **doppels** are invocations of Claude Code that have no pi session counterpart; e.g. `streamSimple`
+- A single pi session will have exactly one host **doppel**, and any number of guest or ephemeral **doppels**
+
 ## Failure handling
 
 - **Dead query**: a Claude Code query that expired out from under a turn, either by a control request rejected by SDK teardown, or OAuth credentials revoked by a sibling process.
 
 ## Session sync
 
-- **Sync paths**: `reuse` (Pi's history matches the live session; send only the new tail), `rebuild` (history diverged; synthesize a complete CC transcript and atomically replace the store entry), and `clean-start` (no prior context).
+- **Sync paths**: `reuse` (Pi's history matches the live session; send only the new tail), `rebuild` (history diverged — including a rewind to a shorter context; synthesize a complete CC transcript and atomically replace the store entry), and `clean-start` (no prior context). Each doppel plans its own.
 
 ## Models and usage
 

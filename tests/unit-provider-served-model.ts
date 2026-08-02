@@ -4,7 +4,7 @@ import { createAssistantMessageEventStream, type Model } from "@earendil-works/p
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import type { Query } from "@anthropic-ai/claude-agent-sdk";
 import { createBridgeRuntime } from "../src/bridge-runtime.js";
-import { QueryContext } from "../src/query-state.js";
+import { Doppel } from "../src/doppel.js";
 
 const fakeModel = {
 	api: "doppelclaude",
@@ -53,7 +53,7 @@ function startedRuntime(warnings: string[], entries: unknown[] = []) {
 		ui: { notify: (message: string) => warnings.push(message) } as unknown as ExtensionUIContext,
 		appendEntry: (customType, data) => entries.push({ customType, data }),
 	});
-	const queryCtx = new QueryContext();
+	const queryCtx = new Doppel("test-doppel", "guest").context;
 	// The persistent (root) query is the only one that mutates session/model state.
 	queryCtx.persistent = true;
 	queryCtx.currentPiStream = createAssistantMessageEventStream();

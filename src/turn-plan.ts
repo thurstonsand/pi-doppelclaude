@@ -56,9 +56,10 @@ export function planTurn(input: {
 	context: Context;
 	options: SimpleStreamOptions | undefined;
 	providerSettings: ProviderSettings;
-	isReentrant: boolean;
+	/** Only the host's own query outlives its turn; its CLI log is the root one. */
+	oneShot: boolean;
 }): TurnPlan {
-	const { model, context, options, providerSettings, isReentrant } = input;
+	const { model, context, options, providerSettings, oneShot } = input;
 	const cwd = (options as { cwd?: string } | undefined)?.cwd ?? process.cwd();
 	const systemPromptMode = providerSettings.systemPromptMode;
 	const systemPrompt = buildClaudeSystemPrompt(context.systemPrompt, systemPromptMode, providerSettings.systemPromptReplacements);
@@ -79,7 +80,7 @@ export function planTurn(input: {
 		includePartialMessages: true, strictMcpConfig: true, systemPrompt, model: cliModel, extraArgs,
 		...(effort ? { effort } : {}), ...(settingSources ? { settingSources } : {}),
 		...(claudeExecutable ? { pathToClaudeCodeExecutable: claudeExecutable } : {}),
-		...makeCliDebugOptions(isReentrant ? "provider-child" : "provider"),
+		...makeCliDebugOptions(oneShot ? "provider-child" : "provider"),
 	};
 	return { cwd, cliModel, spawnSignature, queryOptions };
 }

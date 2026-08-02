@@ -19,6 +19,8 @@ const [fakeModel] = projectCatalogModels(
 );
 
 const QUERY_CLOSED = "Query closed before response received";
+/** These turns are the host conversation's, so the runtime is told the host is this caller. */
+const HOST_SESSION = "host-session-id";
 const REVOKED = "Failed to authenticate. API Error: 401 OAuth access token has been revoked.";
 
 interface QueryScript {
@@ -76,6 +78,7 @@ function makeHarness(scripts: QueryScript[]) {
 			} as unknown as Query;
 		},
 	});
+	void runtime.designateHost(HOST_SESSION);
 	return { runtime, spawned };
 }
 
@@ -89,7 +92,7 @@ function stream(
 		systemPrompt: "",
 		messages: messages as PiMessage[],
 		tools,
-	} as unknown as Context, options);
+	} as unknown as Context, { sessionId: HOST_SESSION, ...options });
 }
 
 function record(source: AsyncIterable<AssistantMessageEvent>) {
@@ -231,7 +234,7 @@ describe("dead query retry", () => {
 		assert.equal(spawned.length, 1, "the first turn should not have respawned anything");
 		// A real turn learns its session id from Claude Code's init message; the fake query
 		// names none, so the sync state a completed turn leaves behind is set here.
-		runtime.test.setSharedSession({ sessionId: "11111111-1111-4111-8111-111111111111", cursor: 1 });
+		runtime.test.setHostSession({ sessionId: "11111111-1111-4111-8111-111111111111", cursor: 1 });
 
 		// The tool set changed, so the reused query is asked to reconcile its MCP servers —
 		// and answers as a corpse.

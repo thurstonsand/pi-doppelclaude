@@ -1,8 +1,8 @@
 // Query state: the QueryContext class.
 //
-// All per-query and per-turn mutable state lives on one instance. The bridge
-// runtime owns its root QueryContext in a closure and creates a fresh instance
-// per reentrant (subagent) query. Adding a new field = one property on the class.
+// All per-query and per-turn mutable state lives on one instance. Every context
+// belongs to exactly one doppel: its own, plus a fresh instance per reentrant
+// (subagent) query. Adding a new field = one property on the class.
 //
 // Extracted from index.ts so tests can import without activating the extension.
 
@@ -12,6 +12,7 @@ import type { ResultVerdict } from "./sdk-signals.js";
 import type { SdkModelUsage } from "./sdk-usage.js";
 import type { McpResult } from "./extract-tool-results.js";
 import type { SessionStoreWriter } from "./session-store.js";
+import type { Doppel } from "./doppel.js";
 
 export interface PendingToolCall {
 	toolName: string;
@@ -63,6 +64,9 @@ export class PushQueue<T> implements AsyncIterable<T> {
 }
 
 export class QueryContext {
+	/** The conversation this context speaks for. Set once, by the doppel that made it. */
+	constructor(readonly doppel: Doppel) {}
+
 	// Query-scoped (fully isolated per query)
 	activeQuery: Query | null = null;
 	inputQueue: PushQueue<SDKUserMessage> | null = null;

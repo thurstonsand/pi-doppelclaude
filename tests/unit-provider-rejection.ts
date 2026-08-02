@@ -25,6 +25,9 @@ const bashTool = {
 	parameters: Type.Object({ command: Type.String() }),
 } as unknown as Tool;
 
+/** These turns are the host conversation's, so the runtime is told the host is this caller. */
+const HOST_SESSION = "host-session-id";
+
 function makeHarness() {
 	const queue = new PushQueue<SDKMessage>();
 	const sdkQuery = {
@@ -38,6 +41,7 @@ function makeHarness() {
 		providerSettings: { systemPromptMode: "claude-code" },
 		queryFactory: () => sdkQuery,
 	});
+	void runtime.designateHost(HOST_SESSION);
 	return { queue, runtime };
 }
 
@@ -46,7 +50,7 @@ function stream(runtime: ReturnType<typeof makeHarness>["runtime"], messages: un
 		systemPrompt: "",
 		messages: messages as PiMessage[],
 		tools: [bashTool],
-	} as Context);
+	} as Context, { sessionId: HOST_SESSION });
 }
 
 // Collect events without waiting for the stream to end; the tool-use turns end
@@ -122,7 +126,7 @@ describe("Claude Code-rejected tool calls", () => {
 		await tick();
 
 		assert.deepEqual(toolCalls(events), [{ id: "call_bad", name: "cc_no_such_tool__bash" }]);
-		assert.equal(runtime.test.rootContext.rejectedToolCallIds.has("call_bad"), true);
+		assert.equal(runtime.test.hostContext.rejectedToolCallIds.has("call_bad"), true);
 	});
 
 	it("buffers the correction that arrives before pi re-enters (the incident ordering)", async () => {
@@ -134,7 +138,7 @@ describe("Claude Code-rejected tool calls", () => {
 		for (const message of toolUseEvents("call_good", "mcp__custom-tools__bash", '{"command":"ls"}')) queue.push(message);
 		await tick();
 
-		const ctx = runtime.test.rootContext;
+		const ctx = runtime.test.hostContext;
 		assert.ok(ctx.bufferedSdkMessages.length > 0, "correction must be buffered, not discarded");
 
 		const second = record(stream(runtime, rejectedTurn));
@@ -166,7 +170,7 @@ describe("Claude Code-rejected tool calls", () => {
 
 		const second = record(stream(runtime, rejectedTurn));
 		await tick();
-		assert.equal(runtime.test.rootContext.bufferedSdkMessages.length, 0);
+		assert.equal(runtime.test.hostContext.bufferedSdkMessages.length, 0);
 		for (const message of toolUseEvents("call_good", "mcp__custom-tools__bash", '{"command":"ls"}')) queue.push(message);
 		await tick();
 
@@ -193,7 +197,7 @@ describe("Claude Code-rejected tool calls", () => {
 
 	it("resolves the valid call and drops the rejected one when a message mixes both", async () => {
 		const { queue, runtime } = makeHarness();
-		const ctx = runtime.test.rootContext;
+		const ctx = runtime.test.hostContext;
 		const events = record(stream(runtime, prompt));
 		await tick();
 		queue.push({ type: "stream_event", event: { type: "message_start", message: { usage: {} } } } as unknown as SDKMessage);
@@ -229,11 +233,11 @@ describe("Claude Code-rejected tool calls", () => {
 
 	it("never replays a dead turn's buffer into the next command", async () => {
 		const { queue, runtime } = makeHarness();
-		const ctx = runtime.test.rootContext;
+		const ctx = runtime.test.hostContext;
 		const abort = new AbortController();
 		record(runtime.test.streamClaudeAgentSdk(fakeModel, {
 			systemPrompt: "", messages: prompt as PiMessage[], tools: [bashTool],
-		} as Context, { signal: abort.signal }));
+		} as Context, { sessionId: HOST_SESSION, signal: abort.signal }));
 		await tick();
 		for (const message of toolUseEvents("call_bad", "bash", '{"command":"ls"}')) queue.push(message);
 		for (const message of textEvents("orphaned follow-up")) queue.push(message);
@@ -277,7 +281,7 @@ describe("Claude Code-rejected tool calls", () => {
 
 	it("terminates the turn when a handler is still waiting after full delivery", async () => {
 		const { queue, runtime } = makeHarness();
-		const ctx = runtime.test.rootContext;
+		const ctx = runtime.test.hostContext;
 		record(stream(runtime, prompt));
 		await tick();
 		queue.push({ type: "stream_event", event: { type: "message_start", message: { usage: {} } } } as unknown as SDKMessage);

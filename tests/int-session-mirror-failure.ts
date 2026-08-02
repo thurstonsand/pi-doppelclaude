@@ -41,7 +41,7 @@ try {
 	const failed = await terminalMessage(runtime.stream(model, firstContext));
 	assert.equal(failed.stopReason, "error");
 	assert.match(failed.errorMessage ?? "", /transcript mirror failed.*deliberate mirror failure/i);
-	const invalidated = runtime.test.getSharedSession();
+	const invalidated = runtime.test.getHostSession();
 	assert.equal(invalidated?.needsRebuild, true);
 	assert.equal(sessionStore.load(invalidated.sessionId), null, "partial mirrored transcript survived invalidation");
 
@@ -50,7 +50,7 @@ try {
 	const recovered = await terminalMessage(runtime.stream(model, secondContext));
 	assert.equal(recovered.stopReason, "stop");
 	assert.match(recovered.content.map((block) => block.type === "text" ? block.text : "").join(""), /MIRROR_RECOVERED/);
-	assert.ok(sessionStore.load(runtime.test.getSharedSession().sessionId)?.length, "rebuilt transcript was not mirrored");
+	assert.ok(sessionStore.load(runtime.test.getHostSession().sessionId)?.length, "rebuilt transcript was not mirrored");
 	console.log("PASS: mirror failure invalidated partial state and rebuilt from complete Pi history");
 } finally {
 	await runtime.clear("integration complete");

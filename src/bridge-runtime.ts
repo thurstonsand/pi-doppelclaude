@@ -1,8 +1,8 @@
 // Bridge runtime: the persistent query/session/MCP state machine.
 //
-// Owns the shared Claude Code session, the SDK-backed transcript store, the root
-// and reentrant QueryContexts, the active-query set, MCP pending-result routing,
-// the persistent input queue, and the full query lifecycle.
+// Owns the doppel registry, the SDK-backed transcript store, the active-query set,
+// MCP pending-result routing, the persistent input queue, and the full query
+// lifecycle. Session state itself lives on the doppel a turn addresses (src/doppel.ts).
 
 import { randomUUID } from "node:crypto";
 import {
@@ -39,8 +39,16 @@ import type {
 } from "@anthropic-ai/sdk/resources";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
-import { createSession, deleteSession, repairToolPairing } from "cc-session-io";
-import { messageContentToText, convertPiMessages } from "./convert.js";
+import { deleteSession } from "cc-session-io";
+import { messageContentToText } from "./convert.js";
+import {
+  applySessionSync,
+  createDoppelRegistry,
+  planSessionSync,
+  type Doppel,
+  type SessionState,
+  type SyncPlan,
+} from "./doppel.js";
 import type { BridgeModelCatalog } from "./model-catalog.js";
 import { MCP_SERVER_NAME } from "./skills.js";
 import {
@@ -83,41 +91,6 @@ export interface BridgeHost {
   appendEntry(customType: string, data: RefusalEntryData): void;
 }
 
-interface SessionState {
-  sessionId: string;
-  cursor: number;
-  // Force the next syncSharedSession call down the REBUILD path when pi has
-  // mutated its messages array out from under us (compact, tree navigation,
-  // or abort). REBUILD atomically replaces the authoritative store transcript.
-  needsRebuild?: boolean;
-}
-
-interface SyncResult {
-  sessionId: string | null;
-  path: "reuse" | "rebuild" | "clean-start";
-  preserveSharedSession?: boolean;
-}
-
-// Two semantic paths:
-//   REUSE — pi's history is in sync with the live shared session.
-//   REBUILD — pi's history diverged, so synthesize a complete Claude Code
-//     transcript and atomically replace the SDK session store entry.
-//
-// The SDK materializes store entries when resuming and owns its required local
-// dual-write. The bridge never computes Claude's project path or manipulates
-// JSONL files. Session IDs remain stable across every rebuild; per-query writer
-// revisions fence late mirror appends after aborts.
-//
-// Log strings still say "Case 1/2/3/4" so existing diagnostics keep their
-// useful continuity.
-interface SyncPlan {
-  path: "reuse" | "rebuild" | "clean-start";
-  priorMessages: Context["messages"];
-  previousSession: SessionState | null;
-  preserveSharedSession?: boolean;
-  advanceCursor?: boolean;
-}
-
 interface FreshQueryRequest {
   queryCtx: QueryContext;
   syncPlan: SyncPlan;
@@ -126,8 +99,10 @@ interface FreshQueryRequest {
   customToolNameToPi: Map<string, string>;
   model: Model<any>;
   contextMessageCount: number;
-  isReentrant: boolean;
-  reusableRoot: boolean;
+  /** The host's own query survives the turn; every other query is a one-shot. */
+  persistent: boolean;
+  /** The query being replaced finished cleanly, so it is drained instead of abandoned. */
+  drainExisting: boolean;
   spawnSignature: string;
   mcpSignature: string;
   mcpTools: Tool[];
@@ -146,14 +121,11 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
   const { providerSettings } = dependencies;
   const queryFactory = dependencies.queryFactory ?? query;
 
-  let sharedSession: SessionState | null = null;
+  const doppels = createDoppelRegistry();
   const sessionStore =
     dependencies.sessionStore ?? new BridgeSessionStore(debug);
   let host: BridgeHost | null = null;
   const activeQueryContexts = new Set<QueryContext>();
-  // The persistent (root) query context. Each runtime owns its own, so two
-  // runtimes never share query/session state through a module global.
-  const rootContext = new QueryContext();
 
   const {
     claimCurrentPiStream,
@@ -173,54 +145,6 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
         );
     },
   });
-
-  // Convert pi messages to Anthropic API format for session import.
-  // Lossy: non-Anthropic thinking blocks are dropped (no valid signature), and only
-  // text/image/toolCall block types are handled. If all blocks in an assistant message
-  // are filtered, the message is dropped — which can create invalid sequences (e.g.
-  // two user messages in a row, or tool_result without preceding tool_use).
-  function convertAndImportMessages(
-    session: ReturnType<typeof createSession>,
-    messages: Context["messages"],
-    customToolNameToSdk?: Map<string, string>,
-  ): void {
-    const { anthropicMessages, sanitizedIds } = convertPiMessages(
-      messages,
-      customToolNameToSdk,
-    );
-
-    debug(
-      `convertAndImportMessages: ${messages.length} pi msgs → ${anthropicMessages.length} anthropic msgs`,
-    );
-    debug(
-      `convertAndImportMessages: imported roles:`,
-      anthropicMessages
-        .map((m, i) => {
-          const c = m.content;
-          if (typeof c === "string") return `[${i}]${m.role}:text`;
-          if (Array.isArray(c))
-            return `[${i}]${m.role}:${c.map((b) => b.type).join("+")}`;
-          return `[${i}]${m.role}:?`;
-        })
-        .join(" "),
-    );
-    if (sanitizedIds.size > 0) {
-      debug(
-        `convertAndImportMessages: sanitized ${sanitizedIds.size} tool IDs:`,
-        [...sanitizedIds.entries()]
-          .map(([orig, clean]) => (orig === clean ? orig : `${orig}→${clean}`))
-          .join(", "),
-      );
-    }
-    // Pre-repair for debug logging; importMessages also repairs internally (idempotent).
-    const repaired = repairToolPairing(anthropicMessages);
-    if (repaired.length !== anthropicMessages.length) {
-      debug(
-        `convertAndImportMessages: repairToolPairing ${anthropicMessages.length} → ${repaired.length} msgs`,
-      );
-    }
-    if (repaired.length) session.importMessages(repaired);
-  }
 
   // Pi doesn't pass tool results directly — it appends them to the context and calls
   // the provider again. Thin wrapper over extract-tool-results.js that adds per-turn
@@ -324,136 +248,6 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
       parent_tool_use_id: null,
       uuid: randomUUID(),
     };
-  }
-
-  /**
-   * Ensure the shared session has all messages up to (but not including) the last user message.
-   * Returns session ID to resume from, or null if no resume needed.
-   */
-  function planSharedSessionSync(
-    messages: Context["messages"],
-    currentSession: SessionState | null = sharedSession,
-  ): SyncPlan {
-    const priorMessages = messages.slice(0, -1);
-    if (
-      currentSession &&
-      !currentSession.needsRebuild &&
-      priorMessages.length >= currentSession.cursor
-    ) {
-      const missed = priorMessages.slice(currentSession.cursor);
-      const trailingAssistantOnly =
-        missed.length === 1 &&
-        (missed[0] as { role?: string }).role === "assistant";
-      if (missed.length === 0 || trailingAssistantOnly) {
-        return {
-          path: "reuse",
-          priorMessages,
-          previousSession: currentSession,
-          advanceCursor: trailingAssistantOnly,
-        };
-      }
-    }
-    if (
-      currentSession &&
-      !currentSession.needsRebuild &&
-      priorMessages.length < currentSession.cursor
-    ) {
-      return {
-        path: "clean-start",
-        priorMessages,
-        previousSession: currentSession,
-        preserveSharedSession: true,
-      };
-    }
-    return {
-      path: priorMessages.length === 0 ? "clean-start" : "rebuild",
-      priorMessages,
-      previousSession: currentSession,
-    };
-  }
-
-  function applySharedSessionSync(
-    plan: SyncPlan,
-    cwd: string,
-    customToolNameToSdk?: Map<string, string>,
-    modelId?: string,
-  ): SyncResult {
-    if (plan.path === "reuse") {
-      const session = plan.previousSession!;
-      sharedSession = plan.advanceCursor
-        ? { ...session, cursor: plan.priorMessages.length }
-        : session;
-      debug(
-        `Case 3: ${plan.advanceCursor ? "advanced cursor past trailing assistant, " : ""}resuming session ${sharedSession.sessionId.slice(0, 8)}, cursor=${sharedSession.cursor}`,
-      );
-      debug(
-        `syncResult: path=reuse sessionId=${sharedSession.sessionId} cursor=${sharedSession.cursor}`,
-      );
-      return { sessionId: sharedSession.sessionId, path: "reuse" };
-    }
-    if (plan.path === "clean-start") {
-      if (plan.preserveSharedSession) {
-        const session = plan.previousSession!;
-        debug(
-          `Case 1 synthetic: clean start for shorter context, preserving shared session ${session.sessionId.slice(0, 8)}, cursor=${session.cursor}`,
-        );
-        debug(
-          `syncResult: path=clean-start preserve-shared sessionId=${session.sessionId} cursor=${session.cursor}`,
-        );
-        return {
-          sessionId: null,
-          path: "clean-start",
-          preserveSharedSession: true,
-        };
-      }
-      debug(
-        `Case 1: clean start, ${plan.priorMessages.length + 1} total messages`,
-      );
-      debug("syncResult: path=clean-start");
-      return { sessionId: null, path: "clean-start" };
-    }
-
-    const previousSessionId = plan.previousSession?.sessionId;
-    const previousCursor = plan.previousSession?.cursor ?? 0;
-    const session = createSession({
-      projectPath: cwd,
-      ...(previousSessionId ? { sessionId: previousSessionId } : {}),
-      ...(modelId ? { model: modelId } : {}),
-    });
-    convertAndImportMessages(session, plan.priorMessages, customToolNameToSdk);
-    sessionStore.replace(session.sessionId, session.records);
-    sharedSession = {
-      sessionId: session.sessionId,
-      cursor: plan.priorMessages.length,
-    };
-    if (previousSessionId === undefined) {
-      debug(
-        `Case 2: first turn with ${plan.priorMessages.length} prior messages → session ${session.sessionId.slice(0, 8)}, ${session.records.length} records`,
-      );
-    } else {
-      const missedCount = plan.priorMessages.length - previousCursor;
-      debug(
-        `Case 4: ${missedCount} missed messages, ${plan.priorMessages.length} total → replaced session ${session.sessionId.slice(0, 8)} (same id), ${session.records.length} records`,
-      );
-    }
-    debug(
-      `syncResult: path=rebuild sessionId=${session.sessionId} priors=${plan.priorMessages.length} ${previousSessionId === undefined ? "first" : "preserved"}`,
-    );
-    return { sessionId: session.sessionId, path: "rebuild" };
-  }
-
-  function syncSharedSession(
-    messages: Context["messages"],
-    cwd: string,
-    customToolNameToSdk?: Map<string, string>,
-    modelId?: string,
-  ): SyncResult {
-    return applySharedSessionSync(
-      planSharedSessionSync(messages),
-      cwd,
-      customToolNameToSdk,
-      modelId,
-    );
   }
 
   function contextForToolResults(
@@ -593,11 +387,14 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
     label: string,
     mode: QueryCloseMode,
   ): Promise<void> {
+    const doppel = c.doppel;
     // A force close abandons the query mid-turn, so pi's history and the Claude Code session
     // have parted ways — including when there is nothing left to close, which is how an
     // interrupt that kept queued input arrives here.
-    if (mode === "force" && sharedSession)
-      sharedSession = { ...sharedSession, needsRebuild: true };
+    if (mode === "force" && doppel.session)
+      doppel.session = { ...doppel.session, needsRebuild: true };
+    // Nothing can address an ephemeral again once its own turn is over.
+    if (doppel.kind === "ephemeral" && c === doppel.context) doppels.discard(doppel);
     if (c.closeCompletion) return c.closeCompletion;
     if (!c.activeQuery && !c.inputQueue)
       return c.completion ?? Promise.resolve();
@@ -643,6 +440,13 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
           `provider: deleted first-spawn session fragment ${localSessionFragment.sessionId.slice(0, 8)}`,
         );
       }
+      if (doppel.kind === "ephemeral" && doppel.session) {
+        sessionStore.delete(doppel.session.sessionId);
+        debug(
+          `doppel: ${doppel.label} closed, deleted session ${doppel.session.sessionId.slice(0, 8)}`,
+        );
+        doppel.session = null;
+      }
       if (c.sessionStoreWriter === storeWriter) c.sessionStoreWriter = null;
       if (c.localSessionFragment === localSessionFragment)
         c.localSessionFragment = null;
@@ -658,8 +462,10 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
     return closeCompletion;
   }
 
+  /** The host's warm query, the only one that outlives a turn. */
   function closePersistentQuery(label: string): Promise<void> {
-    const c = rootContext;
+    if (doppels.hostKey === null) return Promise.resolve();
+    const c = doppels.host().context;
     if (!c.persistent) return Promise.resolve();
     return closeQueryContext(c, label, c.readyForInput ? "drain" : "force");
   }
@@ -671,7 +477,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
     message: string,
     disposition: SessionDisposition,
   ): void {
-    if (disposition === "drop") sharedSession = null;
+    if (disposition === "drop") c.doppel.session = null;
     void closeQueryContext(c, message, "force");
   }
 
@@ -742,10 +548,14 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
     );
   }
 
-  function invalidateStoredSession(sessionId: string, reason: string): void {
+  function invalidateStoredSession(
+    doppel: Doppel,
+    sessionId: string,
+    reason: string,
+  ): void {
     sessionStore.delete(sessionId);
-    if (sharedSession?.sessionId === sessionId)
-      sharedSession = { ...sharedSession, needsRebuild: true };
+    if (doppel.session?.sessionId === sessionId)
+      doppel.session = { ...doppel.session, needsRebuild: true };
     debug(`provider: invalidated session ${sessionId.slice(0, 8)} (${reason})`);
   }
 
@@ -791,8 +601,8 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
       customToolNameToPi,
       model,
       contextMessageCount,
-      isReentrant,
-      reusableRoot,
+      persistent,
+      drainExisting,
       spawnSignature,
       mcpSignature,
       mcpTools,
@@ -801,25 +611,28 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
       promptMessage,
       attachAbort,
     } = request;
+    const doppel = queryCtx.doppel;
     try {
       if (queryCtx.closeCompletion) await queryCtx.closeCompletion;
       if (queryCtx.activeQuery) {
         await closeQueryContext(
           queryCtx,
           syncPlan.path === "reuse" ? "query options changed" : syncPlan.path,
-          reusableRoot ? "drain" : "force",
+          drainExisting ? "drain" : "force",
         );
       }
-      const syncResult = applySharedSessionSync(
-        syncPlan,
+      const syncResult = applySessionSync({
+        doppel,
+        plan: syncPlan,
         cwd,
+        sessionStore,
         customToolNameToSdk,
-        model.id,
-      );
+        modelId: model.id,
+      });
       queryCtx.pendingToolCalls.clear();
       queryCtx.pendingResults.clear();
       clearToolCallTracking(queryCtx);
-      queryCtx.persistent = !isReentrant;
+      queryCtx.persistent = persistent;
       queryCtx.closing = false;
       queryCtx.spawnSignature = spawnSignature;
       queryCtx.mcpSignature = mcpSignature;
@@ -828,7 +641,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
       queryCtx.modelUsageSnapshot = {};
       const inputQueue = new PushQueue<SDKUserMessage>();
       queryCtx.inputQueue = inputQueue;
-      const writerLabel = isReentrant ? "provider-child" : "provider";
+      const writerLabel = persistent ? "provider" : "provider-child";
       const storeWriter = sessionStore.createWriter(writerLabel);
       queryCtx.sessionStoreWriter = storeWriter;
       const queryOptions: Options = {
@@ -842,7 +655,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
       debug(
         "provider: fresh streaming query",
         `model=${cliModel} msgs=${contextMessageCount} tools=${mcpTools.length}`,
-        `resume=${syncResult.sessionId?.slice(0, 8) ?? "none"} effort=${queryOptions.effort ?? "default"} persistent=${!isReentrant}`,
+        `doppel=${doppel.label} resume=${syncResult.sessionId?.slice(0, 8) ?? "none"} effort=${queryOptions.effort ?? "default"} persistent=${persistent}`,
       );
 
       const sdkQuery = queryFactory({
@@ -876,21 +689,11 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
               queryCtx.abortCleanup = null;
               finalizeCurrentStream(queryCtx);
             }
-            const resultSessionId = result.session_id;
-            const sessionId = resultSessionId ?? sharedSession?.sessionId;
-            if (
-              syncResult.preserveSharedSession &&
-              resultSessionId &&
-              resultSessionId !== sharedSession?.sessionId
-            ) {
-              sessionStore.delete(resultSessionId);
+            const sessionId = result.session_id ?? doppel.session?.sessionId;
+            if (sessionId) {
+              doppel.session = { sessionId, cursor: queryCtx.latestCursor };
               debug(
-                `provider: deleted ephemeral reentrant session ${resultSessionId.slice(0, 8)}`,
-              );
-            } else if (!syncResult.preserveSharedSession && sessionId) {
-              sharedSession = { sessionId, cursor: queryCtx.latestCursor };
-              debug(
-                `provider: turn complete, session=${sessionId.slice(0, 8)}, cursor=${queryCtx.latestCursor}, storedRecords=${sessionStore.entryCount(sessionId)}`,
+                `provider: turn complete, doppel=${doppel.label}, session=${sessionId.slice(0, 8)}, cursor=${queryCtx.latestCursor}, storedRecords=${sessionStore.entryCount(sessionId)}`,
               );
             }
             if (!verdict) {
@@ -922,7 +725,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
             if (!queryCtx.persistent)
               void closeQueryContext(
                 queryCtx,
-                "reentrant turn complete",
+                "one-shot turn complete",
                 "drain",
               );
           },
@@ -941,11 +744,11 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
                   : {}),
               };
             }
-            if (!syncResult.preserveSharedSession)
-              sharedSession = { sessionId, cursor: queryCtx.latestCursor };
+            doppel.session = { sessionId, cursor: queryCtx.latestCursor };
           },
           onMirrorError(message) {
             invalidateStoredSession(
+              doppel,
               message.key.sessionId,
               `mirror_error: ${message.error}`,
             );
@@ -990,6 +793,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
             );
             if (syncResult.sessionId && invalidResume)
               invalidateStoredSession(
+                doppel,
                 syncResult.sessionId,
                 errorMessage(error),
               );
@@ -1004,16 +808,21 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
       await awaitQueryInitialization(sdkQuery);
       if (!queryCtx.closing) {
         inputQueue.push(promptMessage);
-        if (isReentrant) inputQueue.end();
+        // A one-shot query takes no further input: the turn it was spawned for is all of it.
+        if (!persistent) inputQueue.end();
       }
     } catch (error) {
-      if (sharedSession && invalidResumeMaterialization(error))
-        invalidateStoredSession(sharedSession.sessionId, errorMessage(error));
+      if (doppel.session && invalidResumeMaterialization(error))
+        invalidateStoredSession(
+          doppel,
+          doppel.session.sessionId,
+          errorMessage(error),
+        );
       failQuery(
         queryCtx,
         "error",
         errorMessage(error),
-        sharedSession ? "rebuild" : "drop",
+        doppel.session ? "rebuild" : "drop",
       );
     }
   }
@@ -1025,11 +834,10 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
     options?: SimpleStreamOptions,
   ): AssistantMessageEventStream {
     const stream = createAssistantMessageEventStream();
-    const root = rootContext;
     const lastMsg = context.messages[context.messages.length - 1];
     const lastMsgRole = lastMsg?.role;
     debug(
-      `provider: streamClaudeAgentSdk called, activeQuery=${!!root.activeQuery}, ready=${root.readyForInput}, lastMsgRole=${lastMsgRole}`,
+      `provider: streamClaudeAgentSdk called, sessionId=${options?.sessionId?.slice(0, 8) ?? "none"}, lastMsgRole=${lastMsgRole}`,
     );
 
     const allResults =
@@ -1060,7 +868,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
             `provider: queued native steering message: ${extractUserPrompt(context.messages)?.slice(0, 60) ?? "[image]"}`,
           );
         } else {
-          debug("provider: ignored steering for one-shot reentrant query");
+          debug("provider: ignored steering for a one-shot query");
         }
       }
 
@@ -1109,25 +917,29 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
         );
         return stream;
       }
-      if (sharedSession) sharedSession.cursor = context.messages.length;
+      if (resultCtx.doppel.session)
+        resultCtx.doppel.session.cursor = context.messages.length;
       return stream;
     }
 
     if (lastMsgRole === "toolResult") {
       debug("provider: orphaned tool result after abort, emitting end_turn");
-      if (sharedSession) sharedSession.cursor = context.messages.length;
-      claimCurrentPiStream(stream, "orphan-tool-result", root);
-      if (root.fatalError) {
-        emitTerminalError(root, "error", root.fatalError);
+      const doppel = doppels.resolve(options?.sessionId);
+      const orphanCtx = doppel.context;
+      if (doppel.session) doppel.session.cursor = context.messages.length;
+      claimCurrentPiStream(stream, "orphan-tool-result", orphanCtx);
+      if (orphanCtx.fatalError) {
+        emitTerminalError(orphanCtx, "error", orphanCtx.fatalError);
         return stream;
       }
       queueMicrotask(() => {
-        root.resetTurnState(model);
+        orphanCtx.resetTurnState(model);
         // Deliberate completion, not a streamed one: no SDK query runs here, so the
         // acknowledgement has to name its own terminal state or finalize reads it
         // as a turn that died mid-stream.
-        if (root.turnOutput) root.turnOutput.stopReason = "stop";
-        finalizeCurrentStream(root);
+        if (orphanCtx.turnOutput) orphanCtx.turnOutput.stopReason = "stop";
+        finalizeCurrentStream(orphanCtx);
+        if (doppel.kind === "ephemeral") doppels.discard(doppel);
       });
       return stream;
     }
@@ -1135,30 +947,35 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
     // One attempt at the turn. A dead query is discarded and the same turn replayed
     // here on attempt 1, into the same pi stream, against a fresh subprocess.
     function beginTurn(attempt: number): void {
-      const reusableRoot = Boolean(
-        root.activeQuery && root.persistent && root.readyForInput,
+      // Caller identity decides whose conversation this is: the doppel it addresses owns
+      // the session, the query and the failures of every turn it runs, and can reach no
+      // other doppel's. Only the host's query stays warm between turns.
+      const doppel = doppels.resolve(options?.sessionId);
+      const primary = doppel.context;
+      const warmQuery = Boolean(
+        primary.activeQuery && primary.persistent && primary.readyForInput,
       );
-      const isReentrant = Boolean(root.activeQuery && !reusableRoot);
-      const queryCtx = isReentrant ? new QueryContext() : root;
+      // Reentrancy proper: a turn arrived while this doppel's query is mid-flight.
+      const isReentrant = Boolean(primary.activeQuery && !warmQuery);
+      const queryCtx = isReentrant ? doppel.spawnContext() : primary;
+      const persistent = !isReentrant && doppel.kind === "host";
+      const syncPlan = planSessionSync(context.messages, doppel.session);
       const { mcpTools, customToolNameToSdk, customToolNameToPi } =
         resolveMcpTools(context);
-      const syncPlan = planSharedSessionSync(context.messages);
       const promptMessage = sdkUserMessage(context.messages);
       const { cwd, cliModel, spawnSignature, queryOptions } = planTurn({
         model,
         context,
         options,
         providerSettings,
-        isReentrant,
+        oneShot: !persistent,
       });
       const nextMcpSignature = mcpSignature(mcpTools);
       const mcpServers = buildMcpServers(mcpTools, queryCtx);
 
       const canPush = Boolean(
+        warmQuery &&
         !isReentrant &&
-        queryCtx.activeQuery &&
-        queryCtx.persistent &&
-        queryCtx.readyForInput &&
         syncPlan.path === "reuse" &&
         queryCtx.spawnSignature === spawnSignature,
       );
@@ -1230,7 +1047,14 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
       };
 
       if (canPush) {
-        applySharedSessionSync(syncPlan, cwd, customToolNameToSdk, model.id);
+        applySessionSync({
+          doppel,
+          plan: syncPlan,
+          cwd,
+          sessionStore,
+          customToolNameToSdk,
+          modelId: model.id,
+        });
         attachAbort();
         void (async () => {
           try {
@@ -1256,7 +1080,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
             }
             queryCtx.inputQueue!.push(promptMessage);
             debug(
-              `Case 3: pushed turn into persistent session ${sharedSession?.sessionId.slice(0, 8) ?? "unknown"}`,
+              `Case 3: pushed turn into persistent session ${doppel.session?.sessionId.slice(0, 8) ?? "unknown"} (doppel=${doppel.label})`,
             );
           } catch (error) {
             if (!queryCtx.closing)
@@ -1274,8 +1098,8 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
         customToolNameToPi,
         model,
         contextMessageCount: context.messages.length,
-        isReentrant,
-        reusableRoot,
+        persistent,
+        drainExisting: warmQuery,
         spawnSignature,
         mcpSignature: nextMcpSignature,
         mcpTools,
@@ -1291,12 +1115,13 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
     return stream;
   }
 
-  // Full session reset for pi lifecycle events (session start/shutdown). Closes any
-  // persistent query and drops the shared session + store. The caller (index.ts)
-  // owns the provider-registration global and clears it separately.
+  // Full session reset for pi lifecycle events (session start/shutdown). Closes every
+  // doppel's query — the host's is drained when it is idle, everyone else's abandoned —
+  // and drops all session state + the store. The caller (index.ts) owns the
+  // provider-registration global and clears it separately.
   async function clear(reason: string): Promise<void> {
     debug(
-      `${reason}: clearing session ${sharedSession?.sessionId?.slice(0, 8) ?? "none"}`,
+      `${reason}: clearing ${doppels.all().map((doppel) => doppel.label).join(", ") || "no doppels"}`,
     );
     const contexts = [...activeQueryContexts];
     await Promise.all(
@@ -1304,11 +1129,13 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
         closeQueryContext(
           context,
           reason,
-          context.readyForInput ? "drain" : "force",
+          context.doppel.kind === "host" && context.readyForInput
+            ? "drain"
+            : "force",
         ),
       ),
     );
-    sharedSession = null;
+    doppels.clear();
     sessionStore.clear();
   }
 
@@ -1318,22 +1145,39 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
   }
 
   // pi /compact and session-tree navigation (rewind / fork-at-point / branch
-  // switch) both mutate pi's messages array out from under the bridge.
-  // syncSharedSession's REUSE check would otherwise keep --resume'ing a CC
+  // switch) both mutate pi's messages array out from under the bridge — always the
+  // hosting session's. The sync REUSE check would otherwise keep --resume'ing a CC
   // session that no longer matches pi's history. Force the next call down the
   // REBUILD path so CC sees the current history.
   async function markRebuild(reason: string): Promise<void> {
-    if (sharedSession) {
-      debug(
-        `${reason}: marking needsRebuild on session ${sharedSession.sessionId.slice(0, 8)}`,
-      );
-      await closePersistentQuery(reason);
-      sharedSession = { ...sharedSession, needsRebuild: true };
-    }
+    if (doppels.hostKey === null) return;
+    const hostDoppel = doppels.host();
+    if (!hostDoppel.session) return;
+    debug(
+      `${reason}: marking needsRebuild on ${hostDoppel.label} session ${hostDoppel.session.sessionId.slice(0, 8)}`,
+    );
+    await closePersistentQuery(reason);
+    hostDoppel.session = { ...hostDoppel.session, needsRebuild: true };
   }
 
   function setHost(next: BridgeHost | null): void {
     host = next;
+  }
+
+  // pi names the session hosting this process at session_start. The outgoing host keeps
+  // its state as a guest, but not its warm query: pushing another conversation's turn
+  // into it would continue the wrong transcript.
+  async function designateHost(piSessionId: string): Promise<void> {
+    if (doppels.hostKey === piSessionId) return;
+    const { host: hostDoppel, demoted } = doppels.designate(piSessionId);
+    debug(`provider: host designated ${hostDoppel.label}`);
+    if (!demoted) return;
+    debug(`provider: previous host demoted to ${demoted.label}`);
+    await closeQueryContext(
+      demoted.context,
+      `host re-designation → ${hostDoppel.label}`,
+      demoted.context.readyForInput ? "drain" : "force",
+    );
   }
 
   return {
@@ -1342,26 +1186,43 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
     closePersistent,
     markRebuild,
     setHost,
+    designateHost,
     // @internal — surface for tests that exercise session sync and MCP routing
     // by instantiating the factory directly (no extension activation).
     test: {
-      rootContext,
-      resetSharedSession() {
-        sharedSession = null;
+      doppels,
+      get hostContext() {
+        return doppels.host().context;
+      },
+      resetSessions() {
+        doppels.clear();
         sessionStore.clear();
       },
-      setSharedSession(state: SessionState | null) {
-        sharedSession = state;
+      setHostSession(state: SessionState | null) {
+        doppels.host().session = state;
       },
-      getSharedSession() {
-        return sharedSession;
+      getHostSession() {
+        return doppels.host().session;
       },
       getStoredSession(sessionId: string) {
         return sessionStore.load(sessionId);
       },
-      planSharedSessionSync,
-      applySharedSessionSync,
-      syncSharedSession,
+      syncHostSession(
+        messages: Context["messages"],
+        cwd: string,
+        customToolNameToSdk?: Map<string, string>,
+        modelId?: string,
+      ) {
+        const hostDoppel = doppels.host();
+        return applySessionSync({
+          doppel: hostDoppel,
+          plan: planSessionSync(messages, hostDoppel.session),
+          cwd,
+          sessionStore,
+          customToolNameToSdk,
+          modelId,
+        });
+      },
       consumeQuery,
       finalizeCurrentStream,
       emitTerminalError,

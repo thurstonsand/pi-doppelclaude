@@ -81,6 +81,7 @@ export default function activate(pi: ExtensionAPI): void {
 			ui: ctx.ui,
 			appendEntry: (customType, data) => pi.appendEntry(customType, data),
 		});
+		await runtime.designateHost(ctx.sessionManager.getSessionId());
 		if (event.reason === "new" || event.reason === "resume" || event.reason === "fork") {
 			await runtime.clear(`session_start:${event.reason}`);
 		}

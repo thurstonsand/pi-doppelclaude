@@ -14,35 +14,38 @@ import { PushQueue } from "../src/query-state.js";
 import type { SessionStoreWriter } from "../src/session-store.js";
 
 function makeRuntime() {
-	return createBridgeRuntime({
+	const runtime = createBridgeRuntime({
 		providerSettings: { systemPromptMode: "claude-code" },
 	});
+	// Every runtime here stands in for one pi session, which is its own host.
+	void runtime.designateHost("host-session-id");
+	return runtime;
 }
 
 describe("bridge runtime isolation", () => {
-	it("owns an independent root query context per runtime", () => {
+	it("owns an independent host query context per runtime", () => {
 		const a = makeRuntime();
 		const b = makeRuntime();
-		assert.notStrictEqual(a.test.rootContext, b.test.rootContext);
+		assert.notStrictEqual(a.test.hostContext, b.test.hostContext);
 
-		a.test.rootContext.latestCursor = 99;
-		a.test.rootContext.pendingToolCalls.set("t1", { toolName: "read", resolve: () => {} });
+		a.test.hostContext.latestCursor = 99;
+		a.test.hostContext.pendingToolCalls.set("t1", { toolName: "read", resolve: () => {} });
 
-		assert.strictEqual(b.test.rootContext.latestCursor, 0);
-		assert.strictEqual(b.test.rootContext.pendingToolCalls.size, 0);
+		assert.strictEqual(b.test.hostContext.latestCursor, 0);
+		assert.strictEqual(b.test.hostContext.pendingToolCalls.size, 0);
 	});
 
-	it("does not bleed shared-session state between runtimes", () => {
+	it("does not bleed host-session state between runtimes", () => {
 		const a = makeRuntime();
 		const b = makeRuntime();
 
-		a.test.setSharedSession({ sessionId: "11111111-1111-4111-8111-111111111111", cursor: 7 });
-		assert.equal(b.test.getSharedSession(), null);
-		assert.equal(a.test.getSharedSession().sessionId, "11111111-1111-4111-8111-111111111111");
+		a.test.setHostSession({ sessionId: "11111111-1111-4111-8111-111111111111", cursor: 7 });
+		assert.equal(b.test.getHostSession(), null);
+		assert.equal(a.test.getHostSession().sessionId, "11111111-1111-4111-8111-111111111111");
 
 		// Resetting one runtime must not touch the other's session.
-		b.test.resetSharedSession();
-		assert.equal(a.test.getSharedSession().cursor, 7);
+		b.test.resetSessions();
+		assert.equal(a.test.getHostSession().cursor, 7);
 	});
 
 	it("keeps transcript stores independent", () => {
@@ -55,13 +58,13 @@ describe("bridge runtime isolation", () => {
 				{ role: "assistant", content: [{ type: "text", text: "ok" }], api: "doppelclaude", provider: "doppelclaude", model: "claude-haiku-4-5", timestamp: 2 },
 				{ role: "user", content: "next", timestamp: 3 },
 			] as unknown as PiMessage[];
-			const result = a.test.syncSharedSession(messages, cwd);
+			const result = a.test.syncHostSession(messages, cwd);
 			assert.equal(result.path, "rebuild");
 			assert.ok(a.test.getStoredSession(result.sessionId).length > 0);
 
 			// The second runtime has never seen this session.
 			assert.equal(b.test.getStoredSession(result.sessionId), null);
-			assert.equal(b.test.getSharedSession(), null);
+			assert.equal(b.test.getHostSession(), null);
 		} finally {
 			rmSync(cwd, { recursive: true, force: true });
 		}
@@ -69,7 +72,7 @@ describe("bridge runtime isolation", () => {
 
 	it("drains completed queries without force-closing them", async () => {
 		const runtime = makeRuntime();
-		const context = runtime.test.rootContext;
+		const context = runtime.test.hostContext;
 		let forceClosed = false;
 		const query = Object.create(null) as Query;
 		query.close = () => { forceClosed = true; };
@@ -94,7 +97,7 @@ describe("bridge runtime isolation", () => {
 
 	it("force-closes and fences unsafe queries before their consumer exits", async () => {
 		const runtime = makeRuntime();
-		const context = runtime.test.rootContext;
+		const context = runtime.test.hostContext;
 		let forceClosed = false;
 		let writerClosed = false;
 		const query = Object.create(null) as Query;
@@ -107,19 +110,19 @@ describe("bridge runtime isolation", () => {
 		context.sessionStoreWriter = writer;
 		let finishQuery: () => void;
 		context.completion = new Promise<void>((resolve) => { finishQuery = resolve; });
-		runtime.test.setSharedSession({ sessionId: "11111111-1111-4111-8111-111111111111", cursor: 1 });
+		runtime.test.setHostSession({ sessionId: "11111111-1111-4111-8111-111111111111", cursor: 1 });
 
 		const closing = runtime.test.closeQueryContext(context, "unsafe", "force");
 		assert.equal(forceClosed, true);
 		assert.equal(writerClosed, true);
-		assert.equal(runtime.test.getSharedSession().needsRebuild, true);
+		assert.equal(runtime.test.getHostSession().needsRebuild, true);
 		finishQuery!();
 		await closing;
 	});
 
 	it("does not replay a dead query's rejection to the next caller that closes", async () => {
 		const runtime = makeRuntime();
-		const context = runtime.test.rootContext;
+		const context = runtime.test.hostContext;
 		context.persistent = true;
 		const query = Object.create(null) as Query;
 		query.close = () => {};
@@ -141,7 +144,7 @@ describe("bridge runtime isolation", () => {
 
 	it("reuses an interrupted query only after an empty receipt and terminal abort metadata", () => {
 		const runtime = makeRuntime();
-		const context = runtime.test.rootContext;
+		const context = runtime.test.hostContext;
 		context.persistent = true;
 		context.turnAborted = true;
 		context.turnInterruptReceiptReceived = true;
@@ -156,15 +159,15 @@ describe("bridge runtime isolation", () => {
 
 	it("forces rebuild when an interrupt receipt retains queued input", () => {
 		const runtime = makeRuntime();
-		const context = runtime.test.rootContext;
+		const context = runtime.test.hostContext;
 		context.persistent = true;
 		context.turnAborted = true;
 		context.turnInterruptReceiptReceived = true;
 		context.turnInterruptQueuedIds = ["queued-follow-up"];
-		runtime.test.setSharedSession({ sessionId: "11111111-1111-4111-8111-111111111111", cursor: 1 });
+		runtime.test.setHostSession({ sessionId: "11111111-1111-4111-8111-111111111111", cursor: 1 });
 
 		runtime.test.settleInterruptedQuery(context);
 		assert.equal(context.readyForInput, false);
-		assert.equal(runtime.test.getSharedSession().needsRebuild, true);
+		assert.equal(runtime.test.getHostSession().needsRebuild, true);
 	});
 });

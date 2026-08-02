@@ -5,7 +5,7 @@ import { KeybindingsManager, setKeybindings } from "@earendil-works/pi-tui";
 import type { CustomEntry, ExtensionUIContext, Theme } from "@earendil-works/pi-coding-agent";
 import type { Query, SDKModelRefusalFallbackMessage, SDKModelRefusalNoFallbackMessage } from "@anthropic-ai/claude-agent-sdk";
 import { createBridgeRuntime } from "../src/bridge-runtime.js";
-import { QueryContext } from "../src/query-state.js";
+import { Doppel } from "../src/doppel.js";
 import { REFUSAL_CUSTOM_TYPE, refusalEntryData, renderRefusalEntry, type RefusalEntryData } from "../src/refusal.js";
 
 const fakeModel = {
@@ -115,7 +115,7 @@ describe("Claude refusal entries", () => {
 			appendEntry: (customType, data) => entries.push({ customType, data }),
 		});
 
-		const queryCtx = new QueryContext();
+		const queryCtx = new Doppel("test-doppel", "guest").context;
 		queryCtx.persistent = true;
 		queryCtx.currentPiStream = createAssistantMessageEventStream();
 		queryCtx.beginCommand(fakeModel);

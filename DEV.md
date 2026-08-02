@@ -42,6 +42,7 @@ npm run test:usage                                  # on-demand A/B subscription
 - **Entrypoint / composition root**: `src/index.ts` — settings load, owner acquisition, provider registration, event wiring.
 - **Bridge owner**: `src/bridge-owner.ts` — process-scoped singleton across activations.
 - **Bridge runtime**: `src/bridge-runtime.ts` — query/session/MCP state machine; the heart of the extension.
+- **Doppels**: `src/doppel.ts` — per-conversation session state, the doppel registry, and session sync planning.
 - **Provider**: `src/provider.ts` — native Provider composition; stream event handling in `src/provider-stream.ts`.
 - **Session store**: `src/session-store.ts` — in-memory SDK SessionStore with writer revision fencing.
 - **Compaction**: `src/compaction.ts` — isolated summary subprocess, file-op carry-forward.

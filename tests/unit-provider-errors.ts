@@ -4,7 +4,7 @@ import { createAssistantMessageEventStream, type AssistantMessageEventStream, ty
 import type { Query } from "@anthropic-ai/claude-agent-sdk";
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { createBridgeRuntime } from "../src/bridge-runtime.js";
-import { QueryContext } from "../src/query-state.js";
+import { Doppel } from "../src/doppel.js";
 
 const runtime = createBridgeRuntime({
 	providerSettings: { systemPromptMode: "claude-code" },
@@ -35,7 +35,7 @@ describe("provider SDK result errors", () => {
 				modelUsage: {},
 			};
 		})();
-		const queryCtx = new QueryContext();
+		const queryCtx = new Doppel("test-doppel", "guest").context;
 		queryCtx.currentPiStream = createAssistantMessageEventStream();
 		queryCtx.resetTurnState(fakeModel);
 		const stream = queryCtx.currentPiStream;
@@ -86,7 +86,7 @@ describe("provider SDK result errors", () => {
 				},
 			};
 		})();
-		const queryCtx = new QueryContext();
+		const queryCtx = new Doppel("test-doppel", "guest").context;
 		queryCtx.currentPiStream = createAssistantMessageEventStream();
 		queryCtx.beginCommand(fakeModel);
 		const stream = queryCtx.currentPiStream;
@@ -132,7 +132,7 @@ describe("provider stop reasons", () => {
 
 	async function runTurn(messages: unknown[]) {
 		const sdkQuery = (async function* () { for (const message of messages) yield message; })();
-		const queryCtx = new QueryContext();
+		const queryCtx = new Doppel("test-doppel", "guest").context;
 		queryCtx.currentPiStream = createAssistantMessageEventStream();
 		queryCtx.resetTurnState(fakeModel);
 		const stream = queryCtx.currentPiStream;

@@ -70,16 +70,16 @@ try {
 		throw new Error("session-store rebuild began before the persistent Claude Code writer had stopped");
 	}
 
-	const preCompactSessionIds = [...preEventLog.matchAll(/syncResult: path=(?:reuse|rebuild) sessionId=([a-f0-9-]+)/g)]
+	const preCompactSessionIds = [...preEventLog.matchAll(/syncResult: path=(?:reuse|rebuild) doppel=\S+ sessionId=([a-f0-9-]+)/g)]
 		.map((m) => m[1]);
 	const preCompactSessionId = preCompactSessionIds.at(-1);
 	if (!preCompactSessionId) {
-		throw new Error("no pre-compact shared sessionId found in debug log");
+		throw new Error("no pre-compact host sessionId found in debug log");
 	}
 	console.log(`  Pre-compact sessionId: ${preCompactSessionId}`);
 
 	// Capture both the path and rebuild flavor.
-	const syncResults = [...postEventLog.matchAll(/syncResult: path=(reuse|rebuild|clean-start)(?: sessionId=([a-f0-9-]+) priors=\d+ (\S+))?/g)]
+	const syncResults = [...postEventLog.matchAll(/syncResult: path=(reuse|rebuild|clean-start) doppel=\S+(?: sessionId=([a-f0-9-]+) priors=\d+ (\S+))?/g)]
 		.map((m) => ({ path: m[1], sessionId: m[2], flavor: m[3] }));
 	console.log(`  Post-event syncResults: ${JSON.stringify(syncResults)}`);
 
