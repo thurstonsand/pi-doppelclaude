@@ -2,7 +2,7 @@
 
 ## Status
 
-Draft
+Accepted
 
 ## Decision Summary
 
@@ -128,7 +128,7 @@ Context for the implementer: `createBridgeRuntime` (src/bridge-runtime.ts) curre
   - Validation: `mise run lint`; `npm run test:unit` green; live smoke as Phase 1 plus `syncResult` log lines carrying doppel kind and key; grep the bridge log for absence of `WARNING: currentPiStream overwritten` during vibe + turn overlap.
   - Note: keep src/bridge-runtime.ts from growing — the doppel extraction should shrink it; if it grows past the current line count, extract further rather than sprawl.
 
-- [ ] Phase 3: Flip the vocabulary and validate in the field
+- [x] Phase 3: Flip the vocabulary and validate in the field
   - Goal: Logs, docs, and CONTEXT.md speak doppel; design accepted on field evidence.
   - Files: CONTEXT.md, DEV.md, src debug strings, tests/int-smoke.sh (grep patterns only if touched), docs/designs/03-doppel-session-model.md.
   - Work:

@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.8.0 — 2026-08-02
+
+### Added
+
+- **Add: doppel session model** — every provider call now runs in its own _doppel_, the Claude Code counterpart of one conversation, keyed by the pi session id it carries. This enables multiple parallel sessions to exist within the same process, important for certain extensions that trigger their own inference.
+- **Add: retry-once on a dead query** — If the underlying Claude Code session errors out for any reason, try again one time to catch any potentially transient issues.
+
+### Fixed
+
+- **Fix: rewinds rebuild instead of degrading** — `/undo` and session-tree navigation to a shorter history now plan a proper transcript rebuild. Previously the shorter context was mistaken for an auxiliary call and the conversation fell into cache-less one-shot queries for the rest of the session.
+
+### Changed
+
+- **Debug: log lines name their doppel** — `syncResult`, fresh-query, and turn-completion lines carry `doppel=<kind>:<key8>` (e.g. `doppel=host:019fbf9c`, `doppel=ephemeral:4ad75ca2`), so interleaved conversations in one process are distinguishable in `~/.pi/agent/doppelclaude.log`.
+
 ---
 
 > ## `pi-claude-bridge` is now `pi-doppelclaude`
