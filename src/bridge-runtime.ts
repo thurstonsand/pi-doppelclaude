@@ -44,6 +44,7 @@ import { messageContentToText } from "./convert.js";
 import {
   applySessionSync,
   createDoppelRegistry,
+  planReplaySync,
   planSessionSync,
   type Doppel,
   type SessionState,
@@ -91,29 +92,41 @@ export interface BridgeHost {
   appendEntry(customType: string, data: RefusalEntryData): void;
 }
 
-interface FreshQueryRequest {
-  queryCtx: QueryContext;
-  syncPlan: SyncPlan;
-  cwd: string;
+/** The spawn-shaped half of a turn: what a fresh subprocess is given, derived from the
+ *  request alone, plus the MCP server bound to the context that will run it. */
+interface FreshTurn {
+  mcpTools: Tool[];
   customToolNameToSdk: Map<string, string>;
   customToolNameToPi: Map<string, string>;
+  cwd: string;
+  cliModel: string;
+  spawnSignature: string;
+  mcpSignature: string;
+  mcpServers: Record<string, McpServerConfig>;
+  queryOptions: Options;
+}
+
+interface FreshQueryRequest extends FreshTurn {
+  queryCtx: QueryContext;
+  syncPlan: SyncPlan;
   model: Model<any>;
   contextMessageCount: number;
   /** The host's own query survives the turn; every other query is a one-shot. */
   persistent: boolean;
   /** The query being replaced finished cleanly, so it is drained instead of abandoned. */
   drainExisting: boolean;
-  spawnSignature: string;
-  mcpSignature: string;
-  mcpTools: Tool[];
-  mcpServers: Record<string, McpServerConfig>;
-  cliModel: string;
   promptMessage: SDKUserMessage;
-  queryOptions: Options;
   attachAbort(): void;
 }
 
 type SessionDisposition = "rebuild" | "drop";
+
+/** The prompt that re-enters a turn whose history needs none: pi has delivered every tool
+ *  result, and the replay's transcript ends with them. The subprocess is told what it
+ *  missed, because a bare "continue" reads to the model as a conversation already finished
+ *  and gets "there's no work in progress" instead of the answer. */
+const REPLAY_PROMPT =
+  "Your previous reply was interrupted before you could use the tool results above. Continue from them.";
 
 export const SESSION_STORE_LOAD_TIMEOUT_MS = 15_000;
 
@@ -227,6 +240,15 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
     return hasImage ? blocks : null;
   }
 
+  function sdkPrompt(content: string | ContentBlockParam[]): SDKUserMessage {
+    return {
+      type: "user",
+      message: { role: "user", content } as MessageParam,
+      parent_tool_use_id: null,
+      uuid: randomUUID(),
+    };
+  }
+
   function sdkUserMessage(messages: Context["messages"]): SDKUserMessage {
     const blocks = extractUserPromptBlocks(messages);
     const text = extractUserPrompt(messages);
@@ -239,15 +261,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
           .join(" "),
       });
     }
-    return {
-      type: "user",
-      message: {
-        role: "user",
-        content: blocks ?? text ?? "[continue]",
-      } as MessageParam,
-      parent_tool_use_id: null,
-      uuid: randomUUID(),
-    };
+    return sdkPrompt(blocks ?? text ?? "[continue]");
   }
 
   function contextForToolResults(
@@ -840,6 +854,106 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
       `provider: streamClaudeAgentSdk called, sessionId=${options?.sessionId?.slice(0, 8) ?? "none"}, lastMsgRole=${lastMsgRole}`,
     );
 
+    /** Wires pi's abort signal for this call to the query that answers it. */
+    function attachAbortTo(queryCtx: QueryContext): void {
+      queryCtx.abortCleanup?.();
+      if (!options?.signal) return;
+      let killTimer: ReturnType<typeof setTimeout> | undefined;
+      const onAbort = () => {
+        queryCtx.turnAborted = true;
+        queryCtx.readyForInput = false;
+        for (const pending of queryCtx.pendingToolCalls.values())
+          pending.resolve({
+            content: [{ type: "text", text: "Operation aborted" }],
+          });
+        queryCtx.pendingToolCalls.clear();
+        queryCtx.rejectionWindowOpen = false;
+        queryCtx.bufferedSdkMessages = [];
+        const activeQuery = queryCtx.activeQuery;
+        if (!activeQuery) {
+          failQuery(queryCtx, "aborted", "Operation aborted", "rebuild");
+          return;
+        }
+        void activeQuery
+          .interrupt()
+          .then((receipt) => {
+            if (!queryCtx.turnAborted || queryCtx.closing) return;
+            queryCtx.turnInterruptReceiptReceived = true;
+            queryCtx.turnInterruptQueuedIds = receipt?.still_queued ?? [
+              "unverified-queued-input",
+            ];
+            debug(
+              `provider: interrupt receipt queued=${queryCtx.turnInterruptQueuedIds.length}`,
+            );
+            settleInterruptedQuery(queryCtx);
+          })
+          .catch((error) => {
+            debug("provider: graceful interrupt failed", error);
+            failQuery(queryCtx, "aborted", "Operation aborted", "rebuild");
+          });
+        killTimer = setTimeout(() => {
+          if (!queryCtx.turnAborted || queryCtx.readyForInput) return;
+          debug("provider: interrupt timed out; forcing query close");
+          failQuery(queryCtx, "aborted", "Operation aborted", "rebuild");
+        }, 5000);
+      };
+      if (options.signal.aborted) onAbort();
+      else options.signal.addEventListener("abort", onAbort, { once: true });
+      queryCtx.abortCleanup = () => {
+        if (killTimer) clearTimeout(killTimer);
+        options.signal?.removeEventListener("abort", onAbort);
+      };
+    }
+
+    function planFreshTurn(
+      queryCtx: QueryContext,
+      persistent: boolean,
+    ): FreshTurn {
+      const { mcpTools, customToolNameToSdk, customToolNameToPi } =
+        resolveMcpTools(context);
+      const { cwd, cliModel, spawnSignature, queryOptions } = planTurn({
+        model,
+        context,
+        options,
+        providerSettings,
+        oneShot: !persistent,
+      });
+      return {
+        mcpTools,
+        customToolNameToSdk,
+        customToolNameToPi,
+        cwd,
+        cliModel,
+        spawnSignature,
+        mcpSignature: mcpSignature(mcpTools),
+        mcpServers: buildMcpServers(mcpTools, queryCtx),
+        queryOptions,
+      };
+    }
+
+    /** The subprocess a turn runs on, for a turn's first attempt and for the replay of
+     *  one whose query died before any of it reached pi. */
+    function spawnTurn(request: {
+      queryCtx: QueryContext;
+      freshTurn: FreshTurn;
+      syncPlan: SyncPlan;
+      promptMessage: SDKUserMessage;
+      persistent: boolean;
+      drainExisting: boolean;
+    }): void {
+      void spawnFreshQuery({
+        ...request.freshTurn,
+        queryCtx: request.queryCtx,
+        syncPlan: request.syncPlan,
+        model,
+        contextMessageCount: context.messages.length,
+        persistent: request.persistent,
+        drainExisting: request.drainExisting,
+        promptMessage: request.promptMessage,
+        attachAbort: () => attachAbortTo(request.queryCtx),
+      });
+    }
+
     const allResults =
       activeQueryContexts.size > 0 ? extractAllToolResults(context) : [];
     const resultCtx =
@@ -861,6 +975,42 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
         `provider: tool results, ${allResults.length} results, ${resultCtx.pendingToolCalls.size} waiting handlers, ctx.msgs=${context.messages.length}`,
       );
 
+      // A warm query can be hours old by the time pi answers its tool call, and die on the
+      // first request it makes with the answer. Pi's history already carries the results,
+      // so the turn is replayable: discard the corpse, rebuild the whole conversation —
+      // results included — into a fresh session, and let the same pi stream take the reply.
+      // Armed after resetTurnState, which clears it, so exactly one replay per turn.
+      let replayed = false;
+      resultCtx.turnRetry = () => {
+        replayed = true;
+        const queryCtx = resultCtx;
+        const doppel = queryCtx.doppel;
+        const persistent = doppel.kind === "host" && queryCtx === doppel.context;
+        // A trailing user message is steering pi has not handed to Claude Code yet, so it
+        // is the replay's prompt; otherwise the history ends at the results and the replay
+        // only asks the fresh subprocess to carry on.
+        const steering = lastMsgRole === "user";
+        debug(
+          `provider: replaying the tool-result continuation on a fresh subprocess (doppel=${doppel.label}, ${allResults.length} result(s) already in pi's history, prompt=${steering ? "steering" : "replay"}, persistent=${persistent})`,
+        );
+        claimCurrentPiStream(stream, "tool-result-replay", queryCtx);
+        queryCtx.activeModel = model;
+        queryCtx.restartTurnState(model);
+        queryCtx.fatalError = null;
+        spawnTurn({
+          queryCtx,
+          freshTurn: planFreshTurn(queryCtx, persistent),
+          syncPlan: steering
+            ? planSessionSync(context.messages, doppel.session)
+            : planReplaySync(context.messages, doppel.session),
+          promptMessage: steering
+            ? sdkUserMessage(context.messages)
+            : sdkPrompt(REPLAY_PROMPT),
+          persistent,
+          drainExisting: false,
+        });
+      };
+
       if (lastMsgRole === "user") {
         if (resultCtx.persistent && resultCtx.inputQueue) {
           resultCtx.inputQueue.push(sdkUserMessage(context.messages));
@@ -875,6 +1025,10 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
       // Anything Claude Code streamed while pi was executing is older than what the
       // unblocked generator will produce, so it replays into the fresh turn first.
       replayBufferedSdkMessages(resultCtx);
+      // A buffered result can be the death itself, replayed into this call. The turn now
+      // belongs to the fresh subprocess: these results are in the session it rebuilt from,
+      // and the handlers that were waiting for them died with the query.
+      if (replayed) return stream;
 
       for (const result of allResults) {
         const id = result.toolCallId;
@@ -960,24 +1114,14 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
       const queryCtx = isReentrant ? doppel.spawnContext() : primary;
       const persistent = !isReentrant && doppel.kind === "host";
       const syncPlan = planSessionSync(context.messages, doppel.session);
-      const { mcpTools, customToolNameToSdk, customToolNameToPi } =
-        resolveMcpTools(context);
       const promptMessage = sdkUserMessage(context.messages);
-      const { cwd, cliModel, spawnSignature, queryOptions } = planTurn({
-        model,
-        context,
-        options,
-        providerSettings,
-        oneShot: !persistent,
-      });
-      const nextMcpSignature = mcpSignature(mcpTools);
-      const mcpServers = buildMcpServers(mcpTools, queryCtx);
+      const freshTurn = planFreshTurn(queryCtx, persistent);
 
       const canPush = Boolean(
         warmQuery &&
         !isReentrant &&
         syncPlan.path === "reuse" &&
-        queryCtx.spawnSignature === spawnSignature,
+        queryCtx.spawnSignature === freshTurn.spawnSignature,
       );
 
       claimCurrentPiStream(
@@ -996,69 +1140,19 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
       );
       queryCtx.fatalError = null;
 
-      const attachAbort = () => {
-        queryCtx.abortCleanup?.();
-        if (!options?.signal) return;
-        let killTimer: ReturnType<typeof setTimeout> | undefined;
-        const onAbort = () => {
-          queryCtx.turnAborted = true;
-          queryCtx.readyForInput = false;
-          for (const pending of queryCtx.pendingToolCalls.values())
-            pending.resolve({
-              content: [{ type: "text", text: "Operation aborted" }],
-            });
-          queryCtx.pendingToolCalls.clear();
-          queryCtx.rejectionWindowOpen = false;
-          queryCtx.bufferedSdkMessages = [];
-          const activeQuery = queryCtx.activeQuery;
-          if (!activeQuery) {
-            failQuery(queryCtx, "aborted", "Operation aborted", "rebuild");
-            return;
-          }
-          void activeQuery
-            .interrupt()
-            .then((receipt) => {
-              if (!queryCtx.turnAborted || queryCtx.closing) return;
-              queryCtx.turnInterruptReceiptReceived = true;
-              queryCtx.turnInterruptQueuedIds = receipt?.still_queued ?? [
-                "unverified-queued-input",
-              ];
-              debug(
-                `provider: interrupt receipt queued=${queryCtx.turnInterruptQueuedIds.length}`,
-              );
-              settleInterruptedQuery(queryCtx);
-            })
-            .catch((error) => {
-              debug("provider: graceful interrupt failed", error);
-              failQuery(queryCtx, "aborted", "Operation aborted", "rebuild");
-            });
-          killTimer = setTimeout(() => {
-            if (!queryCtx.turnAborted || queryCtx.readyForInput) return;
-            debug("provider: interrupt timed out; forcing query close");
-            failQuery(queryCtx, "aborted", "Operation aborted", "rebuild");
-          }, 5000);
-        };
-        if (options.signal.aborted) onAbort();
-        else options.signal.addEventListener("abort", onAbort, { once: true });
-        queryCtx.abortCleanup = () => {
-          if (killTimer) clearTimeout(killTimer);
-          options.signal?.removeEventListener("abort", onAbort);
-        };
-      };
-
       if (canPush) {
         applySessionSync({
           doppel,
           plan: syncPlan,
-          cwd,
+          cwd: freshTurn.cwd,
           sessionStore,
-          customToolNameToSdk,
+          customToolNameToSdk: freshTurn.customToolNameToSdk,
           modelId: model.id,
         });
-        attachAbort();
+        attachAbortTo(queryCtx);
         void (async () => {
           try {
-            if (queryCtx.mcpSignature !== nextMcpSignature) {
+            if (queryCtx.mcpSignature !== freshTurn.mcpSignature) {
               debug(
                 `provider: reconciling MCP tools without process replacement (${queryCtx.hasMcpServer ? "replace/remove" : "add"})`,
               );
@@ -1066,17 +1160,17 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
                 queryCtx.activeQuery!,
                 MCP_SERVER_NAME,
                 queryCtx.hasMcpServer,
-                mcpServers,
+                freshTurn.mcpServers,
               );
-              queryCtx.mcpSignature = nextMcpSignature;
-              queryCtx.hasMcpServer = mcpTools.length > 0;
+              queryCtx.mcpSignature = freshTurn.mcpSignature;
+              queryCtx.hasMcpServer = freshTurn.mcpTools.length > 0;
             }
-            if (queryCtx.cliModel !== cliModel) {
+            if (queryCtx.cliModel !== freshTurn.cliModel) {
               debug(
-                `provider: persistent setModel ${queryCtx.cliModel} → ${cliModel}`,
+                `provider: persistent setModel ${queryCtx.cliModel} → ${freshTurn.cliModel}`,
               );
-              await queryCtx.activeQuery!.setModel(cliModel);
-              queryCtx.cliModel = cliModel;
+              await queryCtx.activeQuery!.setModel(freshTurn.cliModel);
+              queryCtx.cliModel = freshTurn.cliModel;
             }
             queryCtx.inputQueue!.push(promptMessage);
             debug(
@@ -1090,24 +1184,13 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
         return;
       }
 
-      void spawnFreshQuery({
+      spawnTurn({
         queryCtx,
+        freshTurn,
         syncPlan,
-        cwd,
-        customToolNameToSdk,
-        customToolNameToPi,
-        model,
-        contextMessageCount: context.messages.length,
+        promptMessage,
         persistent,
         drainExisting: warmQuery,
-        spawnSignature,
-        mcpSignature: nextMcpSignature,
-        mcpTools,
-        mcpServers,
-        cliModel,
-        promptMessage,
-        queryOptions,
-        attachAbort,
       });
     }
 

@@ -139,6 +139,14 @@ export class QueryContext {
 		this.resetTurnState(model);
 	}
 
+	/** A replay re-runs the turn that just died, so the output it abandoned leaves the
+	 *  command's record instead of standing in it as a turn that produced nothing. */
+	restartTurnState(model: Model<any>): void {
+		const abandoned = this.turnOutput ? this.commandOutputs.lastIndexOf(this.turnOutput) : -1;
+		if (abandoned >= 0) this.commandOutputs.splice(abandoned, 1);
+		this.resetTurnState(model);
+	}
+
 	resetTurnState(model: Model<any>): void {
 		this.turnOutput = {
 			role: "assistant", content: [],

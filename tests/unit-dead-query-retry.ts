@@ -6,7 +6,7 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import type { Query, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { Query, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { AssistantMessageEvent, Context, Message as PiMessage, Model, SimpleStreamOptions, Tool } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { createBridgeRuntime } from "../src/bridge-runtime.js";
@@ -36,21 +36,39 @@ interface QueryScript {
 	hangOnInterrupt?: boolean;
 }
 
-/** One spawned query, as the handle a test needs to kill it mid-flight. */
+/** One spawned query, as the handle a test needs to drive or kill it mid-flight. */
 interface SpawnedQuery {
 	fail(message: string): void;
+	/** Yields more SDK messages from a query the test left open. */
+	emit(messages: SDKMessage[]): void;
+	/** What the runtime prompted this query with, in order. */
+	prompts: SDKUserMessage[];
+	/** The runtime closed this query's input. A live query whose input is already closed is
+	 *  a one-shot: the turn it was spawned for is all of it. */
+	promptsEnded: boolean;
 }
 
 function makeHarness(scripts: QueryScript[]) {
 	const spawned: SpawnedQuery[] = [];
 	const runtime = createBridgeRuntime({
 		providerSettings: { systemPromptMode: "claude-code" },
-		queryFactory: () => {
+		queryFactory: (request) => {
 			const script = scripts[spawned.length];
 			assert.ok(script, `unexpected query spawn #${spawned.length + 1}`);
 			const queue = new PushQueue<SDKMessage>();
 			let pendingError = script.throwAfterMessages ?? null;
-			spawned.push({ fail(message) { pendingError = message; queue.end(); } });
+			const prompts: SDKUserMessage[] = [];
+			let promptsEnded = false;
+			void (async () => {
+				for await (const message of request.prompt) prompts.push(message);
+				promptsEnded = true;
+			})();
+			spawned.push({
+				fail(message) { pendingError = message; queue.end(); },
+				emit(messages) { for (const message of messages) queue.push(message); },
+				prompts,
+				get promptsEnded() { return promptsEnded; },
+			});
 			for (const message of script.messages ?? []) queue.push(message);
 			if (!script.stayOpen) queue.end();
 			const iterate = async function* () {
@@ -139,6 +157,45 @@ const bashTool = {
 	description: "run a command",
 	parameters: Type.Object({ command: Type.String() }),
 } as unknown as Tool;
+
+const TOOL_CALL_ID = "toolu_01";
+
+/** A turn that ends in a tool call: pi renders it, then answers it in a second
+ *  provider call whose history already carries the result. */
+function toolCallEvents(): SDKMessage[] {
+	return [
+		{ type: "stream_event", event: { type: "message_start", message: { usage: {} } } },
+		{ type: "stream_event", event: { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: TOOL_CALL_ID, name: "mcp__custom-tools__bash", input: {} } } },
+		{ type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: '{"command":"ls"}' } } },
+		{ type: "stream_event", event: { type: "content_block_stop", index: 0 } },
+		{ type: "stream_event", event: { type: "message_stop" } },
+	] as unknown as SDKMessage[];
+}
+
+function answeredToolCall(priorMessages: unknown[]) {
+	return [
+		...priorMessages,
+		{ role: "assistant", content: [{ type: "toolCall", id: TOOL_CALL_ID, name: "bash", arguments: { command: "ls" } }] },
+		{ role: "toolResult", toolCallId: TOOL_CALL_ID, content: "a.txt" },
+	];
+}
+
+const toolTurn = answeredToolCall(prompt);
+const STEERING = "also check the log";
+
+/** Runs the first turn to the tool call pi must answer, and returns the events of the
+ *  continuation call that delivers the result. */
+async function deliverToolResult(
+	runtime: ReturnType<typeof makeHarness>["runtime"],
+	messages: unknown[] = toolTurn,
+) {
+	const first = record(stream(runtime, prompt, undefined, [bashTool]));
+	await settle();
+	assert.equal(first.at(-1)?.type, "done", "the first turn did not hand the tool call to pi");
+	const events = record(stream(runtime, messages, undefined, [bashTool]));
+	await settle();
+	return events;
+}
 
 describe("dead query retry", () => {
 	it("replays the turn once on a fresh subprocess and answers from it", async () => {
@@ -244,6 +301,112 @@ describe("dead query retry", () => {
 		assert.equal(spawned.length, 2, "the pushed-into corpse was not replaced");
 		assert.deepEqual(texts(events), ["second"]);
 		assert.equal(terminalError(events), null);
+	});
+
+	it("replays a tool-result continuation the warm query died answering", async () => {
+		const { runtime, spawned } = makeHarness([
+			{ stayOpen: true, messages: toolCallEvents() },
+			{ stayOpen: true },
+		]);
+		const events = await deliverToolResult(runtime);
+		assert.equal(spawned.length, 1, "the continuation must ride the query that made the call");
+
+		// The warm query makes its first request with the result and finds its token revoked.
+		spawned[0].fail(REVOKED);
+		await settle();
+
+		assert.equal(spawned.length, 2, "the dead continuation was not respawned");
+		assert.match(
+			String(spawned[1].prompts[0]?.message.content),
+			/tool results/,
+			"the replay must tell the fresh subprocess to answer from the results its transcript ends with",
+		);
+		assert.equal(spawned[1].promptsEnded, false, "the host's replay must come back warm, not as a one-shot");
+
+		spawned[1].emit([...textEvents("the tool said a.txt"), successResult]);
+		await settle();
+		assert.deepEqual(texts(events), ["the tool said a.txt"]);
+		assert.equal(events.at(-1)?.type, "done", "the replay's answer did not complete the turn");
+		assert.equal(events.filter((event) => event.type === "start").length, 1, "pi saw the continuation start twice");
+	});
+
+	it("carries steering forward when the query dies holding it", async () => {
+		const { runtime, spawned } = makeHarness([
+			{ stayOpen: true, messages: toolCallEvents() },
+			{ messages: [...textEvents("log checked"), successResult] },
+		]);
+		// Pi delivers the tool result and a message the user typed while the tool ran.
+		const events = await deliverToolResult(runtime, [...toolTurn, { role: "user", content: STEERING }]);
+		assert.equal(String(spawned[0].prompts.at(-1)?.message.content), STEERING, "the steering never reached the warm query");
+
+		spawned[0].fail(REVOKED);
+		await settle();
+
+		assert.equal(spawned.length, 2, "the dead continuation was not respawned");
+		assert.equal(
+			String(spawned[1].prompts[0]?.message.content),
+			STEERING,
+			"steering died in the corpse's queue, so the replay must prompt with it instead of the tool-result nudge",
+		);
+		assert.deepEqual(texts(events), ["log checked"]);
+		assert.equal(events.at(-1)?.type, "done", "the replay's answer did not complete the turn");
+	});
+
+	it("replays a reentrant query's continuation as another one-shot", async () => {
+		const { runtime, spawned } = makeHarness([
+			{ stayOpen: true },
+			{ stayOpen: true, messages: toolCallEvents() },
+			{ stayOpen: true },
+		]);
+		record(stream(runtime, prompt));
+		await settle();
+		// A turn arriving while the doppel's query is mid-flight gets a context of its own,
+		// and a query that is a one-shot however it ends.
+		const nested = record(stream(runtime, secondPrompt, undefined, [bashTool]));
+		await settle();
+		assert.equal(spawned.length, 2, "the reentrant turn did not get its own query");
+		assert.equal(nested.at(-1)?.type, "done", "the reentrant turn did not hand its tool call to pi");
+
+		const events = record(stream(runtime, answeredToolCall(secondPrompt), undefined, [bashTool]));
+		await settle();
+		spawned[1].fail(REVOKED);
+		await settle();
+
+		assert.equal(spawned.length, 3, "the reentrant continuation was not respawned");
+		assert.equal(spawned[2].promptsEnded, true, "a reentrant replay must stay a one-shot: prompted once, input closed");
+
+		spawned[2].emit([...textEvents("nested answer"), successResult]);
+		await settle();
+		assert.deepEqual(texts(events), ["nested answer"]);
+		assert.equal(events.at(-1)?.type, "done", "the replay's answer did not complete the turn");
+	});
+
+	it("reports the failure when the replayed continuation dies too", async () => {
+		const { runtime, spawned } = makeHarness([
+			{ stayOpen: true, messages: toolCallEvents() },
+			{ failInit: QUERY_CLOSED },
+		]);
+		const events = await deliverToolResult(runtime);
+		spawned[0].fail(REVOKED);
+		await settle();
+
+		assert.equal(spawned.length, 2, "exactly one replay, and the second failure is final");
+		assert.equal(terminalError(events), QUERY_CLOSED);
+	});
+
+	it("never replays a continuation whose output already reached pi", async () => {
+		const { runtime, spawned } = makeHarness([
+			{ stayOpen: true, messages: toolCallEvents() },
+		]);
+		const events = await deliverToolResult(runtime);
+		spawned[0].emit(textEvents("half an answer"));
+		await settle();
+		spawned[0].fail(REVOKED);
+		await settle();
+
+		assert.equal(spawned.length, 1, "replaying after partial delivery would duplicate the answer");
+		assert.deepEqual(texts(events), ["half an answer"]);
+		assert.match(terminalError(events), /401 OAuth access token has been revoked/);
 	});
 
 	it("leaves failures that are not a dead query alone", async () => {

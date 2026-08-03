@@ -151,7 +151,25 @@ export function planSessionSync(
 	messages: Context["messages"],
 	currentSession: SessionState | null,
 ): SyncPlan {
-	const priorMessages = messages.slice(0, -1);
+	return planFor(messages.slice(0, -1), currentSession);
+}
+
+/**
+ * The plan for a turn whose prompt is not one of pi's messages: a tool-result
+ * continuation replayed after its query died. Pi has already delivered everything the
+ * turn is answering, so nothing is held back and the whole history is the session's.
+ */
+export function planReplaySync(
+	messages: Context["messages"],
+	currentSession: SessionState | null,
+): SyncPlan {
+	return planFor(messages, currentSession);
+}
+
+function planFor(
+	priorMessages: Context["messages"],
+	currentSession: SessionState | null,
+): SyncPlan {
 	if (currentSession && !currentSession.needsRebuild && priorMessages.length >= currentSession.cursor) {
 		const missed = priorMessages.slice(currentSession.cursor);
 		const trailingAssistantOnly =
