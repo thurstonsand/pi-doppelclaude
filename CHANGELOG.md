@@ -2,9 +2,9 @@
 
 # Changelog
 
-## Unreleased
+## 0.8.1 — 2026-08-04
 
-A review pass over upstream [`pi-claude-bridge`](https://github.com/elidickinson/pi-claude-bridge)'s recent activity. Everything below is ported from its fixes and tooling.
+A review pass over upstream [`pi-claude-bridge`](https://github.com/elidickinson/pi-claude-bridge)'s recent activity; the fixes below are ported from it.
 
 ### Fixed
 
