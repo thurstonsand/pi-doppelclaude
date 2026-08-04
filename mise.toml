@@ -5,7 +5,7 @@ enter = "mise bootstrap --yes --quiet"
 
 [tools]
 actionlint = "1.7.12"
-hk = "1.50.0"
+hk = "1.54.0"
 node = "24"
 shellcheck = "0.11.0"
 
@@ -16,6 +16,8 @@ _.path = ["{{config_root}}/node_modules/.bin"]
 description = "Install development dependencies and git hooks"
 run = [
     "npm ci --quiet --no-fund --no-audit",
+    # pi must always resolve to the global install, never this repo's copy
+    "rm -f node_modules/.bin/pi",
     "hk install --mise --quiet",
     "mkdir -p .mise && touch .mise/bootstrap",
 ]

@@ -35,6 +35,12 @@
       "groupName": "mise tools"
     },
     {
+      "description": "Pinned to the versions pi ships. Pi's extension loader aliases typebox to its own bundled copy, so our declaration only types what pi executes and must match it; partial-json is not aliased, but pi-ai pins it exactly and parses the same streams. Both move when pi moves, not on Renovate's schedule.",
+      "matchManagers": ["npm"],
+      "matchPackageNames": ["partial-json", "typebox"],
+      "enabled": false
+    },
+    {
       "matchDatasources": ["github-releases"],
       "matchPackageNames": ["jdx/hk"],
       "groupName": "hk",

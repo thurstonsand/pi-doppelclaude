@@ -6,7 +6,7 @@
 mise trust && mise run bootstrap
 ```
 
-The mise enter hook keeps the bootstrap current (npm ci, hk git hooks). Pi loads the extension directly from TypeScript source at `src/index.ts` — there is no build step.
+The mise enter hook keeps the bootstrap current (npm ci, hk git hooks). Bootstrap also deletes `node_modules/.bin/pi`: this repo's PATH puts `node_modules/.bin` first, and the devDependency copy of pi would otherwise shadow the global install, so smoke tests would exercise the wrong binary. Pi loads the extension directly from TypeScript source at `src/index.ts` — there is no build step.
 
 ## Commands
 

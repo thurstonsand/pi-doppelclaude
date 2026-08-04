@@ -54,22 +54,39 @@ Look for:
 
 Types compiling clean is not the audit. Behavior can shift under an unchanged signature, so read the diff.
 
-Then re-record the stream fixtures. That diff is the SDK's observable contract change and catches the behavior shifts the declarations hide. It costs quota, so it belongs to Agent SDK bumps rather than every batch. Fold the re-recorded fixtures into the batch commit.
+Then re-record the stream fixtures. That diff is the SDK's observable contract change and catches the behavior shifts the declarations hide. Fold the re-recorded fixtures into the batch commit.
+
+Re-recording costs quota, so it is owed when the diff reaches a surface we consume — not on every Agent SDK bump. A release whose whole delta is provably confined to something the bridge never touches cannot move the fixtures, and spending quota to watch them not move is theatre. Say in the report which way you judged it and on what evidence.
 
 Record what you found. If the bump enables work, open an issue or add it to `TODO.md` in the same commit rather than expanding the batch — the batch stays a batch. If it enables nothing, say so in the report; a negative result still means the audit happened.
 
 Done when the SDK diff has been read and its consequences are either landed, filed, or explicitly reported as none.
 
-### 4. Verify
+### 4. Realign what pi ships
+
+`renovate.json` disables `typebox` and `partial-json`. They are pinned to the versions pi ships, and Renovate cannot know what those are, so it will never raise them — they move only when pi moves. That makes a pi bump the one update in a batch that carries hidden work.
+
+When the batch bumps `@earendil-works/pi-*`, read the new `@earendil-works/pi-ai/package.json` and match its `typebox` and `partial-json` pins exactly, in the same commit. Bump the `peerDependencies` floor alongside the devDependency if the new version is actually required.
+
+Then re-read the alias list in pi's extension loader, `packages/coding-agent/src/core/extensions/loader.ts` — the `alias` map for Node and `VIRTUAL_MODULES` for the Bun binary, which must agree. That list, not our imports, decides which packages we need to ship:
+
+- newly aliased — pi now supplies it, so demote ours to a devDependency; it is only typing what pi executes, and it must match pi's version or the types lie
+- no longer aliased — pi stopped supplying it, so ours must become a real dependency or the published extension breaks on a machine where nothing else hoists it
+
+Prove the classification rather than trusting the read: move the package out of `node_modules` and run a live smoke that exercises it. Use the global `pi`, since a devDependency copy of pi resolves its own imports normally and will fail for reasons that have nothing to do with the extension.
+
+Done when our pins match pi's, every dependency's placement matches the alias list, and the suite is green.
+
+### 5. Verify
 
 Done when the batch commit's `main` CI is green. Fix a red run before reconciling.
 
-### 5. Reconcile
+### 6. Reconcile
 
 Give Renovate a few minutes to close the landed PRs. For any it leaves open once its update is on `main`, close it manually with a comment along the lines of `Closing as superseded by <commit>, which already applies this update on main.`
 
 Done when no PR whose update is on `main` remains open.
 
-### 6. Report
+### 7. Report
 
-Report the batch commit SHA and its updates, the Anthropic SDK audit findings, the `main` CI result and URL, which PRs Renovate closed versus closed by hand, and anything left open with why.
+Report the batch commit SHA and its updates, the Anthropic SDK audit findings, any pi realignment, the `main` CI result and URL, which PRs Renovate closed versus closed by hand, and anything left open with why.
