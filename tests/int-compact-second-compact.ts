@@ -13,64 +13,71 @@ const BRIDGE_MODEL = "doppelclaude/claude-haiku-4-5";
 // Force each /compact to discard older turns instead of summarizing an empty
 // prefix while preserving all recent context.
 const testAgentDir = mkdtempSync(join(tmpdir(), "compact-second-agent-"));
-writeFileSync(join(testAgentDir, "settings.json"), JSON.stringify({
-	compaction: { keepRecentTokens: 50 },
-}));
+writeFileSync(
+  join(testAgentDir, "settings.json"),
+  JSON.stringify({
+    compaction: { keepRecentTokens: 50 },
+  }),
+);
 
 const harness = createRpcHarness({
-	name: "compact-second-compact",
-	args: ["--model", BRIDGE_MODEL],
-	env: { PI_CODING_AGENT_DIR: testAgentDir },
-	defaultTimeout: TIMEOUT,
+  name: "compact-second-compact",
+  args: ["--model", BRIDGE_MODEL],
+  env: { PI_CODING_AGENT_DIR: testAgentDir },
+  defaultTimeout: TIMEOUT,
 });
 
 const { startAndWait, stop, send, promptAndWait, DEBUG_LOG, RPC_LOG } = harness;
 
 function assertMentions(summary: string, file: string) {
-	if (!summary.includes(file)) {
-		throw new Error(`summary missing ${file}. Summary head: ${summary.slice(0, 500)}`);
-	}
+  if (!summary.includes(file)) {
+    throw new Error(`summary missing ${file}. Summary head: ${summary.slice(0, 500)}`);
+  }
 }
 
 async function forceDiscardableHistory(file: string, marker: string) {
-	await promptAndWait(
-		`Use the read tool to read ${file}. Then reply with exactly '${marker}'.`,
-		TIMEOUT,
-	);
-	await promptAndWait(
-		"List 15 European capital cities, one per line, numbered. Nothing else.",
-		TIMEOUT,
-	);
+  await promptAndWait(
+    `Use the read tool to read ${file}. Then reply with exactly '${marker}'.`,
+    TIMEOUT,
+  );
+  await promptAndWait(
+    "List 15 European capital cities, one per line, numbered. Nothing else.",
+    TIMEOUT,
+  );
 }
 
 await startAndWait();
 
 try {
-	console.log("Round 1: force a read of file A into compacted history...");
-	await forceDiscardableHistory("tests/fixtures/compact-file-a.txt", "read-a-ok");
+  console.log("Round 1: force a read of file A into compacted history...");
+  await forceDiscardableHistory("tests/fixtures/compact-file-a.txt", "read-a-ok");
 
-	console.log("First /compact...");
-	const first = await send({ type: "compact" }, TIMEOUT, parseCompactionResult);
-	if (!first?.summary?.trim()) throw new Error(`first compact returned empty summary: ${JSON.stringify(first)}`);
-	assertMentions(first.summary, "tests/fixtures/compact-file-a.txt");
+  console.log("First /compact...");
+  const first = await send({ type: "compact" }, TIMEOUT, parseCompactionResult);
+  if (!first?.summary?.trim())
+    throw new Error(`first compact returned empty summary: ${JSON.stringify(first)}`);
+  assertMentions(first.summary, "tests/fixtures/compact-file-a.txt");
 
-	console.log("Round 2: force a read of file B into compacted history...");
-	await forceDiscardableHistory("tests/fixtures/compact-file-b.txt", "read-b-ok");
+  console.log("Round 2: force a read of file B into compacted history...");
+  await forceDiscardableHistory("tests/fixtures/compact-file-b.txt", "read-b-ok");
 
-	console.log("Second /compact...");
-	const second = await send({ type: "compact" }, TIMEOUT, parseCompactionResult);
-	if (!second?.summary?.trim()) throw new Error(`second compact returned empty summary: ${JSON.stringify(second)}`);
-	assertMentions(second.summary, "tests/fixtures/compact-file-a.txt");
-	assertMentions(second.summary, "tests/fixtures/compact-file-b.txt");
+  console.log("Second /compact...");
+  const second = await send({ type: "compact" }, TIMEOUT, parseCompactionResult);
+  if (!second?.summary?.trim())
+    throw new Error(`second compact returned empty summary: ${JSON.stringify(second)}`);
+  assertMentions(second.summary, "tests/fixtures/compact-file-a.txt");
+  assertMentions(second.summary, "tests/fixtures/compact-file-b.txt");
 
-	console.log("PASS");
+  console.log("PASS");
 } catch (e) {
-	process.exitCode = 1;
-	console.log(`FAIL: ${e.message}\n${e.stack}`);
-	console.log(`  RPC log:    ${RPC_LOG}`);
-	console.log(`  Debug log:  ${DEBUG_LOG}`);
-	try { console.log(`  Debug tail: ${readFileSync(DEBUG_LOG, "utf8").slice(-3000)}`); } catch {}
+  process.exitCode = 1;
+  console.log(`FAIL: ${e.message}\n${e.stack}`);
+  console.log(`  RPC log:    ${RPC_LOG}`);
+  console.log(`  Debug log:  ${DEBUG_LOG}`);
+  try {
+    console.log(`  Debug tail: ${readFileSync(DEBUG_LOG, "utf8").slice(-3000)}`);
+  } catch {}
 } finally {
-	await stop();
-	rmSync(testAgentDir, { recursive: true, force: true });
+  await stop();
+  rmSync(testAgentDir, { recursive: true, force: true });
 }

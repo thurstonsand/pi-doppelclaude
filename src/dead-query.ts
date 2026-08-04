@@ -12,20 +12,21 @@ const QUERY_CLOSED = /Query closed before response received/i;
  *  has usually already refreshed successfully, so a subprocess that re-reads the
  *  credential store gets a live token. */
 export function isAuthRevokedFailure(message: string): boolean {
-	return /\b401\b/.test(message) && /oauth/i.test(message) && /revoked|expired/i.test(message);
+  return /\b401\b/.test(message) && /oauth/i.test(message) && /revoked|expired/i.test(message);
 }
 
 export function isDeadQueryFailure(message: string): boolean {
-	return QUERY_CLOSED.test(message) || isAuthRevokedFailure(message);
+  return QUERY_CLOSED.test(message) || isAuthRevokedFailure(message);
 }
 
-export const RELOGIN_HINT = "usually a transient credential-refresh race; sending the message again typically works. If it persists, run `claude /login`.";
+export const RELOGIN_HINT =
+  "usually a transient credential-refresh race; sending the message again typically works. If it persists, run `claude /login`.";
 
 /** A 401 that outlives the retry is still most often the refresh race caught twice within
  *  its window, so the hint leads with try-again; genuine revocation is the rare case, and
  *  the bridge holds no credentials, so that case is only actionable in Claude Code's own
  *  terms. */
 export function withReloginHint(message: string): string {
-	if (!isAuthRevokedFailure(message) || message.includes(RELOGIN_HINT)) return message;
-	return `${message} — ${RELOGIN_HINT}`;
+  if (!isAuthRevokedFailure(message) || message.includes(RELOGIN_HINT)) return message;
+  return `${message} — ${RELOGIN_HINT}`;
 }

@@ -6,22 +6,26 @@
 
 import { randomUUID } from "node:crypto";
 import {
-  createAssistantMessageEventStream,
+  type McpServerConfig,
+  type Options,
+  type Query,
+  query,
+  type SDKUserMessage,
+} from "@anthropic-ai/claude-agent-sdk";
+import type {
+  Base64ImageSource,
+  ContentBlockParam,
+  MessageParam,
+} from "@anthropic-ai/sdk/resources";
+import {
   type AssistantMessageEventStream,
   type Context,
+  createAssistantMessageEventStream,
   type Model,
   type SimpleStreamOptions,
   type Tool,
 } from "@earendil-works/pi-ai";
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
-import type { RefusalEntryData } from "./refusal.js";
-import {
-  query,
-  type McpServerConfig,
-  type Options,
-  type Query,
-  type SDKUserMessage,
-} from "@anthropic-ai/claude-agent-sdk";
 // Server's @deprecated tag steers high-level users toward McpServer, whose
 // pre-handler validation is exactly what buildMcpServers must escape; the tag
 // itself sanctions low-level Server for "advanced use cases".
@@ -32,51 +36,38 @@ import {
   ListToolsRequestSchema,
   McpError,
 } from "@modelcontextprotocol/sdk/types.js";
-import type {
-  Base64ImageSource,
-  ContentBlockParam,
-  MessageParam,
-} from "@anthropic-ai/sdk/resources";
+import { deleteSession } from "cc-session-io";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
-import { deleteSession } from "cc-session-io";
 import { messageContentToText } from "./convert.js";
+import { isDeadQueryFailure } from "./dead-query.js";
+import { debug, diagDump, errorMessage } from "./debug.js";
 import {
   applySessionSync,
   createDoppelRegistry,
+  type Doppel,
   planReplaySync,
   planSessionSync,
-  type Doppel,
   type SessionState,
   type SyncPlan,
 } from "./doppel.js";
-import type { BridgeModelCatalog } from "./model-catalog.js";
-import { MCP_SERVER_NAME } from "./skills.js";
 import {
   extractAllToolResults as _extractAllToolResults,
   type McpResult,
 } from "./extract-tool-results.js";
-import { PushQueue, QueryContext } from "./query-state.js";
-import type { ProviderSettings } from "./settings.js";
-import { mcpSignature, planTurn, resolveMcpTools } from "./turn-plan.js";
+import type { BridgeModelCatalog } from "./model-catalog.js";
 import { createProviderStreamRuntime } from "./provider-stream.js";
-import {
-  BridgeSessionStore,
-  MalformedSessionTranscriptError,
-} from "./session-store.js";
-import {
-  awaitQueryInitialization,
-  reconcileMcpServers,
-} from "./sdk-signals.js";
-import { isDeadQueryFailure } from "./dead-query.js";
-import { debug, diagDump, errorMessage } from "./debug.js";
+import { PushQueue, type QueryContext } from "./query-state.js";
+import type { RefusalEntryData } from "./refusal.js";
+import { awaitQueryInitialization, reconcileMcpServers } from "./sdk-signals.js";
+import { BridgeSessionStore, MalformedSessionTranscriptError } from "./session-store.js";
+import type { ProviderSettings } from "./settings.js";
+import { MCP_SERVER_NAME } from "./skills.js";
+import { mcpSignature, planTurn, resolveMcpTools } from "./turn-plan.js";
 
 export interface BridgeRuntimeDependencies {
   providerSettings: ProviderSettings;
-  queryFactory?(request: {
-    prompt: AsyncIterable<SDKUserMessage>;
-    options?: Options;
-  }): Query;
+  queryFactory?(request: { prompt: AsyncIterable<SDKUserMessage>; options?: Options }): Query;
   sessionStore?: BridgeSessionStore;
   /** Absent in tests that exercise streaming without a provider; then a served model teaches nothing. */
   modelCatalog?: BridgeModelCatalog;
@@ -135,8 +126,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
   const queryFactory = dependencies.queryFactory ?? query;
 
   const doppels = createDoppelRegistry();
-  const sessionStore =
-    dependencies.sessionStore ?? new BridgeSessionStore(debug);
+  const sessionStore = dependencies.sessionStore ?? new BridgeSessionStore(debug);
   let host: BridgeHost | null = null;
   const activeQueryContexts = new Set<QueryContext>();
 
@@ -153,9 +143,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
     observeServedModel: (id) => {
       dependencies.modelCatalog
         ?.noteServedModel(id)
-        .catch((error) =>
-          debug("provider: recording the served model failed", error),
-        );
+        .catch((error) => debug("provider: recording the served model failed", error));
     },
   });
 
@@ -188,22 +176,18 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
   /** Extract the last user message from context as a prompt string. Returns null if last message is not a user message. */
   function extractUserPrompt(messages: Context["messages"]): string | null {
     const last = messages[messages.length - 1];
-    if (!last || last.role !== "user") return null;
+    if (last?.role !== "user") return null;
     if (typeof last.content === "string") return last.content;
     return messageContentToText(last.content) || "";
   }
 
   /** Extract the last user message as ContentBlockParam[] (preserving images).
    *  Returns null if no images — caller should fall back to string prompt. */
-  function extractUserPromptBlocks(
-    messages: Context["messages"],
-  ): ContentBlockParam[] | null {
+  function extractUserPromptBlocks(messages: Context["messages"]): ContentBlockParam[] | null {
     const last = messages[messages.length - 1];
-    if (!last || last.role !== "user") return null;
+    if (last?.role !== "user") return null;
     if (typeof last.content === "string") {
-      debug(
-        `extractUserPromptBlocks: content is string (length=${last.content.length})`,
-      );
+      debug(`extractUserPromptBlocks: content is string (length=${last.content.length})`);
       return null;
     }
     if (!Array.isArray(last.content)) {
@@ -256,17 +240,13 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
       diagDump("empty_prompt", {
         contextLength: messages.length,
         lastMsgRole: messages.at(-1)?.role,
-        messageRoles: messages
-          .map((message, index) => `[${index}]${message.role}`)
-          .join(" "),
+        messageRoles: messages.map((message, index) => `[${index}]${message.role}`).join(" "),
       });
     }
     return sdkPrompt(blocks ?? text ?? "[continue]");
   }
 
-  function contextForToolResults(
-    results: McpResult[],
-  ): QueryContext | undefined {
+  function contextForToolResults(results: McpResult[]): QueryContext | undefined {
     for (const result of results) {
       const id = result.toolCallId;
       if (!id) continue;
@@ -346,16 +326,10 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
     return tool.parameters as { type: "object" };
   }
 
-  function buildMcpServers(
-    tools: Tool[],
-    queryCtx: QueryContext,
-  ): Record<string, McpServerConfig> {
+  function buildMcpServers(tools: Tool[], queryCtx: QueryContext): Record<string, McpServerConfig> {
     if (!tools.length) return {};
     const handlers = new Map(
-      tools.map((tool) => [
-        tool.name,
-        createMcpToolHandler(tool.name, queryCtx),
-      ]),
+      tools.map((tool) => [tool.name, createMcpToolHandler(tool.name, queryCtx)]),
     );
     const server = new McpLowLevelServer(
       { name: MCP_SERVER_NAME, version: "1.0.0" },
@@ -371,10 +345,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
     server.setRequestHandler(CallToolRequestSchema, (request) => {
       const handler = handlers.get(request.params.name);
       if (!handler)
-        throw new McpError(
-          ErrorCode.InvalidParams,
-          `Tool ${request.params.name} not found`,
-        );
+        throw new McpError(ErrorCode.InvalidParams, `Tool ${request.params.name} not found`);
       return handler(request.params.arguments, { _meta: request.params._meta });
     });
     return {
@@ -396,11 +367,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
 
   type QueryCloseMode = "drain" | "force";
 
-  function closeQueryContext(
-    c: QueryContext,
-    label: string,
-    mode: QueryCloseMode,
-  ): Promise<void> {
+  function closeQueryContext(c: QueryContext, label: string, mode: QueryCloseMode): Promise<void> {
     const doppel = c.doppel;
     // A force close abandons the query mid-turn, so pi's history and the Claude Code session
     // have parted ways — including when there is nothing left to close, which is how an
@@ -410,11 +377,8 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
     // Nothing can address an ephemeral again once its own turn is over.
     if (doppel.kind === "ephemeral" && c === doppel.context) doppels.discard(doppel);
     if (c.closeCompletion) return c.closeCompletion;
-    if (!c.activeQuery && !c.inputQueue)
-      return c.completion ?? Promise.resolve();
-    debug(
-      `provider: closing query (${label}) mode=${mode} persistent=${c.persistent}`,
-    );
+    if (!c.activeQuery && !c.inputQueue) return c.completion ?? Promise.resolve();
+    debug(`provider: closing query (${label}) mode=${mode} persistent=${c.persistent}`);
     c.closing = true;
     c.abortCleanup?.();
     c.abortCleanup = null;
@@ -423,9 +387,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
     const storeWriter = c.sessionStoreWriter;
     const localSessionFragment = c.localSessionFragment;
     if (mode === "drain") {
-      debug(
-        "provider: waiting for natural query EOF before closing session-store writer",
-      );
+      debug("provider: waiting for natural query EOF before closing session-store writer");
     } else {
       storeWriter?.invalidate();
       try {
@@ -462,8 +424,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
         doppel.session = null;
       }
       if (c.sessionStoreWriter === storeWriter) c.sessionStoreWriter = null;
-      if (c.localSessionFragment === localSessionFragment)
-        c.localSessionFragment = null;
+      if (c.localSessionFragment === localSessionFragment) c.localSessionFragment = null;
       if (c.closeCompletion === closeCompletion) c.closeCompletion = null;
       // A subprocess that died rejects its completion, and this close swallows that rejection by
       // passing finishClose to both arms. Leaving the rejected promise on the context would let the
@@ -486,11 +447,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
 
   /** A query no turn can use again. The force close marks the shared session for rebuild
    *  on its own, so only dropping the session outright needs saying here. */
-  function discardQuery(
-    c: QueryContext,
-    message: string,
-    disposition: SessionDisposition,
-  ): void {
+  function discardQuery(c: QueryContext, message: string, disposition: SessionDisposition): void {
     if (disposition === "drop") c.doppel.session = null;
     void closeQueryContext(c, message, "force");
   }
@@ -520,15 +477,11 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
       return false;
     }
     if (c.turnAborted) {
-      debug(
-        `provider: dead query not retried, the user aborted the turn: ${message}`,
-      );
+      debug(`provider: dead query not retried, the user aborted the turn: ${message}`);
       return false;
     }
     if (c.turnStarted) {
-      debug(
-        `provider: dead query not retried, assistant output already reached pi: ${message}`,
-      );
+      debug(`provider: dead query not retried, assistant output already reached pi: ${message}`);
       return false;
     }
     c.turnRetry = null;
@@ -562,11 +515,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
     );
   }
 
-  function invalidateStoredSession(
-    doppel: Doppel,
-    sessionId: string,
-    reason: string,
-  ): void {
+  function invalidateStoredSession(doppel: Doppel, sessionId: string, reason: string): void {
     sessionStore.delete(sessionId);
     if (doppel.session?.sessionId === sessionId)
       doppel.session = { ...doppel.session, needsRebuild: true };
@@ -585,10 +534,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
       return;
     }
     if (!c.turnResultVerdict) return;
-    if (
-      !c.turnSawAbortedAssistant &&
-      c.turnResultVerdict.type !== "interrupted"
-    ) {
+    if (!c.turnSawAbortedAssistant && c.turnResultVerdict.type !== "interrupted") {
       failQuery(
         c,
         "aborted",
@@ -680,106 +626,79 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
       activeQueryContexts.add(queryCtx);
       attachAbort();
 
-      const completion = consumeQuery(
-        sdkQuery,
-        customToolNameToPi,
-        model,
-        queryCtx,
-        {
-          onResult(result) {
-            if (queryCtx.closing) return;
-            const verdict = queryCtx.turnResultVerdict;
-            // Claude Code can report a dead-query failure as a result instead of a rejection —
-            // notably a revoked token, which it answers rather than throws.
-            if (
-              verdict?.type === "terminal" &&
-              retryDeadQuery(queryCtx, verdict.message, "rebuild")
-            )
-              return;
-            if (queryCtx.turnAborted)
-              emitTerminalError(queryCtx, "aborted", "Operation aborted");
-            else {
-              queryCtx.abortCleanup?.();
-              queryCtx.abortCleanup = null;
-              finalizeCurrentStream(queryCtx);
-            }
-            const sessionId = result.session_id ?? doppel.session?.sessionId;
-            if (sessionId) {
-              doppel.session = { sessionId, cursor: queryCtx.latestCursor };
-              debug(
-                `provider: turn complete, doppel=${doppel.label}, session=${sessionId.slice(0, 8)}, cursor=${queryCtx.latestCursor}, storedRecords=${sessionStore.entryCount(sessionId)}`,
-              );
-            }
-            if (!verdict) {
-              failQuery(
-                queryCtx,
-                "error",
-                "Claude result was not classified",
-                "rebuild",
-              );
-            } else if (queryCtx.turnAborted) {
-              settleInterruptedQuery(queryCtx);
-            } else if (verdict.type === "interrupted") {
-              failQuery(
-                queryCtx,
-                "aborted",
-                "Claude aborted the turn without an interrupt receipt; the session will rebuild",
-                "rebuild",
-              );
-            } else if (verdict.type === "reusable") {
-              queryCtx.readyForInput = queryCtx.persistent;
-            } else {
-              queryCtx.readyForInput = false;
-              void closeQueryContext(
-                queryCtx,
-                `terminal result ${result.terminal_reason ?? result.subtype}`,
-                "drain",
-              );
-            }
-            if (!queryCtx.persistent)
-              void closeQueryContext(
-                queryCtx,
-                "one-shot turn complete",
-                "drain",
-              );
-          },
-          onSessionId(sessionId) {
-            if (queryCtx.closing) {
-              if (!syncResult.sessionId)
-                deleteSession(sessionId, cwd, process.env.CLAUDE_CONFIG_DIR);
-              return;
-            }
-            if (!syncResult.sessionId && !queryCtx.localSessionFragment) {
-              queryCtx.localSessionFragment = {
-                sessionId,
-                cwd,
-                ...(process.env.CLAUDE_CONFIG_DIR
-                  ? { claudeDir: process.env.CLAUDE_CONFIG_DIR }
-                  : {}),
-              };
-            }
+      const completion = consumeQuery(sdkQuery, customToolNameToPi, model, queryCtx, {
+        onResult(result) {
+          if (queryCtx.closing) return;
+          const verdict = queryCtx.turnResultVerdict;
+          // Claude Code can report a dead-query failure as a result instead of a rejection —
+          // notably a revoked token, which it answers rather than throws.
+          if (verdict?.type === "terminal" && retryDeadQuery(queryCtx, verdict.message, "rebuild"))
+            return;
+          if (queryCtx.turnAborted) emitTerminalError(queryCtx, "aborted", "Operation aborted");
+          else {
+            queryCtx.abortCleanup?.();
+            queryCtx.abortCleanup = null;
+            finalizeCurrentStream(queryCtx);
+          }
+          const sessionId = result.session_id ?? doppel.session?.sessionId;
+          if (sessionId) {
             doppel.session = { sessionId, cursor: queryCtx.latestCursor };
-          },
-          onMirrorError(message) {
-            invalidateStoredSession(
-              doppel,
-              message.key.sessionId,
-              `mirror_error: ${message.error}`,
+            debug(
+              `provider: turn complete, doppel=${doppel.label}, session=${sessionId.slice(0, 8)}, cursor=${queryCtx.latestCursor}, storedRecords=${sessionStore.entryCount(sessionId)}`,
             );
-            host?.ui.notify(
-              `Claude transcript mirror failed: ${message.error}`,
-              "error",
+          }
+          if (!verdict) {
+            failQuery(queryCtx, "error", "Claude result was not classified", "rebuild");
+          } else if (queryCtx.turnAborted) {
+            settleInterruptedQuery(queryCtx);
+          } else if (verdict.type === "interrupted") {
+            failQuery(
+              queryCtx,
+              "aborted",
+              "Claude aborted the turn without an interrupt receipt; the session will rebuild",
+              "rebuild",
             );
-            if (!queryCtx.closing)
-              failQuery(
-                queryCtx,
-                "error",
-                `Claude transcript mirror failed: ${message.error}`,
-                "rebuild",
-              );
-          },
+          } else if (verdict.type === "reusable") {
+            queryCtx.readyForInput = queryCtx.persistent;
+          } else {
+            queryCtx.readyForInput = false;
+            void closeQueryContext(
+              queryCtx,
+              `terminal result ${result.terminal_reason ?? result.subtype}`,
+              "drain",
+            );
+          }
+          if (!queryCtx.persistent)
+            void closeQueryContext(queryCtx, "one-shot turn complete", "drain");
         },
-      );
+        onSessionId(sessionId) {
+          if (queryCtx.closing) {
+            if (!syncResult.sessionId) deleteSession(sessionId, cwd, process.env.CLAUDE_CONFIG_DIR);
+            return;
+          }
+          if (!syncResult.sessionId && !queryCtx.localSessionFragment) {
+            queryCtx.localSessionFragment = {
+              sessionId,
+              cwd,
+              ...(process.env.CLAUDE_CONFIG_DIR
+                ? { claudeDir: process.env.CLAUDE_CONFIG_DIR }
+                : {}),
+            };
+          }
+          doppel.session = { sessionId, cursor: queryCtx.latestCursor };
+        },
+        onMirrorError(message) {
+          invalidateStoredSession(doppel, message.key.sessionId, `mirror_error: ${message.error}`);
+          host?.ui.notify(`Claude transcript mirror failed: ${message.error}`, "error");
+          if (!queryCtx.closing)
+            failQuery(
+              queryCtx,
+              "error",
+              `Claude transcript mirror failed: ${message.error}`,
+              "rebuild",
+            );
+        },
+      });
       queryCtx.completion = completion;
       void completion
         .then(() => {
@@ -790,9 +709,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
             failQuery(
               queryCtx,
               queryCtx.turnAborted ? "aborted" : "error",
-              queryCtx.turnAborted
-                ? "Operation aborted"
-                : "Claude Code query ended unexpectedly",
+              queryCtx.turnAborted ? "Operation aborted" : "Claude Code query ended unexpectedly",
               queryCtx.turnAborted ? "rebuild" : "drop",
             );
           }
@@ -802,15 +719,11 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
           if (!queryCtx.closing) {
             const invalidResume = Boolean(
               syncResult.sessionId &&
-              !queryCtx.turnResultVerdict &&
-              invalidResumeMaterialization(error),
+                !queryCtx.turnResultVerdict &&
+                invalidResumeMaterialization(error),
             );
             if (syncResult.sessionId && invalidResume)
-              invalidateStoredSession(
-                doppel,
-                syncResult.sessionId,
-                errorMessage(error),
-              );
+              invalidateStoredSession(doppel, syncResult.sessionId, errorMessage(error));
             failQuery(
               queryCtx,
               queryCtx.turnAborted ? "aborted" : "error",
@@ -827,17 +740,8 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
       }
     } catch (error) {
       if (doppel.session && invalidResumeMaterialization(error))
-        invalidateStoredSession(
-          doppel,
-          doppel.session.sessionId,
-          errorMessage(error),
-        );
-      failQuery(
-        queryCtx,
-        "error",
-        errorMessage(error),
-        doppel.session ? "rebuild" : "drop",
-      );
+        invalidateStoredSession(doppel, doppel.session.sessionId, errorMessage(error));
+      failQuery(queryCtx, "error", errorMessage(error), doppel.session ? "rebuild" : "drop");
     }
   }
 
@@ -879,12 +783,8 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
           .then((receipt) => {
             if (!queryCtx.turnAborted || queryCtx.closing) return;
             queryCtx.turnInterruptReceiptReceived = true;
-            queryCtx.turnInterruptQueuedIds = receipt?.still_queued ?? [
-              "unverified-queued-input",
-            ];
-            debug(
-              `provider: interrupt receipt queued=${queryCtx.turnInterruptQueuedIds.length}`,
-            );
+            queryCtx.turnInterruptQueuedIds = receipt?.still_queued ?? ["unverified-queued-input"];
+            debug(`provider: interrupt receipt queued=${queryCtx.turnInterruptQueuedIds.length}`);
             settleInterruptedQuery(queryCtx);
           })
           .catch((error) => {
@@ -905,12 +805,8 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
       };
     }
 
-    function planFreshTurn(
-      queryCtx: QueryContext,
-      persistent: boolean,
-    ): FreshTurn {
-      const { mcpTools, customToolNameToSdk, customToolNameToPi } =
-        resolveMcpTools(context);
+    function planFreshTurn(queryCtx: QueryContext, persistent: boolean): FreshTurn {
+      const { mcpTools, customToolNameToSdk, customToolNameToPi } = resolveMcpTools(context);
       const { cwd, cliModel, spawnSignature, queryOptions } = planTurn({
         model,
         context,
@@ -954,10 +850,8 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
       });
     }
 
-    const allResults =
-      activeQueryContexts.size > 0 ? extractAllToolResults(context) : [];
-    const resultCtx =
-      allResults.length > 0 ? contextForToolResults(allResults) : undefined;
+    const allResults = activeQueryContexts.size > 0 ? extractAllToolResults(context) : [];
+    const resultCtx = allResults.length > 0 ? contextForToolResults(allResults) : undefined;
 
     if (resultCtx) {
       claimCurrentPiStream(stream, "tool-result", resultCtx);
@@ -967,10 +861,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
       }
       resultCtx.activeModel = model;
       resultCtx.resetTurnState(model);
-      resultCtx.latestCursor = Math.max(
-        resultCtx.latestCursor,
-        context.messages.length,
-      );
+      resultCtx.latestCursor = Math.max(resultCtx.latestCursor, context.messages.length);
       debug(
         `provider: tool results, ${allResults.length} results, ${resultCtx.pendingToolCalls.size} waiting handlers, ctx.msgs=${context.messages.length}`,
       );
@@ -1003,9 +894,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
           syncPlan: steering
             ? planSessionSync(context.messages, doppel.session)
             : planReplaySync(context.messages, doppel.session),
-          promptMessage: steering
-            ? sdkUserMessage(context.messages)
-            : sdkPrompt(REPLAY_PROMPT),
+          promptMessage: steering ? sdkUserMessage(context.messages) : sdkPrompt(REPLAY_PROMPT),
           persistent,
           drainExisting: false,
         });
@@ -1050,9 +939,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
           debug(`provider: dropping result for Claude-rejected call [${id}]`);
         } else if (resultCtx.shownToolCallIds.has(id)) {
           resultCtx.pendingResults.set(id, result);
-          debug(
-            `provider: queued result [${id}] (${resultCtx.pendingResults.size} pending)`,
-          );
+          debug(`provider: queued result [${id}] (${resultCtx.pendingResults.size} pending)`);
         } else {
           emitTerminalError(
             resultCtx,
@@ -1071,8 +958,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
         );
         return stream;
       }
-      if (resultCtx.doppel.session)
-        resultCtx.doppel.session.cursor = context.messages.length;
+      if (resultCtx.doppel.session) resultCtx.doppel.session.cursor = context.messages.length;
       return stream;
     }
 
@@ -1106,9 +992,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
       // other doppel's. Only the host's query stays warm between turns.
       const doppel = doppels.resolve(options?.sessionId);
       const primary = doppel.context;
-      const warmQuery = Boolean(
-        primary.activeQuery && primary.persistent && primary.readyForInput,
-      );
+      const warmQuery = Boolean(primary.activeQuery && primary.persistent && primary.readyForInput);
       // Reentrancy proper: a turn arrived while this doppel's query is mid-flight.
       const isReentrant = Boolean(primary.activeQuery && !warmQuery);
       const queryCtx = isReentrant ? doppel.spawnContext() : primary;
@@ -1119,25 +1003,18 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
 
       const canPush = Boolean(
         warmQuery &&
-        !isReentrant &&
-        syncPlan.path === "reuse" &&
-        queryCtx.spawnSignature === freshTurn.spawnSignature,
+          !isReentrant &&
+          syncPlan.path === "reuse" &&
+          queryCtx.spawnSignature === freshTurn.spawnSignature,
       );
 
-      claimCurrentPiStream(
-        stream,
-        canPush ? "persistent-reuse" : "fresh-query",
-        queryCtx,
-      );
+      claimCurrentPiStream(stream, canPush ? "persistent-reuse" : "fresh-query", queryCtx);
       queryCtx.activeModel = model;
       queryCtx.beginCommand(model);
       // Installed after beginCommand, which clears it. Exactly one replay per turn: the
       // second attempt arms nothing, so a retry that dies the same way is reported.
       queryCtx.turnRetry = attempt === 0 ? () => beginTurn(attempt + 1) : null;
-      queryCtx.latestCursor = Math.max(
-        queryCtx.latestCursor,
-        context.messages.length,
-      );
+      queryCtx.latestCursor = Math.max(queryCtx.latestCursor, context.messages.length);
       queryCtx.fatalError = null;
 
       if (canPush) {
@@ -1166,9 +1043,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
               queryCtx.hasMcpServer = freshTurn.mcpTools.length > 0;
             }
             if (queryCtx.cliModel !== freshTurn.cliModel) {
-              debug(
-                `provider: persistent setModel ${queryCtx.cliModel} → ${freshTurn.cliModel}`,
-              );
+              debug(`provider: persistent setModel ${queryCtx.cliModel} → ${freshTurn.cliModel}`);
               await queryCtx.activeQuery!.setModel(freshTurn.cliModel);
               queryCtx.cliModel = freshTurn.cliModel;
             }
@@ -1177,8 +1052,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
               `Case 3: pushed turn into persistent session ${doppel.session?.sessionId.slice(0, 8) ?? "unknown"} (doppel=${doppel.label})`,
             );
           } catch (error) {
-            if (!queryCtx.closing)
-              failQuery(queryCtx, "error", errorMessage(error), "rebuild");
+            if (!queryCtx.closing) failQuery(queryCtx, "error", errorMessage(error), "rebuild");
           }
         })();
         return;
@@ -1204,7 +1078,12 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
   // provider-registration global and clears it separately.
   async function clear(reason: string): Promise<void> {
     debug(
-      `${reason}: clearing ${doppels.all().map((doppel) => doppel.label).join(", ") || "no doppels"}`,
+      `${reason}: clearing ${
+        doppels
+          .all()
+          .map((doppel) => doppel.label)
+          .join(", ") || "no doppels"
+      }`,
     );
     const contexts = [...activeQueryContexts];
     await Promise.all(
@@ -1212,9 +1091,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
         closeQueryContext(
           context,
           reason,
-          context.doppel.kind === "host" && context.readyForInput
-            ? "drain"
-            : "force",
+          context.doppel.kind === "host" && context.readyForInput ? "drain" : "force",
         ),
       ),
     );

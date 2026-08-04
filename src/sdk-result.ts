@@ -8,10 +8,11 @@ import type { Model } from "@earendil-works/pi-ai";
 /** The failure as the result message stated it, or null when it stated none. Naming the subtype
  *  in its place is left to the caller, which is the only one that knows what it was asking for. */
 export function resultErrorText(message: SDKMessage): string | null {
-	const result = message as SDKMessage & { errors?: unknown; error?: unknown };
-	if (Array.isArray(result.errors) && result.errors.length > 0) return result.errors.map(String).join("\n");
-	if (typeof result.error === "string") return result.error;
-	return null;
+  const result = message as SDKMessage & { errors?: unknown; error?: unknown };
+  if (Array.isArray(result.errors) && result.errors.length > 0)
+    return result.errors.map(String).join("\n");
+  if (typeof result.error === "string") return result.error;
+  return null;
 }
 
 // Log the *served* context window reported by an SDK result message
@@ -20,10 +21,19 @@ export function resultErrorText(message: SDKMessage): string | null {
 // match the docs — e.g. bare Opus served 200K on Pro, or [1m] not honored.
 // The result message's modelUsage is otherwise discarded; this makes the
 // gap observable. See issue #18.
-export function logServedContextWindow(debug: (...args: unknown[]) => void, label: string, message: SDKMessage, model: Model<any>): void {
-	const modelUsage = (message as any).modelUsage as Record<string, { contextWindow?: number; maxOutputTokens?: number }> | undefined;
-	if (!modelUsage) return;
-	for (const [k, v] of Object.entries(modelUsage)) {
-		debug(`${label}: served contextWindow=${v.contextWindow ?? "?"} maxOutputTokens=${v.maxOutputTokens ?? "?"} servedModel=${k} registered=${model.contextWindow}`);
-	}
+export function logServedContextWindow(
+  debug: (...args: unknown[]) => void,
+  label: string,
+  message: SDKMessage,
+  model: Model<any>,
+): void {
+  const modelUsage = (message as any).modelUsage as
+    | Record<string, { contextWindow?: number; maxOutputTokens?: number }>
+    | undefined;
+  if (!modelUsage) return;
+  for (const [k, v] of Object.entries(modelUsage)) {
+    debug(
+      `${label}: served contextWindow=${v.contextWindow ?? "?"} maxOutputTokens=${v.maxOutputTokens ?? "?"} servedModel=${k} registered=${model.contextWindow}`,
+    );
+  }
 }

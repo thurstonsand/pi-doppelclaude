@@ -4,9 +4,13 @@ min_version = "2026.7.4"
 enter = "mise bootstrap --yes --quiet"
 
 [tools]
+actionlint = "1.7.12"
 hk = "1.50.0"
 node = "24"
 shellcheck = "0.11.0"
+
+[env]
+_.path = ["{{config_root}}/node_modules/.bin"]
 
 [tasks.bootstrap]
 description = "Install development dependencies and git hooks"
@@ -20,17 +24,41 @@ outputs = ["node_modules/.package-lock.json", ".mise/bootstrap"]
 quiet = true
 
 [tasks.lint]
-description = "Run TypeScript and shell checks"
-run = "npm run lint"
+description = "Lint"
+depends = ["lint:biome", "lint:actions", "lint:shell"]
+
+[tasks."lint:biome"]
+description = "Lint TypeScript and JSON"
+run = "biome check ."
+
+[tasks."lint:actions"]
+description = "Lint GitHub Actions workflows"
+run = "actionlint"
+
+[tasks."lint:shell"]
+description = "Lint shell scripts"
+run = "shellcheck -x -P SCRIPTDIR tests/*.sh tests/lib/*.sh"
+
+[tasks.format]
+description = "Format and apply safe fixes"
+run = "biome check --write ."
+
+[tasks.typecheck]
+description = "Type-check TypeScript"
+run = "tsc --noEmit"
 
 [tasks.test]
-description = "Run the test suite"
-run = "npm test"
+description = "Run the full test suite (hits live APIs)"
+run = "set -a && [ -f .env.test ] && . .env.test; set +a && mise run test:unit && tests/int-smoke.sh && tests/int-settings.sh && tests/int-multi-turn.sh && tests/int-cache.sh && node --import tsx --test tests/int-*.ts"
 
 [tasks."test:unit"]
 description = "Run the offline unit tests"
-run = "npm run test:unit"
+run = "node --import tsx --test tests/unit-*.ts"
+
+[tasks."test:usage"]
+description = "On-demand subscription-usage diagnostic (rate-limited endpoint)"
+run = "node --import tsx tests/usage-test.ts"
 
 [tasks.check]
 description = "Run offline verification (integration tests via `mise run test` hit live APIs)"
-depends = ["lint", "test:unit"]
+depends = ["lint", "typecheck", "test:unit"]

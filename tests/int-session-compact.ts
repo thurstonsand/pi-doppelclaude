@@ -22,15 +22,18 @@ const TIMEOUT = 180_000;
 const BRIDGE_MODEL = "doppelclaude/claude-haiku-4-5";
 
 const testAgentDir = mkdtempSync(join(tmpdir(), "session-compact-agent-"));
-writeFileSync(join(testAgentDir, "settings.json"), JSON.stringify({
-	compaction: { keepRecentTokens: 50 },
-}));
+writeFileSync(
+  join(testAgentDir, "settings.json"),
+  JSON.stringify({
+    compaction: { keepRecentTokens: 50 },
+  }),
+);
 
 const harness = createRpcHarness({
-	name: "session-compact",
-	args: ["--model", BRIDGE_MODEL],
-	env: { PI_CODING_AGENT_DIR: testAgentDir },
-	defaultTimeout: TIMEOUT,
+  name: "session-compact",
+  args: ["--model", BRIDGE_MODEL],
+  env: { PI_CODING_AGENT_DIR: testAgentDir },
+  defaultTimeout: TIMEOUT,
 });
 
 const { startAndWait, stop, send, promptAndWait, DEBUG_LOG, RPC_LOG } = harness;
@@ -38,101 +41,117 @@ const { startAndWait, stop, send, promptAndWait, DEBUG_LOG, RPC_LOG } = harness;
 await startAndWait();
 
 try {
-	// A few substantive turns so pi has something to compact.
-	console.log("Turn 1: seed history...");
-	await promptAndWait("Pick a number between 1 and 100 and remember it. Reply with just the number.");
-	console.log("Turn 2: more history...");
-	await promptAndWait("Now pick a color. Reply with just the color.");
-	console.log("Turn 3: more history...");
-	await promptAndWait("Now pick a fruit. Reply with just the fruit.");
+  // A few substantive turns so pi has something to compact.
+  console.log("Turn 1: seed history...");
+  await promptAndWait(
+    "Pick a number between 1 and 100 and remember it. Reply with just the number.",
+  );
+  console.log("Turn 2: more history...");
+  await promptAndWait("Now pick a color. Reply with just the color.");
+  console.log("Turn 3: more history...");
+  await promptAndWait("Now pick a fruit. Reply with just the fruit.");
 
-	console.log("Triggering /compact...");
-	await send({ type: "compact" });
+  console.log("Triggering /compact...");
+  await send({ type: "compact" });
 
-	console.log("Turn 4: prompt after compact (should force REBUILD)...");
-	await promptAndWait("Are you still there? Reply with just 'yes'.");
+  console.log("Turn 4: prompt after compact (should force REBUILD)...");
+  await promptAndWait("Are you still there? Reply with just 'yes'.");
 
-	// Split the log at the `session_compact:` marker. Reads BEFORE the
-	// marker (including the summarization call pi made via our provider,
-	// which legitimately uses the pre-compact session) don't matter — we
-	// care about the first syncResult AFTER the event fires, which is
-	// Turn 4's user prompt.
-	const fullLog = readFileSync(DEBUG_LOG, "utf8");
-	const compactIdx = fullLog.indexOf("session_compact:");
-	if (compactIdx === -1) {
-		throw new Error("no `session_compact:` debug marker — handler not subscribed?");
-	}
-	const preEventLog = fullLog.slice(0, compactIdx);
-	const postEventLog = fullLog.slice(compactIdx);
-	const writerStoppedIdx = postEventLog.indexOf("consumeQuery: query exited, closing=true");
-	const rebuildIdx = postEventLog.indexOf("syncResult: path=rebuild");
-	if (writerStoppedIdx === -1 || rebuildIdx === -1 || writerStoppedIdx > rebuildIdx) {
-		throw new Error("session-store rebuild began before the persistent Claude Code writer had stopped");
-	}
+  // Split the log at the `session_compact:` marker. Reads BEFORE the
+  // marker (including the summarization call pi made via our provider,
+  // which legitimately uses the pre-compact session) don't matter — we
+  // care about the first syncResult AFTER the event fires, which is
+  // Turn 4's user prompt.
+  const fullLog = readFileSync(DEBUG_LOG, "utf8");
+  const compactIdx = fullLog.indexOf("session_compact:");
+  if (compactIdx === -1) {
+    throw new Error("no `session_compact:` debug marker — handler not subscribed?");
+  }
+  const preEventLog = fullLog.slice(0, compactIdx);
+  const postEventLog = fullLog.slice(compactIdx);
+  const writerStoppedIdx = postEventLog.indexOf("consumeQuery: query exited, closing=true");
+  const rebuildIdx = postEventLog.indexOf("syncResult: path=rebuild");
+  if (writerStoppedIdx === -1 || rebuildIdx === -1 || writerStoppedIdx > rebuildIdx) {
+    throw new Error(
+      "session-store rebuild began before the persistent Claude Code writer had stopped",
+    );
+  }
 
-	const preCompactSessionIds = [...preEventLog.matchAll(/syncResult: path=(?:reuse|rebuild) doppel=\S+ sessionId=([a-f0-9-]+)/g)]
-		.map((m) => m[1]);
-	const preCompactSessionId = preCompactSessionIds.at(-1);
-	if (!preCompactSessionId) {
-		throw new Error("no pre-compact host sessionId found in debug log");
-	}
-	console.log(`  Pre-compact sessionId: ${preCompactSessionId}`);
+  const preCompactSessionIds = [
+    ...preEventLog.matchAll(
+      /syncResult: path=(?:reuse|rebuild) doppel=\S+ sessionId=([a-f0-9-]+)/g,
+    ),
+  ].map((m) => m[1]);
+  const preCompactSessionId = preCompactSessionIds.at(-1);
+  if (!preCompactSessionId) {
+    throw new Error("no pre-compact host sessionId found in debug log");
+  }
+  console.log(`  Pre-compact sessionId: ${preCompactSessionId}`);
 
-	// Capture both the path and rebuild flavor.
-	const syncResults = [...postEventLog.matchAll(/syncResult: path=(reuse|rebuild|clean-start) doppel=\S+(?: sessionId=([a-f0-9-]+) priors=\d+ (\S+))?/g)]
-		.map((m) => ({ path: m[1], sessionId: m[2], flavor: m[3] }));
-	console.log(`  Post-event syncResults: ${JSON.stringify(syncResults)}`);
+  // Capture both the path and rebuild flavor.
+  const syncResults = [
+    ...postEventLog.matchAll(
+      /syncResult: path=(reuse|rebuild|clean-start) doppel=\S+(?: sessionId=([a-f0-9-]+) priors=\d+ (\S+))?/g,
+    ),
+  ].map((m) => ({ path: m[1], sessionId: m[2], flavor: m[3] }));
+  console.log(`  Post-event syncResults: ${JSON.stringify(syncResults)}`);
 
-	if (syncResults.length === 0) {
-		throw new Error("no syncResult markers after session_compact event (Turn 4 didn't reach the provider?)");
-	}
+  if (syncResults.length === 0) {
+    throw new Error(
+      "no syncResult markers after session_compact event (Turn 4 didn't reach the provider?)",
+    );
+  }
 
-	const first = syncResults[0];
+  const first = syncResults[0];
 
-	// First syncResult after the event must NOT reuse — pi's history has
-	// shrunk and CC's stored transcript is now stale.
-	if (first.path === "clean-start") {
-		throw new Error(
-			"first syncResult after session_compact was clean-start. The compact summarization " +
-			"call landed after the event marker, so this test cannot verify Turn 4's rebuild.");
-	}
-	if (first.path === "reuse") {
-		throw new Error(
-			"bridge took REUSE path after session_compact — CC will resume the pre-compact session. " +
-			"Expected REBUILD (or clean-start) so CC sees the post-compact history. " +
-			"Symptom: triggers Claude Code's autocompact-thrashing (issue #8) on long sessions.");
-	}
+  // First syncResult after the event must NOT reuse — pi's history has
+  // shrunk and CC's stored transcript is now stale.
+  if (first.path === "clean-start") {
+    throw new Error(
+      "first syncResult after session_compact was clean-start. The compact summarization " +
+        "call landed after the event marker, so this test cannot verify Turn 4's rebuild.",
+    );
+  }
+  if (first.path === "reuse") {
+    throw new Error(
+      "bridge took REUSE path after session_compact — CC will resume the pre-compact session. " +
+        "Expected REBUILD (or clean-start) so CC sees the post-compact history. " +
+        "Symptom: triggers Claude Code's autocompact-thrashing (issue #8) on long sessions.",
+    );
+  }
 
-	// Store replacement preserves the session ID without bridge-owned file manipulation.
-	if (first.path === "rebuild" && first.flavor !== "preserved") {
-		throw new Error(
-			`post-compact rebuild used flavor=${first.flavor}, expected "preserved". ` +
-			`SessionStore replacement should never rotate the UUID.`);
-	}
-	if (first.path === "rebuild" && first.sessionId !== preCompactSessionId) {
-		throw new Error(
-			`post-compact rebuild preserved sessionId=${first.sessionId}, but expected the original ` +
-			`pre-compact sessionId=${preCompactSessionId}. This means the compact summarization ` +
-			`session replaced sharedSession before the session_compact handler ran, orphaning the ` +
-			`main pre-compact transcript.`);
-	}
+  // Store replacement preserves the session ID without bridge-owned file manipulation.
+  if (first.path === "rebuild" && first.flavor !== "preserved") {
+    throw new Error(
+      `post-compact rebuild used flavor=${first.flavor}, expected "preserved". ` +
+        `SessionStore replacement should never rotate the UUID.`,
+    );
+  }
+  if (first.path === "rebuild" && first.sessionId !== preCompactSessionId) {
+    throw new Error(
+      `post-compact rebuild preserved sessionId=${first.sessionId}, but expected the original ` +
+        `pre-compact sessionId=${preCompactSessionId}. This means the compact summarization ` +
+        `session replaced sharedSession before the session_compact handler ran, orphaning the ` +
+        `main pre-compact transcript.`,
+    );
+  }
 
-	const prefix = preCompactSessionId.slice(0, 8);
-	if (!postEventLog.includes(`session-store: replace session=${prefix}`)) {
-		throw new Error("post-compact rebuild did not replace the authoritative store transcript");
-	}
-	if (!postEventLog.includes(`session-store: load writer=provider session=${prefix}`)) {
-		throw new Error("SDK did not load the rebuilt transcript from SessionStore");
-	}
-	console.log("  SessionStore replacement loaded by the SDK");
+  const prefix = preCompactSessionId.slice(0, 8);
+  if (!postEventLog.includes(`session-store: replace session=${prefix}`)) {
+    throw new Error("post-compact rebuild did not replace the authoritative store transcript");
+  }
+  if (!postEventLog.includes(`session-store: load writer=provider session=${prefix}`)) {
+    throw new Error("SDK did not load the rebuilt transcript from SessionStore");
+  }
+  console.log("  SessionStore replacement loaded by the SDK");
 
-	console.log("PASS");
+  console.log("PASS");
 } catch (e) {
-	process.exitCode = 1;
-	console.log(`FAIL: ${e.message}\n${e.stack}`);
-	console.log(`  RPC log:    ${RPC_LOG}`);
-	console.log(`  Debug log:  ${DEBUG_LOG}`);
+  process.exitCode = 1;
+  console.log(`FAIL: ${e.message}\n${e.stack}`);
+  console.log(`  RPC log:    ${RPC_LOG}`);
+  console.log(`  Debug log:  ${DEBUG_LOG}`);
 } finally {
-	await stop();
-	rmSync(testAgentDir, { recursive: true, force: true });
+  await stop();
+  rmSync(testAgentDir, { recursive: true, force: true });
 }

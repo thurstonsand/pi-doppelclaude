@@ -10,17 +10,22 @@ The mise enter hook keeps the bootstrap current (npm ci, hk git hooks). Pi loads
 
 ## Commands
 
+mise is the task runner of record; the `npm run` scripts are thin aliases onto it.
+
 ```bash
-mise run lint     # typecheck + shellcheck (also the pre-commit hook)
-mise run test     # full suite: unit + integration
+mise run lint       # biome + actionlint + shellcheck (also the pre-commit hook)
+mise run format     # biome check --write: format and apply safe fixes
+mise run check      # offline verification: lint + typecheck + unit tests
+mise run test       # full suite: unit + integration
 
 # Individual steps
-npm run typecheck
-npm run test:unit                                   # offline unit suite (tests/unit-*.ts)
+mise run lint:biome                                 # TypeScript and JSON
+mise run typecheck
+mise run test:unit                                  # offline unit suite (tests/unit-*.ts)
 node --import tsx --test tests/unit-models.ts       # single unit file
 node --import tsx --test tests/int-session-new.ts   # single integration file
 tests/int-smoke.sh                                  # shell-driven integration tests, run sparingly
-npm run test:usage                                  # on-demand A/B subscription-usage diagnostic; hits a rate-limited endpoint, run sparingly
+mise run test:usage                                 # on-demand A/B subscription-usage diagnostic; hits a rate-limited endpoint, run sparingly
 ```
 
 ## Tests
@@ -33,6 +38,8 @@ npm run test:usage                                  # on-demand A/B subscription
 - Shell tests share helpers in `tests/lib/`.
 
 ## Code style
+
+- Biome owns formatting and lint (`biome.json`): two-space indent, 100 columns, double quotes, semicolons, trailing commas.
 
 - All Pi registration (`pi.registerProvider`, `pi.on`, …) lives in `src/index.ts`; implementations live in sibling modules built as `create*` factories taking explicit dependencies.
 - Conform at the edges: untrusted input (settings files, catalog responses, SDK payloads) is validated with TypeBox schemas once, at the boundary.

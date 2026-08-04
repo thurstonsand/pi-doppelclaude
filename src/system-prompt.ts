@@ -4,16 +4,13 @@ import type { SystemPromptReplacements } from "./settings.js";
 // "pi" mode isolates Claude Code's filesystem settings ([] = no setting sources);
 // every other mode keeps Claude Code's defaults (undefined).
 export function settingSourcesFor(systemPromptMode: string): SettingSource[] | undefined {
-	return systemPromptMode === "pi" ? [] : undefined;
+  return systemPromptMode === "pi" ? [] : undefined;
 }
 
 const PI_IDENTITY_PROMPT = `You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.`;
 
-const PI_DOCUMENTATION_BLOCK_REGEX = new RegExp(String.raw`
-
-Pi documentation \(read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI\):
-[\s\S]*?
-- Always read pi \.md files completely and follow links to related docs \(e\.g\., tui\.md for TUI API details\)`);
+const PI_DOCUMENTATION_BLOCK_REGEX =
+  /\n\nPi documentation \(read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI\):\n[\s\S]*?\n- Always read pi \.md files completely and follow links to related docs \(e\.g\., tui\.md for TUI API details\)/;
 
 function rewritePiDocumentationBlock(
   systemPrompt: string,
@@ -33,11 +30,7 @@ function rewritePiDocumentationBlock(
 
   return systemPrompt.replace(
     PI_DOCUMENTATION_BLOCK_REGEX,
-    [
-      `\n\n${documentation.heading}`,
-      ...pathLines,
-      ...documentation.instructions,
-    ].join("\n"),
+    [`\n\n${documentation.heading}`, ...pathLines, ...documentation.instructions].join("\n"),
   );
 }
 
@@ -46,17 +39,16 @@ function rewriteIdentityPrompt(systemPrompt: string, replacement: string): strin
 }
 
 function insertToolNameNote(systemPrompt: string, replacement: string): string {
-  return systemPrompt.replace(
-    "\n\nAvailable tools:",
-    `\n\n${replacement}\n\nAvailable tools:`,
-  );
+  return systemPrompt.replace("\n\nAvailable tools:", `\n\n${replacement}\n\nAvailable tools:`);
 }
 
-export type ClaudeSystemPrompt = string | {
-  type: "preset";
-  preset: "claude_code";
-  append?: string;
-};
+export type ClaudeSystemPrompt =
+  | string
+  | {
+      type: "preset";
+      preset: "claude_code";
+      append?: string;
+    };
 
 export function rewritePiSystemPrompt(
   systemPrompt: string,

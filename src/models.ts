@@ -1,5 +1,5 @@
-import type { Model } from "@earendil-works/pi-ai";
 import type { EffortLevel } from "@anthropic-ai/claude-agent-sdk";
+import type { Model } from "@earendil-works/pi-ai";
 
 export const PROVIDER_ID = "doppelclaude";
 export const PROVIDER_NAME = "Doppelclaude";
@@ -17,95 +17,104 @@ const DATED_SNAPSHOT = /-\d{8}$/u;
 const TWO_HUNDRED_K_CONTEXT = 200_000;
 
 export interface BridgeModel extends Model<typeof PROVIDER_API> {
-	readonly [BRIDGE_MODEL]: string;
+  readonly [BRIDGE_MODEL]: string;
 }
 
 export function isSupportedModel(model: Model<any>): model is BridgeModel {
-	return (model as Partial<BridgeModel>)[BRIDGE_MODEL] === model.id &&
-		model.provider === PROVIDER_ID &&
-		model.api === PROVIDER_API &&
-		model.baseUrl === PROVIDER_BASE_URL;
+  return (
+    (model as Partial<BridgeModel>)[BRIDGE_MODEL] === model.id &&
+    model.provider === PROVIDER_ID &&
+    model.api === PROVIDER_API &&
+    model.baseUrl === PROVIDER_BASE_URL
+  );
 }
 
 export function unsupportedModelMessage(model: {
-	id: string;
-	provider?: string;
-	api?: string;
-	baseUrl?: string;
+  id: string;
+  provider?: string;
+  api?: string;
+  baseUrl?: string;
 }): string {
-	if (model.provider === undefined) return `Unsupported Doppelclaude model: ${model.id}`;
-	return `Unsupported Doppelclaude model: ${model.provider}/${model.id} (api=${model.api}, baseUrl=${model.baseUrl})`;
+  if (model.provider === undefined) return `Unsupported Doppelclaude model: ${model.id}`;
+  return `Unsupported Doppelclaude model: ${model.provider}/${model.id} (api=${model.api}, baseUrl=${model.baseUrl})`;
 }
 
 function modelOrder(id: string): [number, number[]] | undefined {
-	const [prefix, family, firstVersion, ...remainingVersion] = id.split("-");
-	const familyIndex = MODEL_FAMILIES_IN_ORDER.indexOf(family);
-	if (
-		prefix !== "claude" ||
-		familyIndex < 0 ||
-		!NUMERIC_MODEL_VERSION.test(firstVersion ?? "") ||
-		!remainingVersion.every((part) => SHORT_MODEL_VERSION_PART.test(part))
-	) return undefined;
-	return [familyIndex, [firstVersion, ...remainingVersion].map(Number)];
+  const [prefix, family, firstVersion, ...remainingVersion] = id.split("-");
+  const familyIndex = MODEL_FAMILIES_IN_ORDER.indexOf(family);
+  if (
+    prefix !== "claude" ||
+    familyIndex < 0 ||
+    !NUMERIC_MODEL_VERSION.test(firstVersion ?? "") ||
+    !remainingVersion.every((part) => SHORT_MODEL_VERSION_PART.test(part))
+  )
+    return undefined;
+  return [familyIndex, [firstVersion, ...remainingVersion].map(Number)];
 }
 
 // Claude names a model by whichever form the caller met it in: a long-context form
 // (`claude-opus-5[1m]`) or a dated snapshot (`claude-haiku-4-5-20251001`). Pi names the
 // family, and Claude serves it, so both forms normalize onto the family ID.
 export function canonicalClaudeModelId(advertised: string): string {
-	return advertised.replace(LONG_CONTEXT_FORM, "").replace(DATED_SNAPSHOT, "");
+  return advertised.replace(LONG_CONTEXT_FORM, "").replace(DATED_SNAPSHOT, "");
 }
 
 export function isStableClaudeModelId(id: string): boolean {
-	return modelOrder(id) !== undefined;
+  return modelOrder(id) !== undefined;
 }
 
 function projectModel(canonical: Model<any>): BridgeModel {
-	const { compat: _canonicalApiCompatibility, ...metadata } = canonical;
-	return {
-		...metadata,
-		api: PROVIDER_API,
-		provider: PROVIDER_ID,
-		baseUrl: PROVIDER_BASE_URL,
-		[BRIDGE_MODEL]: canonical.id,
-	};
+  const { compat: _canonicalApiCompatibility, ...metadata } = canonical;
+  return {
+    ...metadata,
+    api: PROVIDER_API,
+    provider: PROVIDER_ID,
+    baseUrl: PROVIDER_BASE_URL,
+    [BRIDGE_MODEL]: canonical.id,
+  };
 }
 
 export function compareModels(left: Model<any>, right: Model<any>): number {
-	const [leftFamily, leftVersion] = modelOrder(left.id) ?? [Number.MAX_SAFE_INTEGER, []];
-	const [rightFamily, rightVersion] = modelOrder(right.id) ?? [Number.MAX_SAFE_INTEGER, []];
-	if (leftFamily !== rightFamily) return leftFamily - rightFamily;
-	for (let index = 0; index < Math.max(leftVersion.length, rightVersion.length); index++) {
-		const difference = (rightVersion[index] ?? -1) - (leftVersion[index] ?? -1);
-		if (difference !== 0) return difference;
-	}
-	return left.id.localeCompare(right.id);
+  const [leftFamily, leftVersion] = modelOrder(left.id) ?? [Number.MAX_SAFE_INTEGER, []];
+  const [rightFamily, rightVersion] = modelOrder(right.id) ?? [Number.MAX_SAFE_INTEGER, []];
+  if (leftFamily !== rightFamily) return leftFamily - rightFamily;
+  for (let index = 0; index < Math.max(leftVersion.length, rightVersion.length); index++) {
+    const difference = (rightVersion[index] ?? -1) - (leftVersion[index] ?? -1);
+    if (difference !== 0) return difference;
+  }
+  return left.id.localeCompare(right.id);
 }
 
-export function projectCatalogModels(canonicalModels: readonly Model<any>[], allowedIds: ReadonlySet<string>): BridgeModel[] {
-	return canonicalModels
-		.filter((model) => allowedIds.has(model.id) && isStableClaudeModelId(model.id))
-		.map(projectModel);
+export function projectCatalogModels(
+  canonicalModels: readonly Model<any>[],
+  allowedIds: ReadonlySet<string>,
+): BridgeModel[] {
+  return canonicalModels
+    .filter((model) => allowedIds.has(model.id) && isStableClaudeModelId(model.id))
+    .map(projectModel);
 }
 
 const REASONING_TO_EFFORT: Record<string, EffortLevel> = {
-	minimal: "low",
-	low: "low",
-	medium: "medium",
-	high: "high",
-	xhigh: "max",
-	max: "max",
+  minimal: "low",
+  low: "low",
+  medium: "medium",
+  high: "high",
+  xhigh: "max",
+  max: "max",
 };
 
 export function resolveThinkingEffort(
-	model: { thinkingLevelMap?: Record<string, string | null> } | undefined,
-	reasoning: string | undefined,
+  model: { thinkingLevelMap?: Record<string, string | null> } | undefined,
+  reasoning: string | undefined,
 ): EffortLevel | undefined {
-	if (!reasoning || reasoning === "off") return undefined;
-	return (model?.thinkingLevelMap?.[reasoning] as EffortLevel | undefined) ?? REASONING_TO_EFFORT[reasoning];
+  if (!reasoning || reasoning === "off") return undefined;
+  return (
+    (model?.thinkingLevelMap?.[reasoning] as EffortLevel | undefined) ??
+    REASONING_TO_EFFORT[reasoning]
+  );
 }
 
 export function claudeCodeModelId(model: Model<any>): string {
-	if (!isSupportedModel(model)) throw new Error(unsupportedModelMessage(model));
-	return model.contextWindow > TWO_HUNDRED_K_CONTEXT ? `${model.id}[1m]` : model.id;
+  if (!isSupportedModel(model)) throw new Error(unsupportedModelMessage(model));
+  return model.contextWindow > TWO_HUNDRED_K_CONTEXT ? `${model.id}[1m]` : model.id;
 }
