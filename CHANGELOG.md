@@ -1,4 +1,22 @@
+<!-- markdownlint-disable MD024 -->
+
 # Changelog
+
+## Unreleased
+
+A review pass over upstream [`pi-claude-bridge`](https://github.com/elidickinson/pi-claude-bridge)'s recent activity. Everything below is ported from its fixes and tooling.
+
+### Fixed
+
+- **Claude Code no longer writes auto-memory** — it was unintentionally saving its own notes to `~/.claude` during bridge turns.
+- **Parallel tool calls survive session rebuilds** — when a conversation had to be rebuilt, only the first result of a parallel tool batch made it through; the rest were silently replaced with "[no tool result recorded]" stubs. All results now survive.
+- **Images in tool results survive rebuilds too** — screenshots and other images returned by tools were being flattened to text and lost.
+- **Rebuilds no longer tell Claude it has built-in tools** — a rebuilt conversation could name old tool calls after Claude Code's own tools (`Read`, `Bash`, ...), tempting the model to call tools that don't exist here.
+
+### Added
+
+- **Tests now replay real recorded Claude Code streams** — instead of hand-written imitations. Re-record on an SDK bump and the diff shows exactly what the SDK changed.
+- **Diagnostic tools for inspecting Claude Code's API traffic** — a capture proxy and a request differ in `diag/`, plus a doc of confirmed findings about caching and a resume-ordering bug in CC itself.
 
 ## 0.8.0 — 2026-08-02
 

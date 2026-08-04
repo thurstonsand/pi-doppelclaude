@@ -142,7 +142,7 @@ export function createCompaction(dependencies: CompactionDependencies) {
         prompt: promptText,
         options: {
           cwd,
-          env: sdkChildEnv({ DISABLE_AUTO_COMPACT: "1", CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" }),
+          env: sdkChildEnv({ DISABLE_AUTO_COMPACT: "1" }),
           tools: [],
           strictMcpConfig: true,
           ...(compactSettingSources ? { settingSources: compactSettingSources } : {}),

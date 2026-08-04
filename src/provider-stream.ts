@@ -19,6 +19,7 @@ import type {
 import { parse as parsePartialJsonText } from "partial-json";
 import { isCcRejectedToolName, mapSdkToolNameToPi } from "./convert.js";
 import { withReloginHint } from "./dead-query.js";
+import { recordSdkMessage } from "./debug.js";
 import { canonicalClaudeModelId } from "./models.js";
 import type { QueryContext } from "./query-state.js";
 import { REFUSAL_CUSTOM_TYPE, type RefusalEntryData, refusalEntryData } from "./refusal.js";
@@ -766,6 +767,7 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
       dispatchSdkMessage(message, customToolNameToPi, model, queryCtx, hooks);
 
     for await (const message of sdkQuery) {
+      recordSdkMessage(message);
       if (message.type === "system" && message.subtype === "init")
         capturedSessionId = message.session_id;
       if (queryCtx.rejectionWindowOpen && drivesPiStream(message)) {

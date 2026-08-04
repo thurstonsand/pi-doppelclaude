@@ -306,7 +306,7 @@ describe("message structure", () => {
     assert.equal(block(convert(msgs)[0], 0, "tool_result").is_error, true);
   });
 
-  it("multiple tool results in sequence", () => {
+  it("parallel tool results collect into one user message", () => {
     const msgs = [
       {
         role: "assistant",
@@ -319,13 +319,49 @@ describe("message structure", () => {
       { role: "toolResult", toolCallId: "t2", content: "content b" },
     ];
     const result = convert(msgs);
-    assert.equal(result.length, 3);
+    assert.equal(result.length, 2);
     assert.equal(result[0].role, "assistant");
     assert.equal(blocks(result[0]).length, 2);
     assert.equal(result[1].role, "user");
+    assert.equal(blocks(result[1]).length, 2);
     assert.equal(block(result[1], 0, "tool_result").tool_use_id, "t1");
-    assert.equal(result[2].role, "user");
-    assert.equal(block(result[2], 0, "tool_result").tool_use_id, "t2");
+    assert.equal(block(result[1], 1, "tool_result").tool_use_id, "t2");
+  });
+
+  it("a steer between parallel results hoists the results above it", () => {
+    const msgs = [
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "t1", name: "read", arguments: { path: "a.txt" } },
+          { type: "toolCall", id: "t2", name: "read", arguments: { path: "b.txt" } },
+        ],
+      },
+      { role: "toolResult", toolCallId: "t1", content: "content a" },
+      { role: "user", content: "actually, check c.txt too" },
+      { role: "toolResult", toolCallId: "t2", content: "content b" },
+    ];
+    const result = convert(msgs);
+    assert.equal(result.length, 3);
+    assert.equal(result[1].role, "user");
+    assert.equal(block(result[1], 0, "tool_result").tool_use_id, "t1");
+    assert.equal(block(result[1], 1, "tool_result").tool_use_id, "t2");
+    assert.equal(result[2].content, "actually, check c.txt too");
+  });
+
+  it("a steer before the first result still lands after the turn's results", () => {
+    const msgs = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "t1", name: "bash", arguments: { command: "sleep 60" } }],
+      },
+      { role: "user", content: "never mind, stop" },
+      { role: "toolResult", toolCallId: "t1", content: "done" },
+    ];
+    const result = convert(msgs);
+    assert.equal(result.length, 3);
+    assert.equal(block(result[1], 0, "tool_result").tool_use_id, "t1");
+    assert.equal(result[2].content, "never mind, stop");
   });
 
   it("mixed conversation: user → assistant(tool) → toolResult → assistant(text)", () => {
@@ -343,7 +379,7 @@ describe("message structure", () => {
     assert.equal(result[0].role, "user");
     assert.equal(result[0].content, "read file.txt");
     assert.equal(result[1].role, "assistant");
-    assert.equal(block(result[1], 0, "tool_use").name, "Read");
+    assert.equal(block(result[1], 0, "tool_use").name, "mcp__custom-tools__read");
     assert.equal(result[2].role, "user");
     assert.equal(blocks(result[2])[0].type, "tool_result");
     assert.equal(result[3].role, "assistant");
@@ -370,7 +406,7 @@ describe("message structure", () => {
     );
   });
 
-  it("tool name mapping: pi names → SDK names", () => {
+  it("tool name mapping: unserved pi names stay in the MCP namespace", () => {
     const msgs = [
       {
         role: "assistant",
@@ -381,8 +417,12 @@ describe("message structure", () => {
       },
     ];
     const result = convert(msgs);
-    assert.equal(block(result[0], 0, "tool_use").name, "Read");
-    assert.equal(block(result[0], 1, "tool_use").name, "Bash");
+    assert.equal(block(result[0], 0, "tool_use").name, "mcp__custom-tools__read");
+    assert.equal(block(result[0], 1, "tool_use").name, "mcp__custom-tools__bash");
+  });
+
+  it("an already-converted SDK tool name is refused", () => {
+    assert.throws(() => mapPiToolNameToSdk("mcp__custom-tools__bash"), /already an SDK tool name/);
   });
 
   it("toolResult with array content extracts text", () => {
@@ -397,5 +437,25 @@ describe("message structure", () => {
       },
     ];
     assert.equal(block(convert(msgs)[0], 0, "tool_result").content, "line 1\nline 2");
+  });
+
+  it("toolResult carrying an image keeps the block-array shape", () => {
+    const msgs = [
+      {
+        role: "toolResult",
+        toolCallId: "shot",
+        content: [
+          { type: "text", text: "screenshot taken" },
+          { type: "image", data: "aGVsbG8=", mimeType: "image/png" },
+        ],
+      },
+    ];
+    const content = block(convert(msgs)[0], 0, "tool_result").content;
+    assert.ok(Array.isArray(content));
+    assert.deepEqual(content[0], { type: "text", text: "screenshot taken" });
+    assert.deepEqual(content[1], {
+      type: "image",
+      source: { type: "base64", media_type: "image/png", data: "aGVsbG8=" },
+    });
   });
 });

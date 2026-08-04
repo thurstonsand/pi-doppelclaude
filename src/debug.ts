@@ -79,10 +79,22 @@ export function diagDump(label: string, data: Record<string, unknown>) {
   debug(`DIAG: ${label} (see ${DIAG_LOG_PATH})`);
 }
 
+// DOPPELCLAUDE_RECORD_STREAM=<path> appends every SDK message consumeQuery sees,
+// one JSON object per line. Used by tests/lib/record-sdk-streams.ts to capture
+// the replay fixtures behind tests/unit-stream-replay.ts.
+const RECORD_STREAM_PATH = process.env.DOPPELCLAUDE_RECORD_STREAM;
+
+export function recordSdkMessage(message: unknown): void {
+  if (RECORD_STREAM_PATH) appendFileSync(RECORD_STREAM_PATH, `${JSON.stringify(message)}\n`);
+}
+
 export function sdkChildEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
   return {
     ...process.env,
     CLAUDE_AGENT_SDK_CLIENT_APP: BRIDGE_CLIENT_APP,
+    // Pi owns the conversation record; a bridge subprocess writing CC auto-memory
+    // into ~/.claude from pi turns is state leaking outside that ownership.
+    CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
     ...extra,
   };
 }
