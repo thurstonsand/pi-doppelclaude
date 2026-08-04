@@ -1,7 +1,8 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:recommended"],
+  "extends": ["config:recommended", "customManagers:biomeVersions"],
   "dependencyDashboard": true,
+  "forkProcessing": "enabled",
   "timezone": "America/New_York",
   "labels": ["dependencies"],
   "schedule": ["* * * * 1"],
