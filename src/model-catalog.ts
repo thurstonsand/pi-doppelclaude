@@ -1,5 +1,6 @@
 import type { ModelInfo } from "@anthropic-ai/claude-agent-sdk";
 import type {
+  Api,
   Model,
   ModelsStoreEntry,
   ProviderModelsStore,
@@ -81,7 +82,7 @@ export interface ModelCatalogDependencies {
   requestCatalog(signal?: AbortSignal): Promise<Response>;
   now(): number;
   builtinGeneratedAt: number | undefined;
-  builtinModels: readonly Model<any>[];
+  builtinModels: readonly Model<Api>[];
 }
 
 function parseCanonicalModels(value: unknown): CanonicalModel[] {
@@ -168,7 +169,7 @@ export function createBridgeModelCatalog(
   dependencies: ModelCatalogDependencies = defaultDependencies(),
 ): BridgeModelCatalog {
   let models: readonly BridgeModel[] = [];
-  let overlayModels: readonly Model<any>[] = [];
+  let overlayModels: readonly Model<Api>[] = [];
   let advertisedIds: ReadonlySet<string> = new Set();
   const observedIds = new Set<string>();
   let dynamicLastModified = -1;
@@ -213,7 +214,7 @@ export function createBridgeModelCatalog(
   // obsolete generation neither applies models nor persists.
   let generation = 0;
   const applyModels = (
-    overlay: readonly Model<any>[],
+    overlay: readonly Model<Api>[],
     allowedIds: ReadonlySet<string>,
     lastModified: number,
     forGeneration: number,

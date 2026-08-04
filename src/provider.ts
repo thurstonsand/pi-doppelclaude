@@ -1,4 +1,5 @@
 import {
+  type Api,
   type AssistantMessageEventStream,
   type Context,
   lazyStream,
@@ -70,7 +71,7 @@ export function createAnthropicAgentSdkProvider(
   const resolve = async () => (authenticated() ? { auth: {}, source: "Claude Code" } : undefined);
 
   const validatedStream = (
-    model: Model<any>,
+    model: Model<Api>,
     context: Context,
     options: SimpleStreamOptions | undefined,
   ): AssistantMessageEventStream => {

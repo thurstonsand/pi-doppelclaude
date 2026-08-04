@@ -11,7 +11,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Query } from "@anthropic-ai/claude-agent-sdk";
-import type { Model, Message as PiMessage } from "@earendil-works/pi-ai";
+import type { Api, Model, Message as PiMessage } from "@earendil-works/pi-ai";
 import { createBridgeRuntime } from "../src/bridge-runtime.js";
 import { Doppel } from "../src/doppel.js";
 import { extractAllToolResults as _extractAllToolResults } from "../src/extract-tool-results.js";
@@ -147,7 +147,7 @@ describe("production MCP handlers", () => {
       api: "doppelclaude",
       provider: "doppelclaude",
       id: "test",
-    } as Model<any>);
+    } as Model<Api>);
     const handler = runtime.test.createMcpToolHandler("read", queryCtx);
 
     void handler({}, {});
@@ -158,7 +158,7 @@ describe("production MCP handlers", () => {
 
     queryCtx.activeQuery = null;
     const stream = runtime.test.streamClaudeAgentSdk(
-      { api: "doppelclaude", provider: "doppelclaude", id: "test" } as Model<any>,
+      { api: "doppelclaude", provider: "doppelclaude", id: "test" } as Model<Api>,
       {
         systemPrompt: "",
         messages: [

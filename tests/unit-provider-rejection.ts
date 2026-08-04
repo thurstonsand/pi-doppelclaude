@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Query, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type {
+  Api,
   AssistantMessageEvent,
   Context,
   Model,
@@ -30,7 +31,7 @@ const [fakeModel] = projectCatalogModels(
       baseUrl: "https://api.anthropic.com",
       contextWindow: 200_000,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    } as unknown as Model<any>,
+    } as unknown as Model<Api>,
   ],
   new Set(["claude-haiku-4-5"]),
 );
@@ -151,18 +152,18 @@ function resultMessage(): SDKMessage {
 }
 
 function toolCalls(events: AssistantMessageEvent[]) {
-  return events
-    .filter((event) => event.type === "toolcall_end")
-    .map((event: any) => ({ id: event.toolCall.id, name: event.toolCall.name }));
+  return events.flatMap((event) =>
+    event.type === "toolcall_end" ? [{ id: event.toolCall.id, name: event.toolCall.name }] : [],
+  );
 }
 
 function texts(events: AssistantMessageEvent[]) {
-  return events.filter((event) => event.type === "text_end").map((event: any) => event.content);
+  return events.flatMap((event) => (event.type === "text_end" ? [event.content] : []));
 }
 
 function terminalError(events: AssistantMessageEvent[]) {
   const last = events.at(-1);
-  return last?.type === "error" ? (last as any).error.errorMessage : null;
+  return last?.type === "error" ? last.error.errorMessage : null;
 }
 
 const prompt = [{ role: "user", content: "go" }];
@@ -277,8 +278,10 @@ describe("Claude Code-rejected tool calls", () => {
     const second = record(stream(runtime, rejectedTurn));
     await tick();
     assert.deepEqual(texts(second), ["that tool does not exist here"]);
-    assert.equal(second.at(-1)?.type, "done");
-    assert.equal((second.at(-1) as any).reason, "stop");
+    const last = second.at(-1);
+    assert.equal(last.type, "done");
+    if (last.type !== "done") throw new Error("expected a trailing done event");
+    assert.equal(last.reason, "stop");
   });
 
   it("resolves the valid call and drops the rejected one when a message mixes both", async () => {

@@ -2,8 +2,8 @@
 // compaction siblings: parse in-band result errors and log the served model's
 // context window. Kept as free functions so neither sibling imports the other.
 
-import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import type { Model } from "@earendil-works/pi-ai";
+import type { ModelUsage, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { Api, Model } from "@earendil-works/pi-ai";
 
 /** The failure as the result message stated it, or null when it stated none. Naming the subtype
  *  in its place is left to the caller, which is the only one that knows what it was asking for. */
@@ -25,11 +25,10 @@ export function logServedContextWindow(
   debug: (...args: unknown[]) => void,
   label: string,
   message: SDKMessage,
-  model: Model<any>,
+  model: Model<Api>,
 ): void {
-  const modelUsage = (message as any).modelUsage as
-    | Record<string, { contextWindow?: number; maxOutputTokens?: number }>
-    | undefined;
+  const modelUsage = (message as SDKMessage & { modelUsage?: Record<string, ModelUsage> })
+    .modelUsage;
   if (!modelUsage) return;
   for (const [k, v] of Object.entries(modelUsage)) {
     debug(

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Query } from "@anthropic-ai/claude-agent-sdk";
 import {
+  type Api,
   type AssistantMessageEventStream,
   createAssistantMessageEventStream,
   type Model,
@@ -20,7 +21,7 @@ const fakeModel = {
   provider: "doppelclaude",
   id: "claude-test",
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-} as Model<any>;
+} as Model<Api>;
 
 async function collect(stream: AssistantMessageEventStream) {
   const events = [];
@@ -173,7 +174,7 @@ describe("provider stop reasons", () => {
     runtime.test.finalizeCurrentStream(queryCtx);
 
     const events = await collect(stream);
-    return events.at(-1) as any;
+    return events.at(-1);
   }
 
   for (const [reason, expected] of [
@@ -185,6 +186,7 @@ describe("provider stop reasons", () => {
     it(`completes a turn that stopped with ${reason}`, async () => {
       const last = await runTurn(turn(reason));
       assert.equal(last.type, "done");
+      if (last.type !== "done") throw new Error("expected a trailing done event");
       assert.equal(last.message.stopReason, expected);
       assert.equal(
         last.message.rawStopReason,
@@ -202,6 +204,7 @@ describe("provider stop reasons", () => {
     it(`fails the turn when Claude stopped with ${reason}`, async () => {
       const last = await runTurn(turn(reason));
       assert.equal(last.type, "error", `${reason} must not be reported as a completed turn`);
+      if (last.type !== "error") throw new Error("expected a trailing error event");
       assert.equal(last.error.stopReason, "error");
       assert.equal(last.error.rawStopReason, reason);
     });
@@ -210,6 +213,7 @@ describe("provider stop reasons", () => {
   it("fails a turn whose stream ended without any terminal reason", async () => {
     const last = await runTurn(turn(undefined, { withResult: false }));
     assert.equal(last.type, "error", "a truncated stream must not commit its partial output");
+    if (last.type !== "error") throw new Error("expected a trailing error event");
     assert.equal(last.error.stopReason, "error");
   });
 
@@ -220,6 +224,7 @@ describe("provider stop reasons", () => {
       { type: "result", subtype: "success", result: "answered", is_error: false, modelUsage: {} },
     ]);
     assert.equal(last.type, "done");
+    if (last.type !== "done") throw new Error("expected a trailing done event");
     assert.equal(last.message.stopReason, "stop");
   });
 });

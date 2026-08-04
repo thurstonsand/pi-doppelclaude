@@ -4,7 +4,7 @@
 // query or spawns a new one — and derive it again, identically, for a replay.
 
 import type { Options } from "@anthropic-ai/claude-agent-sdk";
-import type { Context, Model, SimpleStreamOptions, Tool } from "@earendil-works/pi-ai";
+import type { Api, Context, Model, SimpleStreamOptions, Tool } from "@earendil-works/pi-ai";
 import { makeCliDebugOptions, sdkChildEnv } from "./debug.js";
 import { claudeCodeModelId, resolveThinkingEffort } from "./models.js";
 import type { ProviderSettings } from "./settings.js";
@@ -58,7 +58,7 @@ export interface TurnPlan {
 }
 
 export function planTurn(input: {
-  model: Model<any>;
+  model: Model<Api>;
   context: Context;
   options: SimpleStreamOptions | undefined;
   providerSettings: ProviderSettings;

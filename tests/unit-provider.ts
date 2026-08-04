@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import {
+  type Api,
   type AssistantMessage,
   type Context,
   createAssistantMessageEventStream,
@@ -23,6 +24,7 @@ import {
   PROVIDER_NAME,
 } from "../src/models.js";
 import { createAnthropicAgentSdkProvider } from "../src/provider.js";
+import { required } from "./lib/expect.js";
 import { bridgeModel } from "./lib/models.js";
 
 const context: Context = { messages: [{ role: "user", content: "test", timestamp: 1 }] };
@@ -38,7 +40,7 @@ afterEach(() => {
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-function successfulStream(model: Model<any>) {
+function successfulStream(model: Model<Api>) {
   const stream = createAssistantMessageEventStream();
   const message: AssistantMessage = {
     role: "assistant",
@@ -100,7 +102,7 @@ function stubCatalog(models: readonly BridgeModel[] = discoveredModels): BridgeM
 }
 
 function providerWith(
-  spy?: (model: Model<any>, options: SimpleStreamOptions | undefined) => void,
+  spy?: (model: Model<Api>, options: SimpleStreamOptions | undefined) => void,
   accountProbe = async () => availableAccount,
   modelCatalog: BridgeModelCatalog = stubCatalog(),
 ) {
@@ -121,7 +123,10 @@ describe("native Provider shape", () => {
     assert.equal(provider.name, PROVIDER_NAME);
     assert.equal(provider.baseUrl, PROVIDER_BASE_URL);
     assert.equal(provider.auth.apiKey?.login, undefined);
-    assert.match(provider.auth.apiKey!.name, /Claude Code CLI.*claude auth login/);
+    assert.match(
+      required(provider.auth.apiKey, "ambient apiKey auth").name,
+      /Claude Code CLI.*claude auth login/,
+    );
     assert.deepEqual(
       provider.getModels().map((model) => model.id),
       discoveredModels.map((model) => model.id),
@@ -132,14 +137,18 @@ describe("native Provider shape", () => {
   it("filters unknown IDs and changed identity metadata", () => {
     const provider = providerWith();
     const valid = provider.getModels()[0];
-    const candidates: Model<any>[] = [
+    const candidates: Model<Api>[] = [
       valid,
       { ...valid, id: "claude-future-9-9" },
       { ...valid, provider: "anthropic" },
       { ...valid, api: "anthropic-messages" },
       { ...valid, baseUrl: "https://example.invalid" },
     ];
-    assert.deepEqual(provider.filterModels!(candidates, undefined), [valid]);
+    // Pi's contract narrows the parameter to this provider's api; feeding it mislabeled
+    // models is the whole point of the test, so the cast stands in for a misbehaving caller.
+    assert.deepEqual(provider.filterModels(candidates as Model<typeof PROVIDER_API>[], undefined), [
+      valid,
+    ]);
   });
 });
 
@@ -150,12 +159,13 @@ describe("ambient Claude Code auth", () => {
       probes++;
       return availableAccount;
     });
+    const apiKey = required(provider.auth.apiKey, "ambient apiKey auth");
 
-    assert.deepEqual(await provider.auth.apiKey!.check!(authInput), {
+    assert.deepEqual(await apiKey.check(authInput), {
       type: "api_key",
       source: "Claude Code",
     });
-    assert.deepEqual(await provider.auth.apiKey!.resolve(authInput), {
+    assert.deepEqual(await apiKey.resolve(authInput), {
       auth: {},
       source: "Claude Code",
     });
@@ -170,20 +180,21 @@ describe("ambient Claude Code auth", () => {
       return snapshot;
     });
     const store = memoryStore();
+    const apiKey = required(provider.auth.apiKey, "ambient apiKey auth");
 
-    await provider.refreshModels!({ store, allowNetwork: false });
+    await provider.refreshModels({ store, allowNetwork: false });
     assert.equal(probes, 0);
 
     snapshot = unavailableAccount;
-    await provider.refreshModels!({ store, allowNetwork: true });
+    await provider.refreshModels({ store, allowNetwork: true });
     assert.equal(probes, 1);
-    assert.equal(await provider.auth.apiKey!.check!(authInput), undefined);
-    assert.equal(await provider.auth.apiKey!.resolve(authInput), undefined);
+    assert.equal(await apiKey.check(authInput), undefined);
+    assert.equal(await apiKey.resolve(authInput), undefined);
 
     snapshot = availableAccount;
-    await provider.refreshModels!({ store, allowNetwork: true });
+    await provider.refreshModels({ store, allowNetwork: true });
     assert.equal(probes, 2);
-    assert.deepEqual(await provider.auth.apiKey!.check!(authInput), {
+    assert.deepEqual(await apiKey.check(authInput), {
       type: "api_key",
       source: "Claude Code",
     });
@@ -196,10 +207,10 @@ describe("ambient Claude Code auth", () => {
       );
     });
     await assert.rejects(
-      provider.refreshModels!({ store: memoryStore(), allowNetwork: true }),
+      provider.refreshModels({ store: memoryStore(), allowNetwork: true }),
       /claude auth login/,
     );
-    assert.deepEqual(await provider.auth.apiKey!.check!(authInput), {
+    assert.deepEqual(await required(provider.auth.apiKey, "ambient apiKey auth").check(authInput), {
       type: "api_key",
       source: "Claude Code",
     });
@@ -215,8 +226,8 @@ describe("ambient Claude Code auth", () => {
       });
     });
     const refreshes = Promise.all([
-      provider.refreshModels!({ store: memoryStore(), allowNetwork: true }),
-      provider.refreshModels!({ store: memoryStore(), allowNetwork: true }),
+      provider.refreshModels({ store: memoryStore(), allowNetwork: true }),
+      provider.refreshModels({ store: memoryStore(), allowNetwork: true }),
     ]);
     await Promise.resolve();
     resolveProbe(availableAccount);
@@ -256,7 +267,10 @@ describe("stream boundaries", () => {
       assert.equal(events.length, 1);
       assert.equal(events[0].type, "error");
       assert.equal(result.stopReason, "error");
-      assert.match(result.errorMessage!, /Unsupported Doppelclaude model/);
+      assert.match(
+        required(result.errorMessage, "a terminal error message"),
+        /Unsupported Doppelclaude model/,
+      );
     });
   }
 });
@@ -280,7 +294,7 @@ describe("models.json composition", () => {
       }),
     );
 
-    const streamedModels: Model<any>[] = [];
+    const streamedModels: Model<Api>[] = [];
     const provider = providerWith((model) => streamedModels.push(model));
     const runtime = await ModelRuntime.create({
       modelsPath,
@@ -290,7 +304,10 @@ describe("models.json composition", () => {
     runtime.registerNativeProvider(provider);
     await runtime.refresh({ allowNetwork: false });
 
-    const overridden = runtime.getModel(PROVIDER_ID, "claude-opus-4-8")!;
+    const overridden = required(
+      runtime.getModel(PROVIDER_ID, "claude-opus-4-8"),
+      "the composed claude-opus-4-8 model",
+    );
     assert.equal(overridden.name, "Overridden Opus");
     assert.equal(overridden.contextWindow, 200_000);
     assert.ok(runtime.getModel(PROVIDER_ID, "claude-future-9-9"));
@@ -302,7 +319,10 @@ describe("models.json composition", () => {
     await runtime.streamSimple(overridden, context).result();
     assert.equal(streamedModels[0].contextWindow, 200_000);
     const invalidResult = await runtime
-      .streamSimple(runtime.getModel(PROVIDER_ID, "claude-future-9-9")!, context)
+      .streamSimple(
+        required(runtime.getModel(PROVIDER_ID, "claude-future-9-9"), "the models.json addition"),
+        context,
+      )
       .result();
     assert.equal(invalidResult.stopReason, "error");
     assert.equal(streamedModels.length, 1);

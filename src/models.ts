@@ -1,5 +1,5 @@
 import type { EffortLevel } from "@anthropic-ai/claude-agent-sdk";
-import type { Model } from "@earendil-works/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 
 export const PROVIDER_ID = "doppelclaude";
 export const PROVIDER_NAME = "Doppelclaude";
@@ -20,7 +20,7 @@ export interface BridgeModel extends Model<typeof PROVIDER_API> {
   readonly [BRIDGE_MODEL]: string;
 }
 
-export function isSupportedModel(model: Model<any>): model is BridgeModel {
+export function isSupportedModel(model: Model<Api>): model is BridgeModel {
   return (
     (model as Partial<BridgeModel>)[BRIDGE_MODEL] === model.id &&
     model.provider === PROVIDER_ID &&
@@ -63,7 +63,7 @@ export function isStableClaudeModelId(id: string): boolean {
   return modelOrder(id) !== undefined;
 }
 
-function projectModel(canonical: Model<any>): BridgeModel {
+function projectModel(canonical: Model<Api>): BridgeModel {
   const { compat: _canonicalApiCompatibility, ...metadata } = canonical;
   return {
     ...metadata,
@@ -74,7 +74,7 @@ function projectModel(canonical: Model<any>): BridgeModel {
   };
 }
 
-export function compareModels(left: Model<any>, right: Model<any>): number {
+export function compareModels(left: Model<Api>, right: Model<Api>): number {
   const [leftFamily, leftVersion] = modelOrder(left.id) ?? [Number.MAX_SAFE_INTEGER, []];
   const [rightFamily, rightVersion] = modelOrder(right.id) ?? [Number.MAX_SAFE_INTEGER, []];
   if (leftFamily !== rightFamily) return leftFamily - rightFamily;
@@ -86,7 +86,7 @@ export function compareModels(left: Model<any>, right: Model<any>): number {
 }
 
 export function projectCatalogModels(
-  canonicalModels: readonly Model<any>[],
+  canonicalModels: readonly Model<Api>[],
   allowedIds: ReadonlySet<string>,
 ): BridgeModel[] {
   return canonicalModels
@@ -114,7 +114,7 @@ export function resolveThinkingEffort(
   );
 }
 
-export function claudeCodeModelId(model: Model<any>): string {
+export function claudeCodeModelId(model: Model<Api>): string {
   if (!isSupportedModel(model)) throw new Error(unsupportedModelMessage(model));
   return model.contextWindow > TWO_HUNDRED_K_CONTEXT ? `${model.id}[1m]` : model.id;
 }

@@ -4,10 +4,12 @@ import type { ModelUsage } from "@anthropic-ai/claude-agent-sdk";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
 import { accountSdkModelUsage, applySdkUsage, diffSdkModelUsage } from "../src/sdk-usage.js";
+import { required } from "./lib/expect.js";
 
-const model = getBuiltinModels("anthropic").find(
-  (candidate) => candidate.id === "claude-haiku-4-5",
-)!;
+const model = required(
+  getBuiltinModels("anthropic").find((candidate) => candidate.id === "claude-haiku-4-5"),
+  "Pi's Anthropic catalog to ship claude-haiku-4-5",
+);
 
 function output(): AssistantMessage {
   return {

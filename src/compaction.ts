@@ -7,6 +7,7 @@
 
 import type { Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import {
+  type Api,
   type AssistantMessage,
   type AssistantMessageEventStream,
   type Context,
@@ -41,7 +42,7 @@ interface CompactionDependencies {
 }
 
 function newAssistantOutput(
-  model: Model<any>,
+  model: Model<Api>,
   text: string,
   stopReason: AssistantMessage["stopReason"],
   errorMessage?: string,
@@ -98,7 +99,7 @@ function reinjectPriorCompactionFileOps(
 
 interface CompactionRequest {
   preparation: SessionBeforeCompactEvent["preparation"];
-  model: Model<any>;
+  model: Model<Api>;
   branchEntries: Array<{ type: string; details?: unknown }>;
   customInstructions: string | undefined;
   signal: AbortSignal | undefined;
@@ -110,7 +111,7 @@ export function createCompaction(dependencies: CompactionDependencies) {
   const { queryFactory, loadProviderSettings, loadRetryPolicy } = dependencies;
 
   async function runIsolatedSummary(
-    model: Model<any>,
+    model: Model<Api>,
     context: Context,
     options: SimpleStreamOptions | undefined,
     stream: AssistantMessageEventStream,
@@ -178,7 +179,7 @@ export function createCompaction(dependencies: CompactionDependencies) {
         if (wasAborted) break;
 
         if (message.type === "assistant") {
-          for (const block of (message as any).message?.content ?? []) {
+          for (const block of message.message?.content ?? []) {
             if (block.type === "text" && typeof block.text === "string")
               assistantText += block.text;
           }
@@ -250,7 +251,7 @@ export function createCompaction(dependencies: CompactionDependencies) {
       `compact takeover: retry enabled=${retry.enabled} maxRetries=${retry.maxRetries} baseDelayMs=${retry.baseDelayMs}`,
     );
     const isolatedStreamFn = (
-      model: Model<any>,
+      model: Model<Api>,
       context: Context,
       options?: SimpleStreamOptions,
     ): AssistantMessageEventStream => {

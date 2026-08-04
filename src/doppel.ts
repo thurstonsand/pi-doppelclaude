@@ -42,12 +42,20 @@ export type SyncPath = "reuse" | "rebuild" | "clean-start";
 //
 // Log strings still say "Case 1/2/3/4" so existing diagnostics keep their
 // useful continuity.
-export interface SyncPlan {
-  path: SyncPath;
-  priorMessages: Context["messages"];
-  previousSession: SessionState | null;
-  advanceCursor?: boolean;
-}
+/** A reuse resumes a session, so it always names the one it resumes; the other paths build
+ *  their own and carry the previous session only to preserve its id. */
+export type SyncPlan =
+  | {
+      path: "reuse";
+      priorMessages: Context["messages"];
+      previousSession: SessionState;
+      advanceCursor: boolean;
+    }
+  | {
+      path: "rebuild" | "clean-start";
+      priorMessages: Context["messages"];
+      previousSession: SessionState | null;
+    };
 
 export interface SyncResult {
   sessionId: string | null;
@@ -205,7 +213,7 @@ export function applySessionSync(input: {
 }): SyncResult {
   const { doppel, plan, cwd, sessionStore, customToolNameToSdk, modelId } = input;
   if (plan.path === "reuse") {
-    const previous = plan.previousSession!;
+    const previous = plan.previousSession;
     doppel.session = plan.advanceCursor
       ? { ...previous, cursor: plan.priorMessages.length }
       : previous;

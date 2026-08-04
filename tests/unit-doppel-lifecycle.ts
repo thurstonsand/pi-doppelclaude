@@ -11,6 +11,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Options, Query, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type {
+  Api,
   AssistantMessageEvent,
   Context,
   Model,
@@ -30,7 +31,7 @@ const [fakeModel] = projectCatalogModels(
       baseUrl: "https://api.anthropic.com",
       contextWindow: 200_000,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    } as unknown as Model<any>,
+    } as unknown as Model<Api>,
   ],
   new Set(["claude-haiku-4-5"]),
 );
@@ -62,7 +63,7 @@ function makeHarness(scripts: QueryScript[]) {
       assert.ok(script, `unexpected query spawn #${spawned.length + 1}`);
       const queue = new PushQueue<SDKMessage>();
       const handle: SpawnedQuery = {
-        options: options!,
+        options,
         emit(messages) {
           for (const message of messages) queue.push(message);
         },
@@ -155,7 +156,7 @@ function answer(text: string, sessionId?: string): SDKMessage[] {
 }
 
 function texts(events: AssistantMessageEvent[]) {
-  return events.filter((event) => event.type === "text_end").map((event: any) => event.content);
+  return events.flatMap((event) => (event.type === "text_end" ? [event.content] : []));
 }
 
 const firstTurn = [{ role: "user", content: "go" }];

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { createCompaction } from "../src/compaction.js";
+import { required } from "./lib/expect.js";
 import { bridgeModel } from "./lib/models.js";
 
 const model = bridgeModel("claude-haiku-4-5");
@@ -89,7 +90,7 @@ describe("isolated compaction accounting", () => {
         cost: undefined,
       },
     );
-    assert.ok(Math.abs(result.usage!.cost.total - 0.00006855) < 1e-12);
+    assert.ok(Math.abs(required(result.usage, "summary usage").cost.total - 0.00006855) < 1e-12);
   });
 
   it("combines usage from both successful split-turn summaries", async () => {

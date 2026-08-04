@@ -7,7 +7,12 @@
 // Extracted from index.ts so tests can import without activating the extension.
 
 import type { Query, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
-import type { AssistantMessage, AssistantMessageEventStream, Model } from "@earendil-works/pi-ai";
+import type {
+  Api,
+  AssistantMessage,
+  AssistantMessageEventStream,
+  Model,
+} from "@earendil-works/pi-ai";
 import type { Doppel } from "./doppel.js";
 import type { McpResult } from "./extract-tool-results.js";
 import type { ResultVerdict } from "./sdk-signals.js";
@@ -17,6 +22,14 @@ import type { SessionStoreWriter } from "./session-store.js";
 export interface PendingToolCall {
   toolName: string;
   resolve: (result: McpResult) => void;
+}
+
+/** A content block Anthropic has started but not yet stopped. */
+export interface OpenStreamBlock {
+  /** Position of the block in `turnOutput.content`. */
+  contentIndex: number;
+  /** Tool arguments accumulated so far, parseable only once the block stops. */
+  partialJson: string;
 }
 
 export interface LocalSessionFragment {
@@ -88,7 +101,7 @@ export class QueryContext {
   announcedServedPairs = new Set<string>();
   servedModelAnnouncement: { requested: string; served: string } | null = null;
   commandFallbackRecapPending = false;
-  activeModel: Model<any> | null = null;
+  activeModel: Model<Api> | null = null;
   abortCleanup: (() => void) | null = null;
   completion: Promise<void> | null = null;
   closeCompletion: Promise<void> | null = null;
@@ -126,12 +139,18 @@ export class QueryContext {
   turnSawStreamEvent = false;
   turnSawToolCall = false;
 
-  get turnBlocks(): Array<any> {
+  // Anthropic addresses a streaming block by its own event index and feeds tool arguments
+  // in as JSON fragments; pi addresses content by position and wants whole arguments. This
+  // holds that translation for the blocks still open, so nothing transient has to ride on
+  // the pi content blocks themselves.
+  openStreamBlocks = new Map<number, OpenStreamBlock>();
+
+  get turnBlocks(): AssistantMessage["content"] {
     if (!this.turnOutput) throw new Error("turnBlocks accessed before resetTurnState");
     return this.turnOutput.content;
   }
 
-  beginCommand(model: Model<any>): void {
+  beginCommand(model: Model<Api>): void {
     this.commandOutputs = [];
     this.commandFallbackRecapPending = false;
     // The buffer belongs to the command that opened its window; a new command
@@ -143,13 +162,13 @@ export class QueryContext {
 
   /** A replay re-runs the turn that just died, so the output it abandoned leaves the
    *  command's record instead of standing in it as a turn that produced nothing. */
-  restartTurnState(model: Model<any>): void {
+  restartTurnState(model: Model<Api>): void {
     const abandoned = this.turnOutput ? this.commandOutputs.lastIndexOf(this.turnOutput) : -1;
     if (abandoned >= 0) this.commandOutputs.splice(abandoned, 1);
     this.resetTurnState(model);
   }
 
-  resetTurnState(model: Model<any>): void {
+  resetTurnState(model: Model<Api>): void {
     this.turnOutput = {
       role: "assistant",
       content: [],
@@ -180,6 +199,7 @@ export class QueryContext {
     this.turnRateLimitRejection = null;
     this.turnSyntheticText = null;
     this.turnRetry = null;
+    this.openStreamBlocks.clear();
     this.readyForInput = false;
   }
 }

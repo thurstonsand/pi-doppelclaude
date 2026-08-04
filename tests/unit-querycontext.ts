@@ -5,12 +5,12 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { Model } from "@earendil-works/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import { Doppel } from "../src/doppel.js";
 import { PushQueue } from "../src/query-state.js";
 
 // Minimal stand-in for pi-ai's Model; resetTurnState only records identity here.
-const fakeModel = { api: "doppelclaude", provider: "doppelclaude", id: "test-model" } as Model<any>;
+const fakeModel = { api: "doppelclaude", provider: "doppelclaude", id: "test-model" } as Model<Api>;
 
 describe("QueryContext class", () => {
   it("turnBlocks throws before resetTurnState", () => {

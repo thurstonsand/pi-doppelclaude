@@ -18,6 +18,7 @@ import type {
   MessageParam,
 } from "@anthropic-ai/sdk/resources";
 import {
+  type Api,
   type AssistantMessageEventStream,
   type Context,
   createAssistantMessageEventStream,
@@ -100,7 +101,7 @@ interface FreshTurn {
 interface FreshQueryRequest extends FreshTurn {
   queryCtx: QueryContext;
   syncPlan: SyncPlan;
-  model: Model<any>;
+  model: Model<Api>;
   contextMessageCount: number;
   /** The host's own query survives the turn; every other query is a one-shot. */
   persistent: boolean;
@@ -195,7 +196,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
       return null;
     }
     debug(
-      `extractUserPromptBlocks: ${last.content.length} blocks, types=${last.content.map((b: any) => b.type).join(",")}`,
+      `extractUserPromptBlocks: ${last.content.length} blocks, types=${last.content.map((b) => b.type).join(",")}`,
     );
     let hasImage = false;
     const blocks: ContentBlockParam[] = [];
@@ -204,9 +205,9 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
         blocks.push({ type: "text", text: block.text });
       } else if (block.type === "image") {
         debug(
-          `image block: mimeType=${(block as any).mimeType}, data length=${((block as any).data ?? "").length}, keys=${Object.keys(block).join(",")}`,
+          `image block: mimeType=${block.mimeType}, data length=${block.data.length}, keys=${Object.keys(block).join(",")}`,
         );
-        if (!(block as any).data || !(block as any).mimeType) {
+        if (!block.data || !block.mimeType) {
           debug(`image block missing data or mimeType, skipping`);
           continue;
         }
@@ -288,13 +289,13 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
       }
       const toolCallId = extra._meta["claudecode/toolUseId"];
       queryCtx.dispatchedToolCallIds.add(toolCallId);
-      if (queryCtx.pendingResults.has(toolCallId)) {
-        const result = queryCtx.pendingResults.get(toolCallId)!;
+      const queued = queryCtx.pendingResults.get(toolCallId);
+      if (queued) {
         queryCtx.pendingResults.delete(toolCallId);
         debug(
           `mcp handler: ${toolName} [${toolCallId}] → resolved from queue (${queryCtx.pendingResults.size} remaining)`,
         );
-        return result;
+        return queued;
       }
       debug(`mcp handler: ${toolName} [${toolCallId}] → waiting`);
       return new Promise<McpResult>((resolve) => {
@@ -747,7 +748,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
 
   /** Provider entry point. Pi calls this for each new prompt and each tool result. */
   function streamClaudeAgentSdk(
-    model: Model<any>,
+    model: Model<Api>,
     context: Context,
     options?: SimpleStreamOptions,
   ): AssistantMessageEventStream {
@@ -1018,6 +1019,12 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
       queryCtx.fatalError = null;
 
       if (canPush) {
+        // canPush was decided from the warm query's own state, so losing either here means the
+        // context was torn down underneath the decision. Raised before the async push so it
+        // surfaces as a spawn failure instead of the turn's in-band error.
+        const { activeQuery, inputQueue } = queryCtx;
+        if (!activeQuery || !inputQueue)
+          throw new Error("persistent reuse chosen without a live query to push into");
         applySessionSync({
           doppel,
           plan: syncPlan,
@@ -1034,7 +1041,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
                 `provider: reconciling MCP tools without process replacement (${queryCtx.hasMcpServer ? "replace/remove" : "add"})`,
               );
               await reconcileMcpServers(
-                queryCtx.activeQuery!,
+                activeQuery,
                 MCP_SERVER_NAME,
                 queryCtx.hasMcpServer,
                 freshTurn.mcpServers,
@@ -1044,10 +1051,10 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
             }
             if (queryCtx.cliModel !== freshTurn.cliModel) {
               debug(`provider: persistent setModel ${queryCtx.cliModel} → ${freshTurn.cliModel}`);
-              await queryCtx.activeQuery!.setModel(freshTurn.cliModel);
+              await activeQuery.setModel(freshTurn.cliModel);
               queryCtx.cliModel = freshTurn.cliModel;
             }
-            queryCtx.inputQueue!.push(promptMessage);
+            inputQueue.push(promptMessage);
             debug(
               `Case 3: pushed turn into persistent session ${doppel.session?.sessionId.slice(0, 8) ?? "unknown"} (doppel=${doppel.label})`,
             );

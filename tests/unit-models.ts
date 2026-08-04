@@ -11,11 +11,15 @@ import {
   projectCatalogModels,
   resolveThinkingEffort,
 } from "../src/models.js";
+import { required } from "./lib/expect.js";
 
 const canonicalModels = getBuiltinModels("anthropic");
 const project = (...ids: string[]) => projectCatalogModels(canonicalModels, new Set(ids));
 const find = <T extends { id: string }>(models: readonly T[], id: string): T =>
-  models.find((model) => model.id === id)!;
+  required(
+    models.find((model) => model.id === id),
+    `model ${id}`,
+  );
 
 describe("native model projection", () => {
   // Ordering belongs to compareModels, which the catalog applies once after merging its sources.

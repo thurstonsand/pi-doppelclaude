@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Query } from "@anthropic-ai/claude-agent-sdk";
-import { createAssistantMessageEventStream, type Model } from "@earendil-works/pi-ai";
+import { type Api, createAssistantMessageEventStream, type Model } from "@earendil-works/pi-ai";
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { createBridgeRuntime } from "../src/bridge-runtime.js";
 import { Doppel } from "../src/doppel.js";
@@ -11,7 +11,7 @@ const fakeModel = {
   provider: "doppelclaude",
   id: "claude-opus-5",
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-} as Model<any>;
+} as Model<Api>;
 
 const servedUsage = {
   "claude-opus-4-8": {
@@ -125,7 +125,7 @@ describe("provider served-model reporting", () => {
     assert.equal(queryCtx.turnOutput?.responseModel, "claude-opus-4-8");
 
     // Picking a different model is a new routing question, so the answer is reported again.
-    const otherModel = { ...fakeModel, id: "claude-fable-5" } as Model<any>;
+    const otherModel = { ...fakeModel, id: "claude-fable-5" } as Model<Api>;
     queryCtx.beginCommand(otherModel);
     queryCtx.currentPiStream = createAssistantMessageEventStream();
     await runtime.test.consumeQuery(

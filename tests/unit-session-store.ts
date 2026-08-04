@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { query, type SessionStore, type SessionStoreEntry } from "@anthropic-ai/claude-agent-sdk";
+import {
+  query,
+  type SDKUserMessage,
+  type SessionStore,
+  type SessionStoreEntry,
+} from "@anthropic-ai/claude-agent-sdk";
 import { SESSION_STORE_LOAD_TIMEOUT_MS } from "../src/bridge-runtime.js";
 import { PushQueue } from "../src/query-state.js";
 import { BridgeSessionStore, MalformedSessionTranscriptError } from "../src/session-store.js";
@@ -114,7 +119,7 @@ describe("BridgeSessionStore", () => {
       append: async () => {},
       load: async () => new Promise<SessionStoreEntry[] | null>(() => {}),
     };
-    const prompt = new PushQueue<any>();
+    const prompt = new PushQueue<SDKUserMessage>();
     const sdkQuery = query({
       prompt,
       options: {

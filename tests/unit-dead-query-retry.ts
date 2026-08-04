@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Query, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type {
+  Api,
   AssistantMessageEvent,
   Context,
   Model,
@@ -30,7 +31,7 @@ const [fakeModel] = projectCatalogModels(
       baseUrl: "https://api.anthropic.com",
       contextWindow: 200_000,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    } as unknown as Model<any>,
+    } as unknown as Model<Api>,
   ],
   new Set(["claude-haiku-4-5"]),
 );
@@ -186,12 +187,12 @@ const revokedResult = {
 } as unknown as SDKMessage;
 
 function texts(events: AssistantMessageEvent[]) {
-  return events.filter((event) => event.type === "text_end").map((event: any) => event.content);
+  return events.flatMap((event) => (event.type === "text_end" ? [event.content] : []));
 }
 
 function terminalError(events: AssistantMessageEvent[]) {
   const last = events.at(-1);
-  return last?.type === "error" ? (last as any).error.errorMessage : null;
+  return last?.type === "error" ? last.error.errorMessage : null;
 }
 
 const prompt = [{ role: "user", content: "go" }];

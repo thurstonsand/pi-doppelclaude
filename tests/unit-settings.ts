@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import { loadBridgeSettings } from "../src/settings.js";
+import { required } from "./lib/expect.js";
 
 function withSettingsDirs(
   fn: (dirs: { agentDir: string; cwd: string; projectDir: string }) => void,
@@ -130,7 +131,8 @@ describe("loadBridgeSettings", () => {
       const settings = load(cwd, agentDir);
       assert.equal(settings.provider.systemPromptMode, "pi");
       assert.equal(
-        settings.provider.systemPromptReplacements!.documentation.heading,
+        required(settings.provider.systemPromptReplacements, "system prompt replacements")
+          .documentation.heading,
         "Custom documentation",
       );
     }));

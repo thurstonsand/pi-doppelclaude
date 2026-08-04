@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { ModelInfo } from "@anthropic-ai/claude-agent-sdk";
 import type {
+  Api,
   Model,
   ModelsStoreEntry,
   ProviderModelsStore,
@@ -10,10 +11,14 @@ import type {
 import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
 import { createBridgeModelCatalog, type ModelCatalogDependencies } from "../src/model-catalog.js";
 import { claudeCodeModelId, PROVIDER_ID } from "../src/models.js";
+import { required } from "./lib/expect.js";
 
 const builtinModels = getBuiltinModels("anthropic");
-const opus48 = builtinModels.find((model) => model.id === "claude-opus-4-8")!;
-const opus5: Model<any> = {
+const opus48 = required(
+  builtinModels.find((model) => model.id === "claude-opus-4-8"),
+  "Pi's Anthropic catalog to ship claude-opus-4-8",
+);
+const opus5: Model<Api> = {
   ...opus48,
   id: "claude-opus-5",
   name: "Claude Opus 5",
@@ -22,7 +27,7 @@ const opus5: Model<any> = {
     tiers: [{ inputTokensAbove: 200_000, input: 10, output: 37.5, cacheRead: 1, cacheWrite: 12.5 }],
   },
 };
-const future: Model<any> = { ...opus48, id: "claude-opus-6", name: "Claude Opus 6" };
+const future: Model<Api> = { ...opus48, id: "claude-opus-6", name: "Claude Opus 6" };
 const supportedModels: ModelInfo[] = [
   {
     value: "opus[1m]",
@@ -75,7 +80,7 @@ const dated: ModelInfo[] = [
   },
 ];
 
-function response(models: readonly Model<any>[]): Response {
+function response(models: readonly Model<Api>[]): Response {
   return new Response(JSON.stringify(models), {
     status: 200,
     headers: {
@@ -194,7 +199,10 @@ describe("dynamic bridge model catalog", () => {
       models.map((model) => model.id),
       ["claude-opus-5"],
     );
-    const added = models.find((model) => model.id === "claude-opus-5")!;
+    const added = required(
+      models.find((model) => model.id === "claude-opus-5"),
+      "the catalog to include claude-opus-5",
+    );
     assert.equal(added.provider, PROVIDER_ID);
     assert.deepEqual(added.cost, opus5.cost);
     assert.equal(claudeCodeModelId(added), "claude-opus-5[1m]");

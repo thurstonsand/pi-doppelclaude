@@ -5,10 +5,17 @@ import type {
   SDKMirrorErrorMessage,
   SDKModelRefusalFallbackMessage,
   SDKModelRefusalNoFallbackMessage,
+  SDKPartialAssistantMessage,
   SDKResultMessage,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import type { AssistantMessageEventStream, Model, StopReason } from "@earendil-works/pi-ai";
+import type {
+  Api,
+  AssistantMessageEventStream,
+  Model,
+  StopReason,
+  ToolCall,
+} from "@earendil-works/pi-ai";
 import { parse as parsePartialJsonText } from "partial-json";
 import { isCcRejectedToolName, mapSdkToolNameToPi } from "./convert.js";
 import { withReloginHint } from "./dead-query.js";
@@ -153,14 +160,11 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
   function noteRejectedToolCallNames(c: QueryContext): void {
     if (!c.turnOutput) return;
     const rejected = c.turnBlocks.filter(
-      (block: any) => block.type === "toolCall" && isCcRejectedToolName(block.name),
+      (block): block is ToolCall => block.type === "toolCall" && isCcRejectedToolName(block.name),
     );
     if (!rejected.length) return;
     for (const block of rejected) c.rejectedToolCallIds.add(block.id);
-    openRejectionWindow(
-      c,
-      `Claude Code has no tool ${rejected.map((block: any) => block.name).join(", ")}`,
-    );
+    openRejectionWindow(c, `Claude Code has no tool ${rejected.map((b) => b.name).join(", ")}`);
   }
 
   /** Generic dispatch detector: Claude Code must answer every tool_use it emitted,
@@ -185,7 +189,7 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
    *  which the API stamps before the stream opens. */
   function noteServedModel(
     advertised: string | undefined,
-    requested: Model<any>,
+    requested: Model<Api>,
     c: QueryContext,
   ): void {
     if (!advertised || !c.turnOutput) return;
@@ -254,7 +258,7 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
 
   function ensureTurnStarted(c: QueryContext): void {
     if (!c.turnStarted && c.currentPiStream && c.turnOutput) {
-      c.currentPiStream!.push({ type: "start", partial: c.turnOutput });
+      c.currentPiStream.push({ type: "start", partial: c.turnOutput });
       c.turnStarted = true;
     }
   }
@@ -297,17 +301,23 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
     c.currentPiStream = null;
   }
 
+  /** Anthropic's block index is only meaningful while the block is open, so the mapping to
+   *  pi's content position is recorded the moment the block is pushed. */
+  function openStreamBlock(c: QueryContext, streamIndex: number): void {
+    c.openStreamBlocks.set(streamIndex, { contentIndex: c.turnBlocks.length - 1, partialJson: "" });
+  }
+
   /** Maps Anthropic stream events to pi stream events (text, thinking, toolcall).
    *  On message_stop with tool_use: ends currentPiStream so pi can execute the tool. */
   function processStreamEvent(
     message: SDKMessage,
     customToolNameToPi: Map<string, string>,
-    model: Model<any>,
+    model: Model<Api>,
     c: QueryContext,
   ): void {
     if (!c.currentPiStream || !c.turnOutput) return;
     c.turnSawStreamEvent = true;
-    const event = (message as SDKMessage & { event: any }).event;
+    const event = (message as SDKPartialAssistantMessage).event;
 
     if (event?.type === "message_start") {
       noteServedModel(event.message?.model, model, c);
@@ -319,20 +329,17 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
     if (event?.type === "content_block_start") {
       ensureTurnStarted(c);
       if (event.content_block?.type === "text") {
-        c.turnBlocks.push({ type: "text", text: "", index: event.index });
-        c.currentPiStream!.push({
+        c.turnBlocks.push({ type: "text", text: "" });
+        openStreamBlock(c, event.index);
+        c.currentPiStream.push({
           type: "text_start",
           contentIndex: c.turnBlocks.length - 1,
           partial: c.turnOutput,
         });
       } else if (event.content_block?.type === "thinking") {
-        c.turnBlocks.push({
-          type: "thinking",
-          thinking: "",
-          thinkingSignature: "",
-          index: event.index,
-        });
-        c.currentPiStream!.push({
+        c.turnBlocks.push({ type: "thinking", thinking: "", thinkingSignature: "" });
+        openStreamBlock(c, event.index);
+        c.currentPiStream.push({
           type: "thinking_start",
           contentIndex: c.turnBlocks.length - 1,
           partial: c.turnOutput,
@@ -345,10 +352,9 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
           id: event.content_block.id,
           name: mapSdkToolNameToPi(event.content_block.name, customToolNameToPi),
           arguments: (event.content_block.input as Record<string, unknown>) ?? {},
-          partialJson: "",
-          index: event.index,
         });
-        c.currentPiStream!.push({
+        openStreamBlock(c, event.index);
+        c.currentPiStream.push({
           type: "toolcall_start",
           contentIndex: c.turnBlocks.length - 1,
           partial: c.turnOutput,
@@ -360,12 +366,14 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
     }
 
     if (event?.type === "content_block_delta") {
-      const index = c.turnBlocks.findIndex((b: any) => b.index === event.index);
+      const open = c.openStreamBlocks.get(event.index);
+      if (!open) return;
+      const index = open.contentIndex;
       const block = c.turnBlocks[index];
       if (!block) return;
       if (event.delta?.type === "text_delta" && block.type === "text") {
         block.text += event.delta.text;
-        c.currentPiStream!.push({
+        c.currentPiStream.push({
           type: "text_delta",
           contentIndex: index,
           delta: event.delta.text,
@@ -373,16 +381,16 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
         });
       } else if (event.delta?.type === "thinking_delta" && block.type === "thinking") {
         block.thinking += event.delta.thinking;
-        c.currentPiStream!.push({
+        c.currentPiStream.push({
           type: "thinking_delta",
           contentIndex: index,
           delta: event.delta.thinking,
           partial: c.turnOutput,
         });
       } else if (event.delta?.type === "input_json_delta" && block.type === "toolCall") {
-        block.partialJson += event.delta.partial_json;
-        block.arguments = parsePartialJson(block.partialJson, block.arguments);
-        c.currentPiStream!.push({
+        open.partialJson += event.delta.partial_json;
+        block.arguments = parsePartialJson(open.partialJson, block.arguments);
+        c.currentPiStream.push({
           type: "toolcall_delta",
           contentIndex: index,
           delta: event.delta.partial_json,
@@ -397,19 +405,21 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
     }
 
     if (event?.type === "content_block_stop") {
-      const index = c.turnBlocks.findIndex((b: any) => b.index === event.index);
+      const open = c.openStreamBlocks.get(event.index);
+      if (!open) return;
+      c.openStreamBlocks.delete(event.index);
+      const index = open.contentIndex;
       const block = c.turnBlocks[index];
       if (!block) return;
-      delete block.index;
       if (block.type === "text") {
-        c.currentPiStream!.push({
+        c.currentPiStream.push({
           type: "text_end",
           contentIndex: index,
           content: block.text,
           partial: c.turnOutput,
         });
       } else if (block.type === "thinking") {
-        c.currentPiStream!.push({
+        c.currentPiStream.push({
           type: "thinking_end",
           contentIndex: index,
           content: block.thinking,
@@ -417,9 +427,8 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
         });
       } else if (block.type === "toolCall") {
         c.turnSawToolCall = true;
-        block.arguments = parsePartialJson(block.partialJson, block.arguments);
-        delete block.partialJson;
-        c.currentPiStream!.push({
+        block.arguments = parsePartialJson(open.partialJson, block.arguments);
+        c.currentPiStream.push({
           type: "toolcall_end",
           contentIndex: index,
           toolCall: block,
@@ -447,9 +456,9 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
       // pi delivers the tool result via the next streamSimple call.
       c.turnOutput.stopReason = "toolUse";
       const stream = c.currentPiStream;
-      stream!.push({ type: "done", reason: "toolUse", message: c.turnOutput });
+      stream.push({ type: "done", reason: "toolUse", message: c.turnOutput });
       markStreamComplete(stream);
-      stream!.end();
+      stream.end();
       c.currentPiStream = null;
       noteRejectedToolCallNames(c);
 
@@ -458,8 +467,11 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
       return;
     }
 
-    if (event?.type !== "message_stop" && event?.type !== "ping") {
-      debug("processStreamEvent: unhandled event type", event?.type);
+    // The declared event union is narrower than the wire — `ping` is sent but not typed — so
+    // the discriminant is read off the raw shape to keep genuinely new events visible.
+    const type = (event as { type?: string } | undefined)?.type;
+    if (type !== "message_stop" && type !== "ping") {
+      debug("processStreamEvent: unhandled event type", type);
     }
   }
 
@@ -471,7 +483,7 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
   // tool_use to prevent deadlock with the MCP handler.
   function processAssistantMessage(
     message: SDKAssistantMessage,
-    model: Model<any>,
+    model: Model<Api>,
     customToolNameToPi: Map<string, string>,
     c: QueryContext,
   ): void {
@@ -483,9 +495,7 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
     const synthetic = isSyntheticModelId(message.message?.model);
     if (synthetic) {
       const text = (message.message?.content ?? [])
-        .flatMap((block: any) =>
-          block.type === "text" && block.text ? [block.text as string] : [],
-        )
+        .flatMap((block) => (block.type === "text" && block.text ? [block.text] : []))
         .join("\n")
         .trim();
       if (text) c.turnSyntheticText = text;
@@ -499,7 +509,7 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
     const assistantMsg = message.message;
     if (!assistantMsg?.content) return;
     debug(
-      `processAssistantMessage fallback: ${assistantMsg.content.length} blocks, types=${assistantMsg.content.map((b: any) => b.type).join(",")}`,
+      `processAssistantMessage fallback: ${assistantMsg.content.length} blocks, types=${assistantMsg.content.map((b) => b.type).join(",")}`,
     );
     for (const block of assistantMsg.content) {
       if (block.type === "text" && block.text) {
@@ -549,15 +559,14 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
         ensureTurnStarted(c);
         c.turnSawToolCall = true;
         c.shownToolCallIds.add(block.id);
-        const mappedArgs = { ...(block.input as Record<string, unknown> | undefined) };
-        c.turnBlocks.push({
+        const toolCall: ToolCall = {
           type: "toolCall",
           id: block.id,
           name: mapSdkToolNameToPi(block.name, customToolNameToPi),
-          arguments: mappedArgs,
-        });
+          arguments: { ...(block.input as Record<string, unknown> | undefined) },
+        };
+        c.turnBlocks.push(toolCall);
         const idx = c.turnBlocks.length - 1;
-        const toolBlock = c.turnBlocks[idx];
         c.currentPiStream?.push({
           type: "toolcall_start",
           contentIndex: idx,
@@ -566,7 +575,7 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
         c.currentPiStream?.push({
           type: "toolcall_end",
           contentIndex: idx,
-          toolCall: toolBlock as any,
+          toolCall,
           partial: c.turnOutput,
         });
       } else {
@@ -600,7 +609,7 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
 
   function processResultMessage(
     message: SDKResultMessage,
-    currentModel: Model<any>,
+    currentModel: Model<Api>,
     queryCtx: QueryContext,
   ): void {
     logServedContextWindow(debug, "result", message, currentModel);
@@ -679,7 +688,7 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
   function dispatchSdkMessage(
     message: SDKMessage,
     customToolNameToPi: Map<string, string>,
-    model: Model<any>,
+    model: Model<Api>,
     queryCtx: QueryContext,
     hooks: QueryConsumerHooks,
   ): void {
@@ -748,7 +757,7 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
   async function consumeQuery(
     sdkQuery: Query,
     customToolNameToPi: Map<string, string>,
-    model: Model<any>,
+    model: Model<Api>,
     queryCtx: QueryContext,
     hooks: QueryConsumerHooks,
   ): Promise<void> {

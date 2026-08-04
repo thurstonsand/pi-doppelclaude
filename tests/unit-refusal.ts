@@ -5,7 +5,7 @@ import type {
   SDKModelRefusalFallbackMessage,
   SDKModelRefusalNoFallbackMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import { createAssistantMessageEventStream, type Model } from "@earendil-works/pi-ai";
+import { type Api, createAssistantMessageEventStream, type Model } from "@earendil-works/pi-ai";
 import type { CustomEntry, ExtensionUIContext, Theme } from "@earendil-works/pi-coding-agent";
 import { KeybindingsManager, setKeybindings } from "@earendil-works/pi-tui";
 import { createBridgeRuntime } from "../src/bridge-runtime.js";
@@ -22,7 +22,7 @@ const fakeModel = {
   provider: "doppelclaude",
   id: "claude-fable-5",
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-} as Model<any>;
+} as Model<Api>;
 
 // The exact shape the CLI puts on the wire, down to the empty `content` on the no-fallback leg.
 const FALLBACK: SDKModelRefusalFallbackMessage = {

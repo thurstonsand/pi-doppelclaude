@@ -105,7 +105,7 @@ describe("bridge runtime isolation", () => {
     const closing = runtime.test.closeQueryContext(context, "completed", "drain");
     assert.equal(forceClosed, false);
     assert.equal(writerClosed, false, "writer closed before natural EOF");
-    finishQuery!();
+    finishQuery();
     await closing;
     assert.equal(forceClosed, false);
     assert.equal(writerClosed, true, "writer did not close after natural EOF");
@@ -140,7 +140,7 @@ describe("bridge runtime isolation", () => {
     assert.equal(forceClosed, true);
     assert.equal(writerClosed, true);
     assert.equal(runtime.test.getHostSession().needsRebuild, true);
-    finishQuery!();
+    finishQuery();
     await closing;
   });
 
@@ -161,7 +161,7 @@ describe("bridge runtime isolation", () => {
 
     // The child dies on its own, and the consumer's own close absorbs the rejection.
     const closing = runtime.test.closeQueryContext(context, "child exited", "force");
-    killQuery!(new Error("Claude Code process exited with code 1"));
+    killQuery(new Error("Claude Code process exited with code 1"));
     await closing;
 
     // A later provider switch has nothing left to close and must not inherit that failure.

@@ -1,5 +1,6 @@
 import type { ModelUsage } from "@anthropic-ai/claude-agent-sdk";
 import {
+  type Api,
   type AssistantMessage,
   calculateCost,
   type Model,
@@ -21,7 +22,7 @@ export type SdkModelUsage = Record<string, ModelUsage>;
 
 const canonicalModels = new Map(getBuiltinModels("anthropic").map((model) => [model.id, model]));
 
-export function applySdkUsage(output: AssistantMessage, usage: SdkUsage, model: Model<any>): void {
+export function applySdkUsage(output: AssistantMessage, usage: SdkUsage, model: Model<Api>): void {
   if (usage.input_tokens != null) output.usage.input = usage.input_tokens;
   if (usage.output_tokens != null) output.usage.output = usage.output_tokens;
   if (usage.cache_read_input_tokens != null) output.usage.cacheRead = usage.cache_read_input_tokens;
@@ -95,7 +96,7 @@ export interface ModelUsageAccounting {
 
 export function accountSdkModelUsage(
   modelUsage: SdkModelUsage,
-  requestedModel: Model<any>,
+  requestedModel: Model<Api>,
 ): ModelUsageAccounting {
   const aggregate = emptyUsage();
   const servedModels = new Set<string>();
@@ -147,7 +148,7 @@ export function accountSdkModelUsage(
 export function reconcileSdkModelUsage(
   outputs: AssistantMessage[],
   modelUsage: SdkModelUsage,
-  requestedModel: Model<any>,
+  requestedModel: Model<Api>,
 ): ModelUsageAccounting {
   const accounting = accountSdkModelUsage(modelUsage, requestedModel);
   const lastOutput = outputs.at(-1);
@@ -167,7 +168,7 @@ export function reconcileSdkModelUsage(
 export function debugSdkUsage(
   debug: (...args: unknown[]) => void,
   output: AssistantMessage,
-  model: Model<any>,
+  model: Model<Api>,
 ): void {
   const promptTokens = output.usage.input + output.usage.cacheRead + output.usage.cacheWrite;
   const cachePct = promptTokens > 0 ? Math.round((output.usage.cacheRead / promptTokens) * 100) : 0;
