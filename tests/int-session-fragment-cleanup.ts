@@ -23,7 +23,7 @@ try {
 
   const log = readFileSync(harness.DEBUG_LOG, "utf8");
   const sessionPrefix = log.match(
-    /syncResult: path=clean-start[\s\S]*?turn complete, session=([a-f0-9]+)/,
+    /syncResult: path=clean-start[\s\S]*?turn complete, doppel=[^,]+, session=([a-f0-9]+)/,
   )?.[1];
   assert.ok(sessionPrefix, "no clean-start session ID prefix in bridge log");
   const projectDir = getProjectDir(cwd);

@@ -154,7 +154,7 @@ try {
   // session UUID remains stable across normal rebuilds and abort recovery.
   const sessionIds = new Set();
   for (const match of debugLog.matchAll(
-    /syncResult: path=(reuse|rebuild) sessionId=([a-f0-9-]+)/g,
+    /syncResult: path=(reuse|rebuild) doppel=\S+ sessionId=([a-f0-9-]+)/g,
   )) {
     sessionIds.add(match[2]);
   }

@@ -30,7 +30,7 @@ try {
 
   const log = readFileSync(harness.DEBUG_LOG, "utf8");
   const sessionIds = [
-    ...log.matchAll(/syncResult: path=(?:reuse|rebuild) sessionId=([a-f0-9-]+)/g),
+    ...log.matchAll(/syncResult: path=(?:reuse|rebuild) doppel=\S+ sessionId=([a-f0-9-]+)/g),
   ].map((match) => match[1]);
   sessionId = sessionIds[0];
   assert.ok(sessionId, "no shared session ID in bridge log");

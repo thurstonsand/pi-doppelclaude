@@ -39,11 +39,16 @@ const runtime = createBridgeRuntime({
   providerSettings: { systemPromptMode: "claude-code" },
   sessionStore,
 });
+// This runtime stands in for one pi session, so that session is its own host. Without the
+// designation every turn would land on an ephemeral doppel and there would be no host to read.
+const PI_SESSION_ID = "mirror-failure-session";
+await runtime.designateHost(PI_SESSION_ID);
+const streamOptions = { sessionId: PI_SESSION_ID };
 const firstUser = { role: "user", content: "Reply only FIRST.", timestamp: Date.now() } as const;
 
 try {
   const firstContext: Context = { systemPrompt: "You are concise.", messages: [firstUser] };
-  const failed = await terminalMessage(runtime.stream(model, firstContext));
+  const failed = await terminalMessage(runtime.stream(model, firstContext, streamOptions));
   assert.equal(failed.stopReason, "error");
   assert.match(failed.errorMessage ?? "", /transcript mirror failed.*deliberate mirror failure/i);
   const invalidated = runtime.test.getHostSession();
@@ -63,7 +68,7 @@ try {
     systemPrompt: "You are concise.",
     messages: [firstUser, failed, secondUser],
   };
-  const recovered = await terminalMessage(runtime.stream(model, secondContext));
+  const recovered = await terminalMessage(runtime.stream(model, secondContext, streamOptions));
   assert.equal(recovered.stopReason, "stop");
   assert.match(
     recovered.content.map((block) => (block.type === "text" ? block.text : "")).join(""),

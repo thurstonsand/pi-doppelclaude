@@ -42,10 +42,10 @@ try {
   const fullLog = readFileSync(DEBUG_LOG, "utf8");
   const postNewLog = fullLog.slice(NEW_MARKER_LOG);
 
-  // The bridge logs `session_start:new: clearing session ...` when it
+  // The bridge logs `session_start:new: clearing <doppel labels>` when it
   // observes the event. Make sure we saw it.
-  if (!/session_start:new: clearing session/.test(postNewLog)) {
-    throw new Error("no `session_start:new: clearing session` marker — bridge didn't observe /new");
+  if (!/session_start:new: clearing /.test(postNewLog)) {
+    throw new Error("no `session_start:new: clearing` marker — bridge didn't observe /new");
   }
 
   // First syncResult after /new must be clean-start (sharedSession=null,

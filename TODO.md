@@ -37,7 +37,9 @@
   narrows this for session sync (tests parse a single targeted line per
   decision instead of the old Case-1/2/3/4 labels), but it's still grep-based.
   A proper diagnostic channel (NDJSON or dedicated diagLog entries) would be
-  cleaner and resilient to log-format churn.
+  cleaner and resilient to log-format churn. Adding `doppel=<kind>:<key8>` to
+  those lines silently broke five session integration tests for three commits
+  — they only run against live quota, so nothing caught the drift.
 
 ## Upstream Gaps
 
