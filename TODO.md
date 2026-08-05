@@ -18,6 +18,17 @@
 
 ## Possible Enhancements
 
+- **Explore `forkSession` for rewinds and guest doppels**: the SDK exposes a
+  `forkSession` option that neither this bridge nor upstream uses. Today a
+  divergent history costs a full `rebuild` — synthesize every prior message and
+  atomically replace the store entry — which throws away CC's prompt cache. A
+  fork branches from an existing session instead, so `/undo` and session-tree
+  navigation to a shorter context might keep the cache warm rather than pay for
+  a cold rebuild. The same option may be the natural way to spawn a guest doppel
+  from a host, instead of building its transcript from nothing. Worth measuring
+  before adopting: confirm a fork actually preserves cache across the branch
+  point, and that forked ids stay distinct in the SessionStore.
+
 - **AskUserQuestion pi shim** (main provider only): CC never sees
   AskUserQuestion (it's in `DISALLOWED_BUILTIN_TOOLS`), so it can't ask the
   user questions interactively. Port a pi-native version using `ctx.ui.custom()`

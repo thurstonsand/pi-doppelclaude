@@ -7,8 +7,10 @@ export const PROVIDER_API = "doppelclaude";
 export const PROVIDER_BASE_URL = "claude-code://local";
 
 // The marker survives modelOverrides but cannot be supplied by models.json, so user-defined
-// replacements never cross the provider boundary as catalog-confirmed models.
-const BRIDGE_MODEL = Symbol("pi-doppelclaude.model");
+// replacements never cross the provider boundary as catalog-confirmed models. Symbol.for, not
+// Symbol: /reload re-evaluates the module graph, and models projected by the previous generation
+// must still pass the new generation's check.
+const BRIDGE_MODEL = Symbol.for("pi-doppelclaude.model");
 const MODEL_FAMILIES_IN_ORDER = ["fable", "opus", "sonnet", "haiku"];
 const NUMERIC_MODEL_VERSION = /^\d+$/u;
 const SHORT_MODEL_VERSION_PART = /^\d{1,2}$/u;

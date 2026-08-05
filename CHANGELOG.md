@@ -2,6 +2,12 @@
 
 # Changelog
 
+## 0.8.2 — 2026-08-04
+
+### Fixed
+
+- **`/reload` no longer breaks the session with "Unsupported Doppelclaude model"** — after a reload, the next message could fail with `Unsupported Doppelclaude model: doppelclaude/<model>`, and stayed broken until the model was picked again from `/model`.
+
 ## 0.8.1 — 2026-08-04
 
 A review pass over upstream [`pi-claude-bridge`](https://github.com/elidickinson/pi-claude-bridge)'s recent activity; the fixes below are ported from it.
