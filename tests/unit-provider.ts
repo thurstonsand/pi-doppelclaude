@@ -172,7 +172,7 @@ describe("ambient Claude Code auth", () => {
     assert.equal(probes, 0);
   });
 
-  it("probes only when the catalog asks and withdraws auth once it reports logout", async () => {
+  it("probes only when the catalog asks and reports Claude Code's login remedy", async () => {
     let probes = 0;
     let snapshot = availableAccount;
     const provider = providerWith(undefined, async () => {
@@ -188,8 +188,12 @@ describe("ambient Claude Code auth", () => {
     snapshot = unavailableAccount;
     await provider.refreshModels({ store, allowNetwork: true });
     assert.equal(probes, 1);
-    assert.equal(await apiKey.check(authInput), undefined);
-    assert.equal(await apiKey.resolve(authInput), undefined);
+    const loginRemedy = {
+      message:
+        "Claude Code is not authenticated. Run `claude auth login`, then restart pi or open `/model` to refresh authentication.",
+    };
+    await assert.rejects(apiKey.check(authInput), loginRemedy);
+    await assert.rejects(apiKey.resolve(authInput), loginRemedy);
 
     snapshot = availableAccount;
     await provider.refreshModels({ store, allowNetwork: true });

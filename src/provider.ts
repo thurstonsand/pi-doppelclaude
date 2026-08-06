@@ -64,11 +64,24 @@ export function createAnthropicAgentSdkProvider(
   };
 
   // Claude Code authenticates its own subprocess, so the bridge holds no credential to validate.
-  // Ambient auth stands until a completed probe reports the account logged out.
-  const authenticated = () => lastSnapshot?.available !== false;
-  const check = async () =>
-    authenticated() ? { type: "api_key" as const, source: "Claude Code" } : undefined;
-  const resolve = async () => (authenticated() ? { auth: {}, source: "Claude Code" } : undefined);
+  // Ambient auth stands until a completed probe reports the account logged out. Once it does,
+  // reject with Claude Code's remedy instead of letting Pi misdiagnose the empty ambient credential
+  // as a missing Doppelclaude API key.
+  const requireAuthentication = () => {
+    if (lastSnapshot?.available === false) {
+      throw new Error(
+        "Claude Code is not authenticated. Run `claude auth login`, then restart pi or open `/model` to refresh authentication.",
+      );
+    }
+  };
+  const check = async () => {
+    requireAuthentication();
+    return { type: "api_key" as const, source: "Claude Code" };
+  };
+  const resolve = async () => {
+    requireAuthentication();
+    return { auth: {}, source: "Claude Code" };
+  };
 
   const validatedStream = (
     model: Model<Api>,
