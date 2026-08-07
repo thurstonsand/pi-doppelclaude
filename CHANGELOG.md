@@ -2,6 +2,20 @@
 
 # Changelog
 
+## 0.9.0 — 2026-08-06
+
+### Changed
+
+- **Requires pi 0.84** — the model catalog now rides pi's publication contract: pi owns catalog storage, supersession fencing, and write ordering, so the bridge's own generation counter and write chain are gone. Failed fetch attempts are recorded as ordinary checks, matching pi's catalog flow.
+
+### Added
+
+- **Catalog refetches revalidate with ETag** — the 4-hourly pi.dev catalog fetch sends `If-None-Match` and takes the body-less 304 when nothing changed.
+
+### Fixed
+
+- **A logged-out Claude Code is reported as such** — instead of Pi's misleading "No API key found for doppelclaude" pointing at the unrelated `/login` flow, auth failures now name `claude auth login` and the restart/`/model` recovery paths.
+
 ## 0.8.2 — 2026-08-04
 
 ### Fixed

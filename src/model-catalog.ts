@@ -1,11 +1,5 @@
 import type { ModelInfo } from "@anthropic-ai/claude-agent-sdk";
-import type {
-  Api,
-  Model,
-  ModelsStoreEntry,
-  ProviderModelsStore,
-  RefreshModelsContext,
-} from "@earendil-works/pi-ai";
+import type { Api, Model, RefreshModelsContext } from "@earendil-works/pi-ai";
 import {
   getBuiltinModelDataGeneratedAt,
   getBuiltinModels,
@@ -69,8 +63,8 @@ const CATALOG_SCHEMA = Type.Union([
 const STORE_ENTRY_SCHEMA = Type.Object({
   models: CANONICAL_MODELS_SCHEMA,
   checkedAt: Type.Optional(Type.Number()),
-  failedAt: Type.Optional(Type.Number()),
   lastModified: Type.Optional(Type.Number()),
+  etag: Type.Optional(Type.String()),
   supportedModelIds: Type.Optional(Type.Array(Type.String())),
   observedModelIds: Type.Optional(Type.Array(Type.String())),
 });
@@ -79,7 +73,7 @@ type CanonicalModel = Static<typeof CANONICAL_MODEL_SCHEMA>;
 type StoredCatalog = Static<typeof STORE_ENTRY_SCHEMA>;
 
 export interface ModelCatalogDependencies {
-  requestCatalog(signal?: AbortSignal): Promise<Response>;
+  requestCatalog(signal: AbortSignal, etag?: string): Promise<Response>;
   now(): number;
   builtinGeneratedAt: number | undefined;
   builtinModels: readonly Model<Api>[];
@@ -157,8 +151,11 @@ export interface BridgeModelCatalog {
 
 function defaultDependencies(): ModelCatalogDependencies {
   return {
-    requestCatalog: (signal) =>
-      fetch(CATALOG_URL, { headers: { accept: "application/json" }, signal }),
+    requestCatalog: (signal, etag) =>
+      fetch(CATALOG_URL, {
+        headers: { accept: "application/json", ...(etag ? { "if-none-match": etag } : {}) },
+        signal,
+      }),
     now: Date.now,
     builtinGeneratedAt: getBuiltinModelDataGeneratedAt(),
     builtinModels: getBuiltinModels("anthropic"),
@@ -173,25 +170,22 @@ export function createBridgeModelCatalog(
   let advertisedIds: ReadonlySet<string> = new Set();
   const observedIds = new Set<string>();
   let dynamicLastModified = -1;
-  // `context.store` is a fixed closure over Pi's store, not a capability scoped to the refresh
-  // that hands it over, so the catalog keeps it and persists observations as they happen. The
-  // alternative — waiting for the next refresh — forgets a model observed minutes before a quit.
-  let store: ProviderModelsStore | null = null;
-  // A refresh and a mid-turn observation both write the same entry. Serializing them, and building
-  // each write from a freshly read entry plus the live observed set, keeps either from overwriting
-  // the other with a stale snapshot. Cross-process, Pi's file store locks each read and write; this
-  // only orders writes within one process.
-  let writeChain: Promise<void> = Promise.resolve();
+  // Pi owns storage and mints a fresh generation-fenced publish capability per refresh, so the
+  // current capability doubles as the supersession token: keeping the latest one lets a model
+  // first observed mid-turn persist immediately, and a persist built by an older refresh compares
+  // unequal and is dropped before it can clobber a newer refresh's entry. Building the entry,
+  // updating the shadow, and calling publish share one synchronous step, so call order and pi's
+  // per-provider publication chain agree on the final entry even when writers overlap.
+  let storedCatalog: StoredCatalog | undefined;
+  let publish: RefreshModelsContext["publish"] | undefined;
   const persist = (
-    build: (stored: StoredCatalog | undefined) => ModelsStoreEntry,
-  ): Promise<void> => {
-    const target = store;
-    if (!target) return Promise.resolve();
-    const operation = writeChain.then(async () => {
-      await target.write(build(parseStoreEntry(await target.read())));
-    });
-    writeChain = operation.catch(() => {});
-    return operation;
+    target: RefreshModelsContext["publish"],
+    entry: StoredCatalog,
+    update?: () => void,
+  ): Promise<boolean> => {
+    if (target !== publish) return Promise.resolve(false);
+    storedCatalog = entry;
+    return target({ persist: entry, update });
   };
 
   // Pi's bundled metadata is the floor and a canonical catalog overlays it, so a model Claude Code
@@ -209,17 +203,13 @@ export function createBridgeModelCatalog(
     models = [...merged.values()].sort(compareModels);
   };
 
-  // Each refresh takes the next generation. Two refreshes racing must not let the one that started
-  // earlier install its older allowlist or overlay after the later one has already published, so an
-  // obsolete generation neither applies models nor persists.
-  let generation = 0;
+  // Applied only inside a publish `update`, so pi's generation fence has already ruled out a
+  // superseded refresh installing an older allowlist or overlay.
   const applyModels = (
     overlay: readonly Model<Api>[],
     allowedIds: ReadonlySet<string>,
     lastModified: number,
-    forGeneration: number,
   ) => {
-    if (forGeneration < generation) return;
     advertisedIds = allowedIds;
     if (lastModified >= dynamicLastModified) {
       overlayModels = overlay;
@@ -239,11 +229,16 @@ export function createBridgeModelCatalog(
     return entry;
   };
 
-  const fetchCatalog = async (signal?: AbortSignal): Promise<StoredCatalog> => {
-    const deadline = AbortSignal.timeout(CATALOG_TIMEOUT_MS);
+  // `undefined` reports a 304: the validated catalog is unchanged, so the cached body stands.
+  const fetchCatalog = async (
+    signal: AbortSignal,
+    validator: string | undefined,
+  ): Promise<StoredCatalog | undefined> => {
     const response = await dependencies.requestCatalog(
-      signal ? AbortSignal.any([signal, deadline]) : deadline,
+      AbortSignal.any([signal, AbortSignal.timeout(CATALOG_TIMEOUT_MS)]),
+      validator,
     );
+    if (validator !== undefined && response.status === 304) return undefined;
     if (!response.ok)
       throw new Error(`Pi Anthropic model catalog request failed: ${response.status}`);
     const canonical = parseCanonicalModels(await response.json());
@@ -252,6 +247,7 @@ export function createBridgeModelCatalog(
       models: canonical,
       checkedAt: dependencies.now(),
       lastModified: Number.isNaN(parsedLastModified) ? 0 : parsedLastModified,
+      etag: response.headers.get("etag") ?? undefined,
     };
   };
 
@@ -264,26 +260,23 @@ export function createBridgeModelCatalog(
       debug(
         `model-catalog: observed served model ${id}${models.some((model) => model.id === id) ? "" : " (undescribed)"}`,
       );
-      if (!store) return;
+      if (!publish) return;
       // An entry with no `supportedModelIds` reads as a never-probed installation on the next start,
       // collapsing the catalog to observed models only, so the confirmed allowlist is carried too.
-      await persist(
-        (stored) =>
-          ({
-            ...(stored ?? { models: [] }),
-            supportedModelIds: stored?.supportedModelIds ?? [...advertisedIds].sort(),
-            observedModelIds: [...observedIds].sort(),
-          }) as ModelsStoreEntry,
-      );
+      const stored = storedCatalog;
+      await persist(publish, {
+        ...(stored ?? { models: [] }),
+        supportedModelIds: stored?.supportedModelIds ?? [...advertisedIds].sort(),
+        observedModelIds: [...observedIds].sort(),
+      });
     },
     // Pi replays this refresh with `allowNetwork: false` on every start, so the offline branch
     // is the whole cold-start catalog: newly shipped built-ins plus the last canonical fetch,
     // both narrowed by the allowlist Claude Code confirmed the last time it was asked.
     async refresh(context, requestSupportedModels) {
-      store = context.store;
-      const thisGeneration = ++generation;
-      const superseded = () => thisGeneration < generation || context.signal?.aborted;
-      const stored = parseStoreEntry(await context.store.read());
+      const stored = parseStoreEntry(context.stored);
+      publish = context.publish;
+      storedCatalog = stored;
       for (const id of stored?.observedModelIds ?? []) observedIds.add(id);
       // An installation that has never asked Claude Code has no allowlist to replay, so its first
       // refresh discovers even while Pi is only replaying caches. Once the probe answers, a fetched
@@ -294,16 +287,17 @@ export function createBridgeModelCatalog(
         ? advertisedModelIds(await requestSupportedModels())
         : new Set(stored?.supportedModelIds ?? []);
       const overlay = overlayFor(stored);
-      applyModels(
-        overlay?.models ?? [],
-        allowedIds,
-        overlay?.lastModified ?? dependencies.builtinGeneratedAt ?? 0,
-        thisGeneration,
-      );
-      if (!discovering || superseded()) return;
+      const restored = await context.publish({
+        update: () =>
+          applyModels(
+            overlay?.models ?? [],
+            allowedIds,
+            overlay?.lastModified ?? dependencies.builtinGeneratedAt ?? 0,
+          ),
+      });
+      if (!discovering || !restored) return;
 
       const supportedModelIds = [...allowedIds].sort();
-      const lastAttemptAt = Math.max(stored?.checkedAt ?? 0, stored?.failedAt ?? 0);
       // Claude Code can begin serving a model that neither the built-ins nor the cached catalog
       // describe. An allowlist entry alone cannot surface it, so freshness yields to a refetch.
       const undescribed = [...supportedModelIds, ...observedIds].some(
@@ -313,55 +307,58 @@ export function createBridgeModelCatalog(
         !context.force &&
         !undescribed &&
         stored?.lastModified !== undefined &&
-        dependencies.now() - lastAttemptAt < REFRESH_INTERVAL_MS
+        dependencies.now() - (stored.checkedAt ?? 0) < REFRESH_INTERVAL_MS
       ) {
         // A still-fresh canonical catalog must record what Claude Code just advertised, or the
         // next cold start replays a stale allowlist and drops a newly served model.
-        if (!superseded() && !sameModelIds(stored.supportedModelIds, supportedModelIds)) {
-          await persist(
-            (latest) =>
-              ({
-                ...(latest ?? stored),
-                supportedModelIds,
-                observedModelIds: [...observedIds].sort(),
-              }) as ModelsStoreEntry,
-          );
+        if (!sameModelIds(stored.supportedModelIds, supportedModelIds)) {
+          await persist(context.publish, {
+            ...(storedCatalog ?? stored),
+            supportedModelIds,
+            observedModelIds: [...observedIds].sort(),
+          });
         }
         return;
       }
 
       try {
-        const canonicalEntry = await fetchCatalog(context.signal);
-        if (superseded()) return;
-        applyModels(
-          canonicalEntry.models,
-          allowedIds,
-          canonicalEntry.lastModified ?? 0,
-          thisGeneration,
-        );
-        // An observation that landed during the fetch is already in `observedIds`; reading it at
-        // write time keeps this catalog from overwriting it with a pre-fetch snapshot.
+        // Only revalidate when a cached body backs the validator, so a 304 can never leave the
+        // catalog empty.
+        const validator = stored?.models.length ? stored.etag : undefined;
+        const canonicalEntry = await fetchCatalog(context.signal, validator);
+        if (canonicalEntry === undefined) {
+          // Unchanged: the restore already applied the cached overlay, so only the freshness
+          // window and the allowlist move.
+          await persist(context.publish, {
+            ...(storedCatalog ?? stored ?? { models: [] }),
+            supportedModelIds,
+            observedModelIds: [...observedIds].sort(),
+            checkedAt: dependencies.now(),
+          });
+          return;
+        }
+        // An observation that landed during the fetch is already in `observedIds`, so this write
+        // carries it instead of overwriting it with a pre-fetch snapshot.
         await persist(
-          () =>
-            ({
-              ...canonicalEntry,
-              supportedModelIds,
-              observedModelIds: [...observedIds].sort(),
-            }) as ModelsStoreEntry,
+          context.publish,
+          {
+            ...canonicalEntry,
+            supportedModelIds,
+            observedModelIds: [...observedIds].sort(),
+          },
+          () => applyModels(canonicalEntry.models, allowedIds, canonicalEntry.lastModified ?? 0),
         );
       } catch (error) {
-        if (!superseded()) {
+        if (!context.signal.aborted) {
           // The probe already confirmed this allowlist. Dropping it here would strand later starts
           // on an empty catalog, or replay a stale one, over models the built-ins can describe.
-          await persist(
-            (latest) =>
-              ({
-                ...(latest ?? stored ?? { models: [] }),
-                supportedModelIds,
-                observedModelIds: [...observedIds].sort(),
-                failedAt: dependencies.now(),
-              }) as ModelsStoreEntry,
-          );
+          // Stamping `checkedAt` on the failure throttles retries, matching pi's own catalog flow.
+          await persist(context.publish, {
+            ...(storedCatalog ?? { models: [] }),
+            supportedModelIds,
+            observedModelIds: [...observedIds].sort(),
+            checkedAt: dependencies.now(),
+          });
         }
         throw error;
       }

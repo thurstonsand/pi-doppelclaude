@@ -1,13 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { ModelInfo } from "@anthropic-ai/claude-agent-sdk";
-import type {
-  Api,
-  Model,
-  ModelsStoreEntry,
-  ProviderModelsStore,
-  RefreshModelsContext,
-} from "@earendil-works/pi-ai";
+import type { Api, Model, ModelsStoreEntry, RefreshModelsContext } from "@earendil-works/pi-ai";
 import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
 import { createBridgeModelCatalog, type ModelCatalogDependencies } from "../src/model-catalog.js";
 import { claudeCodeModelId, PROVIDER_ID } from "../src/models.js";
@@ -46,25 +40,33 @@ const undescribedModels: ModelInfo[] = [
   },
 ];
 
-function memoryStore(
-  initial?: ModelsStoreEntry,
-): ProviderModelsStore & { entry?: ModelsStoreEntry } {
+interface MemoryStore {
+  entry?: ModelsStoreEntry;
+  write(entry: ModelsStoreEntry): Promise<void>;
+}
+
+function memoryStore(initial?: ModelsStoreEntry): MemoryStore {
   return {
     entry: initial,
-    async read() {
-      return this.entry;
-    },
     async write(entry) {
       this.entry = structuredClone(entry);
-    },
-    async delete() {
-      this.entry = undefined;
     },
   };
 }
 
-function context(store: ProviderModelsStore, allowNetwork: boolean): RefreshModelsContext {
-  return { store, allowNetwork, force: true };
+function context(store: MemoryStore, allowNetwork: boolean): RefreshModelsContext {
+  return {
+    stored: store.entry,
+    allowNetwork,
+    force: true,
+    signal: new AbortController().signal,
+    async publish(publication) {
+      if (publication.persist === null) store.entry = undefined;
+      else if (publication.persist !== undefined) await store.write(publication.persist);
+      publication.update?.();
+      return true;
+    },
+  };
 }
 
 const advertises = (models: readonly ModelInfo[]) => async () => models;
@@ -405,7 +407,7 @@ describe("first load", () => {
     );
   });
 
-  it("records failed attempts separately from successful checks", async () => {
+  it("stamps a failed attempt as the last check so retries are throttled", async () => {
     const checkedAt = Date.parse("2026-07-24T00:00:00Z");
     const failedAt = Date.parse("2026-07-25T00:00:00Z");
     const store = memoryStore({ models: builtinModels, checkedAt, lastModified: checkedAt });
@@ -420,8 +422,8 @@ describe("first load", () => {
       catalog.refresh(context(store, true), advertises(supportedModels)),
       /offline/,
     );
-    assert.equal(store.entry?.checkedAt, checkedAt);
-    assert.equal((store.entry as ModelsStoreEntry & { failedAt: number }).failedAt, failedAt);
+    assert.equal(store.entry?.checkedAt, failedAt);
+    assert.equal(store.entry?.lastModified, checkedAt, "the cached catalog survives the failure");
   });
 
   it("offers a model Claude served but never advertised, and replays it on the next start", async () => {
@@ -551,7 +553,7 @@ describe("first load", () => {
       this.entry = structuredClone(entry);
     };
     await assert.rejects(catalog.noteServedModel("claude-opus-4-8"), /disk full/);
-    // A poisoned write chain would silently skip this second write; it must still land.
+    // A failed write must not wedge later persists; this second write must still land.
     await catalog.noteServedModel("claude-sonnet-5");
     assert.deepEqual(
       (store.entry as ModelsStoreEntry & { observedModelIds: string[] }).observedModelIds,
@@ -576,6 +578,121 @@ describe("first load", () => {
     assert.deepEqual(
       (store.entry as ModelsStoreEntry & { observedModelIds: string[] }).observedModelIds,
       [],
+    );
+  });
+
+  it("stores the catalog validator, sending none while no cached body backs one", async () => {
+    const store = memoryStore();
+    let sentValidator: string | undefined = "unset";
+    const catalog = createBridgeModelCatalog({
+      ...testDependencies,
+      now: () => Date.parse("2026-07-25T00:00:00Z"),
+      requestCatalog: async (_signal, etag) => {
+        sentValidator = etag;
+        return new Response(JSON.stringify([...builtinModels, opus5]), {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+            "last-modified": "Fri, 24 Jul 2026 19:15:06 GMT",
+            etag: '"catalog-v1"',
+          },
+        });
+      },
+    });
+    await catalog.refresh(context(store, true), advertises(supportedModels));
+    assert.equal(sentValidator, undefined, "no cached body backs a validator yet");
+    assert.equal(store.entry?.etag, '"catalog-v1"');
+  });
+
+  it("moves only the freshness window when the catalog answers 304", async () => {
+    const checkedAt = Date.parse("2026-07-20T00:00:00Z");
+    const revalidatedAt = Date.parse("2026-07-25T00:00:00Z");
+    const store = memoryStore({
+      models: [...builtinModels, opus5],
+      checkedAt,
+      lastModified: Date.parse("2026-07-24T19:15:06Z"),
+      etag: '"catalog-v1"',
+      supportedModelIds: ["claude-opus-5"],
+    } as ModelsStoreEntry);
+    let sentValidator: string | undefined;
+    const catalog = createBridgeModelCatalog({
+      ...testDependencies,
+      now: () => revalidatedAt,
+      requestCatalog: async (_signal, etag) => {
+        sentValidator = etag;
+        return new Response(null, { status: 304 });
+      },
+    });
+    await catalog.refresh(context(store, true), advertises(supportedModels));
+    assert.equal(sentValidator, '"catalog-v1"');
+    assert.equal(store.entry?.checkedAt, revalidatedAt);
+    assert.equal(store.entry?.etag, '"catalog-v1"');
+    assert.ok(
+      store.entry?.models.some((model) => model.id === "claude-opus-5"),
+      "the cached body survives revalidation",
+    );
+    assert.ok(catalog.getModels().some((model) => model.id === "claude-opus-5"));
+  });
+
+  it("stops when pi reports the restore publication superseded", async () => {
+    let asked = 0;
+    const catalog = createBridgeModelCatalog({
+      ...testDependencies,
+      requestCatalog: async () => {
+        throw new Error("a superseded refresh must not fetch");
+      },
+    });
+    const superseded: RefreshModelsContext = {
+      allowNetwork: true,
+      force: true,
+      signal: new AbortController().signal,
+      async publish() {
+        return false;
+      },
+    };
+    await catalog.refresh(superseded, async () => {
+      asked++;
+      return supportedModels;
+    });
+    assert.equal(asked, 1, "discovery precedes the restore publication");
+    assert.deepEqual(catalog.getModels(), [], "a refused update must not be applied");
+  });
+
+  it("drops a stale refresh's write instead of clobbering a newer one", async () => {
+    let releaseFetch = () => {};
+    const gate = new Promise<void>((resolve) => {
+      releaseFetch = resolve;
+    });
+    const catalog = createBridgeModelCatalog({
+      ...testDependencies,
+      now: () => Date.parse("2026-07-25T00:00:00Z"),
+      requestCatalog: async () => {
+        await gate;
+        return response([...builtinModels, opus5, future]);
+      },
+    });
+
+    const staleStore = memoryStore();
+    const staleRefresh = catalog.refresh(
+      context(staleStore, true),
+      advertises([...supportedModels, { ...supportedModels[0], resolvedModel: "claude-opus-6" }]),
+    );
+
+    const newerStore = memoryStore({
+      models: [...builtinModels, opus5],
+      checkedAt: Date.parse("2026-07-25T00:00:00Z"),
+      lastModified: Date.parse("2026-07-24T19:15:06Z"),
+      supportedModelIds: ["claude-opus-5"],
+    } as ModelsStoreEntry);
+    await catalog.refresh(context(newerStore, false), neverAsked);
+
+    releaseFetch();
+    await staleRefresh;
+    assert.equal(staleStore.entry, undefined, "the stale refresh must not persist");
+    assert.deepEqual(
+      catalog.getModels().map((model) => model.id),
+      ["claude-opus-5"],
+      "the stale refresh's fetched catalog must not be applied",
     );
   });
 

@@ -9,8 +9,7 @@ import {
   type Context,
   createAssistantMessageEventStream,
   type Model,
-  type ModelsStoreEntry,
-  type ProviderModelsStore,
+  type RefreshModelsContext,
   type SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
@@ -33,6 +32,7 @@ const authInput = {
     env: async (): Promise<string | undefined> => undefined,
     fileExists: async (): Promise<boolean> => false,
   },
+  signal: new AbortController().signal,
 };
 const tempDirs: string[] = [];
 
@@ -67,17 +67,13 @@ function successfulStream(model: Model<Api>) {
 const availableAccount: AccountSnapshot = { available: true, supportedModels: [] };
 const unavailableAccount: AccountSnapshot = { available: false, supportedModels: [] };
 
-function memoryStore(): ProviderModelsStore {
-  let entry: ModelsStoreEntry | undefined;
+function refreshContext(allowNetwork: boolean): RefreshModelsContext {
   return {
-    async read() {
-      return entry;
-    },
-    async write(written) {
-      entry = structuredClone(written);
-    },
-    async delete() {
-      entry = undefined;
+    allowNetwork,
+    signal: new AbortController().signal,
+    async publish(publication) {
+      publication.update?.();
+      return true;
     },
   };
 }
@@ -179,14 +175,13 @@ describe("ambient Claude Code auth", () => {
       probes++;
       return snapshot;
     });
-    const store = memoryStore();
     const apiKey = required(provider.auth.apiKey, "ambient apiKey auth");
 
-    await provider.refreshModels({ store, allowNetwork: false });
+    await provider.refreshModels(refreshContext(false));
     assert.equal(probes, 0);
 
     snapshot = unavailableAccount;
-    await provider.refreshModels({ store, allowNetwork: true });
+    await provider.refreshModels(refreshContext(true));
     assert.equal(probes, 1);
     const loginRemedy = {
       message:
@@ -196,7 +191,7 @@ describe("ambient Claude Code auth", () => {
     await assert.rejects(apiKey.resolve(authInput), loginRemedy);
 
     snapshot = availableAccount;
-    await provider.refreshModels({ store, allowNetwork: true });
+    await provider.refreshModels(refreshContext(true));
     assert.equal(probes, 2);
     assert.deepEqual(await apiKey.check(authInput), {
       type: "api_key",
@@ -210,10 +205,7 @@ describe("ambient Claude Code auth", () => {
         "Claude Code authentication check failed. Run `claude auth login` and try again.",
       );
     });
-    await assert.rejects(
-      provider.refreshModels({ store: memoryStore(), allowNetwork: true }),
-      /claude auth login/,
-    );
+    await assert.rejects(provider.refreshModels(refreshContext(true)), /claude auth login/);
     assert.deepEqual(await required(provider.auth.apiKey, "ambient apiKey auth").check(authInput), {
       type: "api_key",
       source: "Claude Code",
@@ -230,8 +222,8 @@ describe("ambient Claude Code auth", () => {
       });
     });
     const refreshes = Promise.all([
-      provider.refreshModels({ store: memoryStore(), allowNetwork: true }),
-      provider.refreshModels({ store: memoryStore(), allowNetwork: true }),
+      provider.refreshModels(refreshContext(true)),
+      provider.refreshModels(refreshContext(true)),
     ]);
     await Promise.resolve();
     resolveProbe(availableAccount);
