@@ -2,6 +2,17 @@
 
 # Changelog
 
+## 0.10.0 — 2026-08-16
+
+### Fixed
+
+- **Tool calls stream** — a `write` or `bash` call wouldn't stream in as it writes. The bridge now requests streaming so it doesn't just sit there until completion.
+- **Long tool descriptions arrive whole** — Claude Code truncates every MCP tool description at 2048 characters, and pi has no such limit, so oversized descriptions were getting cut off. Migrate those descriptions (only) to the system prompt where there's no length limit.
+
+### Added
+
+- **`toolDescriptionCap` setting** — unset probes the Claude Code binary for its actual limit, a number pins it, `false` turns the relocation off.
+
 ## 0.9.0 — 2026-08-06
 
 ### Changed
