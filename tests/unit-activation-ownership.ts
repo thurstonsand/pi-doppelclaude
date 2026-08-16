@@ -21,7 +21,7 @@ const agentDir = mkdtempSync(join(tmpdir(), "activation-ownership-agent-"));
 process.env.PI_CODING_AGENT_DIR = agentDir;
 writeFileSync(
   join(agentDir, "settings.json"),
-  '{"doppelclaude":{"provider":{"systemPromptMode":"claude-code"}}}\n',
+  '{"doppelclaude":{"provider":{"systemPromptMode":"claude-code","toolDescriptionCap":2048}}}\n',
 );
 
 const OWNER_KEY = Symbol.for("doppelclaude:owner");

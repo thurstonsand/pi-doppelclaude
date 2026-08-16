@@ -70,6 +70,13 @@ describe("rewritePiSystemPrompt", () => {
     assert.match(systemPrompt, /Custom docs:/);
   });
 
+  it("separates the prompt from Claude Code's preceding identity block", () => {
+    const systemPrompt = buildClaudeSystemPrompt(SYSTEM_PROMPT, "pi", REPLACEMENTS);
+
+    assert(typeof systemPrompt === "string");
+    assert.ok(systemPrompt.startsWith(" Custom identity."));
+  });
+
   it("appends the rewritten Pi system prompt to Claude Code's preset", () => {
     const systemPrompt = buildClaudeSystemPrompt(SYSTEM_PROMPT, "append", REPLACEMENTS);
 

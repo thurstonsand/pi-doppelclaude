@@ -5,6 +5,7 @@ import { acquireBridgeOwner } from "./bridge-owner.js";
 import { createBridgeRuntime } from "./bridge-runtime.js";
 import { createCompaction } from "./compaction.js";
 import { configureDebug, debug, errorMessage, moduleInstanceId } from "./debug.js";
+import { createDefaultToolDescriptionCap } from "./description-cap.js";
 import { createBridgeModelCatalog } from "./model-catalog.js";
 import { PROVIDER_ID } from "./models.js";
 import { createAnthropicAgentSdkProvider } from "./provider.js";
@@ -18,6 +19,7 @@ export default function activate(pi: ExtensionAPI): void {
   configureDebug(settings.debug);
   debug("loadSettings:", JSON.stringify(settings));
   const { provider: providerSettings } = settings;
+  const toolDescriptionCap = createDefaultToolDescriptionCap(providerSettings);
 
   const compaction = createCompaction({
     queryFactory: query,
@@ -30,7 +32,11 @@ export default function activate(pi: ExtensionAPI): void {
     // The runtime teaches the catalog which models Claude actually serves and the provider
     // publishes them, so both sides of that exchange hold the same catalog.
     const modelCatalog = createBridgeModelCatalog();
-    const runtime = createBridgeRuntime({ providerSettings, modelCatalog });
+    const runtime = createBridgeRuntime({
+      providerSettings,
+      modelCatalog,
+      getToolDescriptionCap: toolDescriptionCap.get,
+    });
     const provider = createAnthropicAgentSdkProvider({
       stream: runtime.stream,
       accountProbe: createDefaultAccountProbe(providerSettings),
@@ -81,7 +87,10 @@ export default function activate(pi: ExtensionAPI): void {
 
   if (!ownsLifecycle) return;
 
+  void toolDescriptionCap.start();
+
   pi.on("session_start", async (event, ctx) => {
+    toolDescriptionCap.onSessionStart((message) => ctx.ui?.notify?.(message, "warning"));
     runtime.setHost({
       ui: ctx.ui,
       appendEntry: (customType, data) => pi.appendEntry(customType, data),
@@ -92,6 +101,7 @@ export default function activate(pi: ExtensionAPI): void {
     }
   });
   pi.on("session_shutdown", async () => {
+    toolDescriptionCap.onSessionShutdown();
     await runtime.clear("session_shutdown");
     release();
   });

@@ -43,6 +43,7 @@ import { Value } from "typebox/value";
 import { messageContentToText } from "./convert.js";
 import { isDeadQueryFailure } from "./dead-query.js";
 import { debug, diagDump, errorMessage } from "./debug.js";
+import { FALLBACK_TOOL_DESCRIPTION_CAP } from "./description-cap.js";
 import {
   applySessionSync,
   createDoppelRegistry,
@@ -72,6 +73,7 @@ export interface BridgeRuntimeDependencies {
   sessionStore?: BridgeSessionStore;
   /** Absent in tests that exercise streaming without a provider; then a served model teaches nothing. */
   modelCatalog?: BridgeModelCatalog;
+  getToolDescriptionCap?(): number | false;
 }
 
 /**
@@ -125,6 +127,9 @@ export const SESSION_STORE_LOAD_TIMEOUT_MS = 15_000;
 export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
   const { providerSettings } = dependencies;
   const queryFactory = dependencies.queryFactory ?? query;
+  const getToolDescriptionCap =
+    dependencies.getToolDescriptionCap ??
+    (() => providerSettings.toolDescriptionCap ?? FALLBACK_TOOL_DESCRIPTION_CAP);
 
   const doppels = createDoppelRegistry();
   const sessionStore = dependencies.sessionStore ?? new BridgeSessionStore(debug);
@@ -807,13 +812,16 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
     }
 
     function planFreshTurn(queryCtx: QueryContext, persistent: boolean): FreshTurn {
-      const { mcpTools, customToolNameToSdk, customToolNameToPi } = resolveMcpTools(context);
+      const toolDescriptionCap = getToolDescriptionCap();
+      const { mcpTools, originalMcpTools, relocations, customToolNameToSdk, customToolNameToPi } =
+        resolveMcpTools(context, toolDescriptionCap);
       const { cwd, cliModel, spawnSignature, queryOptions } = planTurn({
         model,
         context,
         options,
         providerSettings,
         oneShot: !persistent,
+        relocations,
       });
       return {
         mcpTools,
@@ -822,7 +830,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
         cwd,
         cliModel,
         spawnSignature,
-        mcpSignature: mcpSignature(mcpTools),
+        mcpSignature: mcpSignature(originalMcpTools),
         mcpServers: buildMcpServers(mcpTools, queryCtx),
         queryOptions,
       };

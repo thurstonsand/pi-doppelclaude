@@ -42,6 +42,12 @@ function insertToolNameNote(systemPrompt: string, replacement: string): string {
   return systemPrompt.replace("\n\nAvailable tools:", `\n\n${replacement}\n\nAvailable tools:`);
 }
 
+function insertRelocatedToolBlock(systemPrompt: string, block: string): string {
+  const anchor = "\n\nIn addition to the tools above";
+  if (!systemPrompt.includes(anchor)) return `${block}\n\n${systemPrompt}`;
+  return systemPrompt.replace(anchor, `\n\n${block}${anchor}`);
+}
+
 export type ClaudeSystemPrompt =
   | string
   | {
@@ -49,6 +55,21 @@ export type ClaudeSystemPrompt =
       preset: "claude_code";
       append?: string;
     };
+
+export interface ToolDescriptionRelocation {
+  name: string;
+  description: string;
+}
+
+function relocatedToolBlock(relocations: ToolDescriptionRelocation[]): string | undefined {
+  if (relocations.length === 0) return undefined;
+  const descriptions = relocations
+    .map(
+      (relocation) => `<function_description>${JSON.stringify(relocation)}</function_description>`,
+    )
+    .join("\n");
+  return `<extended_function_descriptions>\n${descriptions}\n</extended_function_descriptions>`;
+}
 
 export function rewritePiSystemPrompt(
   systemPrompt: string,
@@ -67,16 +88,28 @@ export function buildClaudeSystemPrompt(
   piSystemPrompt: string,
   mode: "claude-code" | "pi" | "append",
   replacements: SystemPromptReplacements | undefined,
+  relocations: ToolDescriptionRelocation[] = [],
 ): ClaudeSystemPrompt {
+  const relocationBlock = relocatedToolBlock(relocations);
   if (mode === "claude-code") {
-    return { type: "preset", preset: "claude_code" };
+    return {
+      type: "preset",
+      preset: "claude_code",
+      ...(relocationBlock ? { append: ` ${relocationBlock}` } : {}),
+    };
   }
   if (!replacements) {
     throw new Error("doppelclaude: system prompt replacements are required");
   }
 
   const rewrittenPiPrompt = rewritePiSystemPrompt(piSystemPrompt, replacements);
+  const promptWithRelocations = relocationBlock
+    ? insertRelocatedToolBlock(rewrittenPiPrompt, relocationBlock)
+    : rewrittenPiPrompt;
+  // Claude Code puts its own identity in a separate system block right before ours and
+  // joins nothing between them, so without this the two run together as "…Agent SDK.You are".
+  const separatedPiPrompt = ` ${promptWithRelocations}`;
   return mode === "pi"
-    ? rewrittenPiPrompt
-    : { type: "preset", preset: "claude_code", append: rewrittenPiPrompt };
+    ? separatedPiPrompt
+    : { type: "preset", preset: "claude_code", append: separatedPiPrompt };
 }

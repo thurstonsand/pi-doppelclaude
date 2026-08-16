@@ -55,6 +55,23 @@ describe("loadBridgeSettings", () => {
       });
     }));
 
+  it("loads and validates the tool description cap", () =>
+    withSettingsDirs(({ agentDir, cwd }) => {
+      for (const toolDescriptionCap of [4096, false]) {
+        writeSettings(join(agentDir, "settings.json"), {
+          provider: { systemPromptMode: "claude-code", toolDescriptionCap },
+        });
+        assert.equal(load(cwd, agentDir).provider.toolDescriptionCap, toolDescriptionCap);
+      }
+
+      for (const toolDescriptionCap of ["2048", 0, -1, 1.5]) {
+        writeSettings(join(agentDir, "settings.json"), {
+          provider: { systemPromptMode: "claude-code", toolDescriptionCap },
+        });
+        assert.throws(() => load(cwd, agentDir), /toolDescriptionCap/);
+      }
+    }));
+
   it("does not read project Pi settings", () =>
     withSettingsDirs(({ agentDir, cwd, projectDir }) => {
       writeSettings(join(agentDir, "settings.json"), {

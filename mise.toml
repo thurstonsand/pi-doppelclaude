@@ -27,7 +27,7 @@ quiet = true
 
 [tasks.lint]
 description = "Lint"
-depends = ["lint:biome", "lint:actions", "lint:shell"]
+depends = ["lint:*"]
 
 [tasks."lint:biome"]
 description = "Lint TypeScript and JSON"
