@@ -5,8 +5,9 @@
 
 import type { Options } from "@anthropic-ai/claude-agent-sdk";
 import type { Api, Context, Model, SimpleStreamOptions, Tool } from "@earendil-works/pi-ai";
-import { makeCliDebugOptions, sdkChildEnv } from "./debug.js";
+import { makeCliDebugOptions } from "./debug.js";
 import { claudeCodeModelId, resolveThinkingEffort } from "./models.js";
+import { sdkChildEnv } from "./sdk-child-env.js";
 import type { ProviderSettings } from "./settings.js";
 import { MCP_TOOL_PREFIX } from "./skills.js";
 import {

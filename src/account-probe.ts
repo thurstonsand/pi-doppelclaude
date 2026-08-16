@@ -5,7 +5,7 @@ import {
   query,
 } from "@anthropic-ai/claude-agent-sdk";
 import { Type } from "typebox";
-import { errorMessage } from "./debug.js";
+import { errorMessage } from "./errors.js";
 import type { ProviderSettings } from "./settings.js";
 import { parseValue } from "./validation.js";
 

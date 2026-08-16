@@ -1,4 +1,4 @@
-// Bridge logging, diagnostics, child environment, and per-query SDK debug options.
+// Bridge logging, diagnostics, and per-query SDK debug options.
 
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -8,7 +8,6 @@ import type { BridgeSettings } from "./settings.js";
 export let DEBUG = false;
 let debugLogPath = join(getAgentDir(), "doppelclaude.log");
 const DIAG_LOG_PATH = join(getAgentDir(), "doppelclaude-diag.log");
-const BRIDGE_CLIENT_APP = "pi-doppelclaude/0.6.2";
 
 export function configureDebug(settings: BridgeSettings["debug"]): void {
   DEBUG = settings.enabled;
@@ -86,28 +85,4 @@ const RECORD_STREAM_PATH = process.env.DOPPELCLAUDE_RECORD_STREAM;
 
 export function recordSdkMessage(message: unknown): void {
   if (RECORD_STREAM_PATH) appendFileSync(RECORD_STREAM_PATH, `${JSON.stringify(message)}\n`);
-}
-
-export function sdkChildEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
-  return {
-    ...process.env,
-    CLAUDE_AGENT_SDK_CLIENT_APP: BRIDGE_CLIENT_APP,
-    // Pi owns the conversation record; a bridge subprocess writing CC auto-memory
-    // into ~/.claude from pi turns is state leaking outside that ownership.
-    CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
-    ...extra,
-  };
-}
-
-export function errorMessage(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  if (err && typeof err === "object") {
-    const obj = err as Record<string, unknown>;
-    if (typeof obj.message === "string") return obj.message;
-    if (typeof obj.error === "string") return obj.error;
-    try {
-      return JSON.stringify(err);
-    } catch {}
-  }
-  return String(err);
 }

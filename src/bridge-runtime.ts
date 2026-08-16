@@ -42,7 +42,7 @@ import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { messageContentToText } from "./convert.js";
 import { isDeadQueryFailure } from "./dead-query.js";
-import { debug, diagDump, errorMessage } from "./debug.js";
+import { debug, diagDump } from "./debug.js";
 import { FALLBACK_TOOL_DESCRIPTION_CAP } from "./description-cap.js";
 import {
   applySessionSync,
@@ -53,6 +53,7 @@ import {
   type SessionState,
   type SyncPlan,
 } from "./doppel.js";
+import { errorMessage } from "./errors.js";
 import {
   extractAllToolResults as _extractAllToolResults,
   type McpResult,

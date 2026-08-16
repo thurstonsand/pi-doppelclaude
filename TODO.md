@@ -54,6 +54,16 @@
 
 ## Upstream Gaps
 
+- **Claude Code does not request fine-grained tool streaming**: verified on the wire
+  with `diag/capture-proxy.mjs` — CC 2.1.226 sends `oauth`, `interleaved-thinking`,
+  `thinking-token-count`, `context-management`, `prompt-caching-scope`,
+  `claude-code`, and `extended-cache-ttl`, but not
+  `fine-grained-tool-streaming-2025-05-14`. Without it the API buffers tool-input
+  JSON, so a `write` or `bash` call showed its path and then froze for seconds
+  before the whole body landed in one ~100ms burst. `BRIDGE_BETAS` in
+  `src/sdk-child-env.ts` adds it through `ANTHROPIC_BETAS`. Drop the entry once CC
+  sends it, or once every served model has it GA.
+
 - **No session-scoped model selection**: `AgentSession.setModel` writes the
   *global* default — `settingsManager.setDefaultModelAndProvider(...)` at
   `core/agent-session.ts:1587` marks `defaultProvider`/`defaultModel` modified

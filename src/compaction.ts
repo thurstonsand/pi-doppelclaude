@@ -23,8 +23,10 @@ import {
   type SessionBeforeCompactEvent,
 } from "@earendil-works/pi-coding-agent";
 import { messageContentToText } from "./convert.js";
-import { debug, errorMessage, makeCliDebugOptions, sdkChildEnv } from "./debug.js";
+import { debug, makeCliDebugOptions } from "./debug.js";
+import { errorMessage } from "./errors.js";
 import { claudeCodeModelId } from "./models.js";
+import { sdkChildEnv } from "./sdk-child-env.js";
 import { logServedContextWindow, resultErrorText } from "./sdk-result.js";
 import { applySdkUsage, debugSdkUsage, type SdkUsage } from "./sdk-usage.js";
 import type { ProviderSettings } from "./settings.js";
