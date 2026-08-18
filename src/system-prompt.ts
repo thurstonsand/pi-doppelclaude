@@ -71,10 +71,14 @@ function relocatedToolBlock(relocations: ToolDescriptionRelocation[]): string | 
   return `<extended_function_descriptions>\n${descriptions}\n</extended_function_descriptions>`;
 }
 
+// Calls that never went through pi's agent loop — e.g. streamSimple
+// — carry a system prompt with none of pi's blocks in it.
 export function rewritePiSystemPrompt(
   systemPrompt: string,
   replacements: SystemPromptReplacements,
 ): string {
+  if (!systemPrompt.includes(PI_IDENTITY_PROMPT)) return systemPrompt;
+
   return rewritePiDocumentationBlock(
     insertToolNameNote(
       rewriteIdentityPrompt(systemPrompt, replacements.identity),

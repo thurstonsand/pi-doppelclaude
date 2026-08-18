@@ -62,6 +62,13 @@ describe("rewritePiSystemPrompt", () => {
     assert.match(rewritten, /Custom tool note\.\n\nAvailable tools:/);
   });
 
+  it("leaves a prompt that never came from pi's agent loop untouched", () => {
+    const foreign = "Summarize this conversation.\n\nAvailable tools:\n- read";
+
+    assert.equal(rewritePiSystemPrompt(foreign, REPLACEMENTS), foreign);
+    assert.equal(buildClaudeSystemPrompt(foreign, "pi", REPLACEMENTS), ` ${foreign}`);
+  });
+
   it("uses only the rewritten Pi system prompt in pi mode", () => {
     const systemPrompt = buildClaudeSystemPrompt(SYSTEM_PROMPT, "pi", REPLACEMENTS);
 

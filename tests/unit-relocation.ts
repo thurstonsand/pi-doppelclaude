@@ -16,7 +16,10 @@ const REPLACEMENTS = {
   },
 };
 
-const PI_PROMPT = `Bridge identity.
+const PI_IDENTITY =
+  "You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.";
+
+const PI_PROMPT = `${PI_IDENTITY}
 
 Available tools:
 - inspect
