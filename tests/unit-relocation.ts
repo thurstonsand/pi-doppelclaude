@@ -46,7 +46,7 @@ function context(description: string): Context {
 
 function planned(description: string, cap: number) {
   const turnContext = context(description);
-  const tools = resolveMcpTools(turnContext, cap);
+  const tools = resolveMcpTools(turnContext, cap, undefined);
   const plan = planTurn({
     model: bridgeModel("claude-haiku-4-5"),
     context: turnContext,
@@ -65,7 +65,7 @@ function planned(description: string, cap: number) {
 describe("tool description relocation", () => {
   it("advertises an empty description and renders the full description for an oversized tool", () => {
     const description = "x".repeat(21);
-    const { mcpTools, relocations } = resolveMcpTools(context(description), 20);
+    const { mcpTools, relocations } = resolveMcpTools(context(description), 20, undefined);
 
     assert.equal(mcpTools[0].description, "");
     assert.equal(mcpTools[0].name, "inspect");
@@ -100,7 +100,7 @@ describe("tool description relocation", () => {
     for (const length of [19, 20]) {
       const turnContext = context("x".repeat(length));
       const original = turnContext.tools?.[0];
-      const resolved = resolveMcpTools(turnContext, 20);
+      const resolved = resolveMcpTools(turnContext, 20, undefined);
       assert.strictEqual(resolved.mcpTools[0], original);
       assert.strictEqual(resolved.originalMcpTools[0], original);
       assert.deepEqual(resolved.relocations, []);
@@ -108,7 +108,7 @@ describe("tool description relocation", () => {
   });
 
   it("prepends the block when the custom-tools anchor is absent", () => {
-    const { relocations } = resolveMcpTools(context("oversized"), 4);
+    const { relocations } = resolveMcpTools(context("oversized"), 4, undefined);
     const prompt = buildClaudeSystemPrompt(
       "A future prompt without the custom-tools note.",
       "pi",
@@ -125,7 +125,7 @@ describe("tool description relocation", () => {
   });
 
   it("carries relocations in pi, append, and claude-code prompt modes", () => {
-    const { relocations } = resolveMcpTools(context("oversized"), 4);
+    const { relocations } = resolveMcpTools(context("oversized"), 4, undefined);
     const piPrompt = buildClaudeSystemPrompt(PI_PROMPT, "pi", REPLACEMENTS, relocations);
     const appendPrompt = buildClaudeSystemPrompt(PI_PROMPT, "append", REPLACEMENTS, relocations);
     const claudePrompt = buildClaudeSystemPrompt(PI_PROMPT, "claude-code", undefined, relocations);
@@ -189,7 +189,7 @@ describe("tool description relocation", () => {
 
   it("disables relocation without changing today's plan output", () => {
     const turnContext = context("x".repeat(30));
-    const disabled = resolveMcpTools(turnContext, false);
+    const disabled = resolveMcpTools(turnContext, false, undefined);
     const baseline = planTurn({
       model: bridgeModel("claude-haiku-4-5"),
       context: turnContext,

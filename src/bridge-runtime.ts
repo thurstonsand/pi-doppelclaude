@@ -259,7 +259,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
       if (!id) continue;
       for (const queryCtx of activeQueryContexts) {
         if (
-          queryCtx.pendingToolCalls.has(id) ||
+          queryCtx.hasPendingToolCall(id) ||
           queryCtx.pendingResults.has(id) ||
           queryCtx.shownToolCallIds.has(id)
         ) {
@@ -276,14 +276,19 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
     }),
   });
 
+  /** pi's history and Claude Code's transcript disagree about a tool call, and no further */
+  function failReconciliation(queryCtx: QueryContext, message: string): void {
+    emitTerminalError(queryCtx, "error", message);
+    void closeQueryContext(queryCtx, message, "force");
+  }
+
   function failMcpBridge(queryCtx: QueryContext): void {
     const message =
       "Claude bridge incompatible with this Claude Code version: CLI no longer sends claudecode/toolUseId in MCP tool metadata";
     debug(`provider: fatal MCP bridge error: ${message}`);
     host?.ui.notify(message, "error");
     queryCtx.fatalError = message;
-    emitTerminalError(queryCtx, "error", message);
-    void closeQueryContext(queryCtx, message, "force");
+    failReconciliation(queryCtx, message);
   }
 
   function createMcpToolHandler(toolName: string, queryCtx: QueryContext) {
@@ -304,9 +309,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
         return queued;
       }
       debug(`mcp handler: ${toolName} [${toolCallId}] → waiting`);
-      return new Promise<McpResult>((resolve) => {
-        queryCtx.pendingToolCalls.set(toolCallId, { toolName, resolve });
-      });
+      return queryCtx.blockOnToolResult(toolCallId, toolName);
     };
   }
 
@@ -401,9 +404,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
         activeQuery?.close();
       } catch {}
     }
-    for (const pending of c.pendingToolCalls.values())
-      pending.resolve({ content: [{ type: "text", text: "Query ended" }] });
-    c.pendingToolCalls.clear();
+    c.releasePendingToolCalls("Query ended");
     c.pendingResults.clear();
     clearToolCallTracking(c);
     c.activeQuery = null;
@@ -596,7 +597,9 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
         customToolNameToSdk,
         modelId: model.id,
       });
-      queryCtx.pendingToolCalls.clear();
+      // Whatever ran here before is gone, closed above or dead; nothing it left blocked can
+      // be answered by the query about to replace it.
+      queryCtx.releasePendingToolCalls("Query ended");
       queryCtx.pendingResults.clear();
       clearToolCallTracking(queryCtx);
       queryCtx.persistent = persistent;
@@ -773,11 +776,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
       const onAbort = () => {
         queryCtx.turnAborted = true;
         queryCtx.readyForInput = false;
-        for (const pending of queryCtx.pendingToolCalls.values())
-          pending.resolve({
-            content: [{ type: "text", text: "Operation aborted" }],
-          });
-        queryCtx.pendingToolCalls.clear();
+        queryCtx.releasePendingToolCalls("Operation aborted");
         queryCtx.rejectionWindowOpen = false;
         queryCtx.bufferedSdkMessages = [];
         const activeQuery = queryCtx.activeQuery;
@@ -815,7 +814,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
     function planFreshTurn(queryCtx: QueryContext, persistent: boolean): FreshTurn {
       const toolDescriptionCap = getToolDescriptionCap();
       const { mcpTools, originalMcpTools, relocations, customToolNameToSdk, customToolNameToPi } =
-        resolveMcpTools(context, toolDescriptionCap);
+        resolveMcpTools(context, toolDescriptionCap, options?.toolChoice);
       const { cwd, cliModel, spawnSignature, queryOptions } = planTurn({
         model,
         context,
@@ -873,7 +872,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
       resultCtx.resetTurnState(model);
       resultCtx.latestCursor = Math.max(resultCtx.latestCursor, context.messages.length);
       debug(
-        `provider: tool results, ${allResults.length} results, ${resultCtx.pendingToolCalls.size} waiting handlers, ctx.msgs=${context.messages.length}`,
+        `provider: tool results, ${allResults.length} results, ${resultCtx.pendingToolCallCount} waiting handlers, ctx.msgs=${context.messages.length}`,
       );
 
       // A warm query can be hours old by the time pi answers its tool call, and die on the
@@ -935,14 +934,12 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
           debug("WARNING: tool result without toolCallId, cannot match");
           continue;
         }
-        const pending = resultCtx.pendingToolCalls.get(id);
-        if (pending) {
-          resultCtx.pendingToolCalls.delete(id);
+        const answered = resultCtx.deliverToolResult(id, result);
+        if (answered) {
           debug(
-            `provider: resolving ${pending.toolName} [${id}]${result.isError ? " (error)" : ""}`,
+            `provider: resolving ${answered} [${id}]${result.isError ? " (error)" : ""}`,
             JSON.stringify(result.content).slice(0, 200),
           );
-          pending.resolve(result);
         } else if (resultCtx.rejectedToolCallIds.has(id)) {
           // Claude Code already answered this call with its own error; a second
           // answer would be a duplicate reply to a closed question.
@@ -951,20 +948,18 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
           resultCtx.pendingResults.set(id, result);
           debug(`provider: queued result [${id}] (${resultCtx.pendingResults.size} pending)`);
         } else {
-          emitTerminalError(
+          failReconciliation(
             resultCtx,
-            "error",
             `Claude bridge: pi delivered a result for tool call [${id}], which was never streamed to pi`,
           );
           return stream;
         }
       }
-      if (resultCtx.pendingToolCalls.size > 0) {
-        const waiting = [...resultCtx.pendingToolCalls.keys()].join(", ");
-        emitTerminalError(
+      if (resultCtx.pendingToolCallCount > 0) {
+        const waiting = resultCtx.pendingToolCallIds.join(", ");
+        failReconciliation(
           resultCtx,
-          "error",
-          `Claude bridge: ${resultCtx.pendingToolCalls.size} tool handler(s) still waiting after ${allResults.length} result(s) [${waiting}]`,
+          `Claude bridge: ${resultCtx.pendingToolCallCount} tool handler(s) still waiting after ${allResults.length} result(s) [${waiting}]`,
         );
         return stream;
       }

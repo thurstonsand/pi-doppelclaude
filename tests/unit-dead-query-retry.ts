@@ -21,6 +21,7 @@ import { Type } from "typebox";
 import { createBridgeRuntime } from "../src/bridge-runtime.js";
 import { projectCatalogModels } from "../src/models.js";
 import { PushQueue } from "../src/query-state.js";
+import { record, until } from "./lib/turns.js";
 
 const [fakeModel] = projectCatalogModels(
   [
@@ -142,18 +143,6 @@ function stream(
   );
 }
 
-function record(source: AsyncIterable<AssistantMessageEvent>) {
-  const events: AssistantMessageEvent[] = [];
-  void (async () => {
-    for await (const event of source) events.push(event);
-  })();
-  return events;
-}
-
-const settle = async () => {
-  for (let i = 0; i < 10; i++) await new Promise((resolve) => setTimeout(resolve, 5));
-};
-
 function textEvents(text: string): SDKMessage[] {
   return [
     { type: "stream_event", event: { type: "message_start", message: { usage: {} } } },
@@ -263,11 +252,15 @@ async function deliverToolResult(
   messages: unknown[] = toolTurn,
 ) {
   const first = record(stream(runtime, prompt, undefined, [bashTool]));
-  await settle();
-  assert.equal(first.at(-1)?.type, "done", "the first turn did not hand the tool call to pi");
-  const events = record(stream(runtime, messages, undefined, [bashTool]));
-  await settle();
-  return events;
+  await first.done;
+  assert.equal(
+    first.events.at(-1)?.type,
+    "done",
+    "the first turn did not hand the tool call to pi",
+  );
+  // The continuation rides the query that made the call and stays open for its answer, so
+  // this is the turn the caller drives; delivering the results is synchronous with the call.
+  return record(stream(runtime, messages, undefined, [bashTool]));
 }
 
 describe("dead query retry", () => {
@@ -276,14 +269,14 @@ describe("dead query retry", () => {
       { failInit: QUERY_CLOSED },
       { messages: [...textEvents("alive"), successResult] },
     ]);
-    const events = record(stream(runtime, prompt));
-    await settle();
+    const turn = record(stream(runtime, prompt));
+    await turn.done;
 
     assert.equal(spawned.length, 2, "the dead query was not respawned");
-    assert.deepEqual(texts(events), ["alive"]);
-    assert.equal(events.at(-1)?.type, "done", "the retry's answer did not complete the turn");
+    assert.deepEqual(texts(turn.events), ["alive"]);
+    assert.equal(turn.events.at(-1)?.type, "done", "the retry's answer did not complete the turn");
     assert.equal(
-      events.filter((event) => event.type === "start").length,
+      turn.events.filter((event) => event.type === "start").length,
       1,
       "pi saw the turn start twice",
     );
@@ -294,11 +287,11 @@ describe("dead query retry", () => {
       { failInit: QUERY_CLOSED },
       { failInit: QUERY_CLOSED },
     ]);
-    const events = record(stream(runtime, prompt));
-    await settle();
+    const turn = record(stream(runtime, prompt));
+    await turn.done;
 
     assert.equal(spawned.length, 2, "exactly one retry, and the second failure is final");
-    assert.equal(terminalError(events), QUERY_CLOSED);
+    assert.equal(terminalError(turn.events), QUERY_CLOSED);
   });
 
   it("tells the user how to re-authenticate when a revoked token outlives the retry", async () => {
@@ -306,11 +299,11 @@ describe("dead query retry", () => {
       { messages: [revokedResult] },
       { messages: [revokedResult] },
     ]);
-    const events = record(stream(runtime, prompt));
-    await settle();
+    const turn = record(stream(runtime, prompt));
+    await turn.done;
 
     assert.equal(spawned.length, 2);
-    const error = terminalError(events);
+    const error = terminalError(turn.events);
     assert.match(error, /401 OAuth access token has been revoked/);
     assert.match(
       error,
@@ -324,42 +317,41 @@ describe("dead query retry", () => {
       { messages: [revokedResult] },
       { messages: [...textEvents("refreshed"), successResult] },
     ]);
-    const events = record(stream(runtime, prompt));
-    await settle();
+    const turn = record(stream(runtime, prompt));
+    await turn.done;
 
     assert.equal(spawned.length, 2);
-    assert.deepEqual(texts(events), ["refreshed"]);
-    assert.equal(terminalError(events), null, "a self-healed turn must not report a failure");
+    assert.deepEqual(texts(turn.events), ["refreshed"]);
+    assert.equal(terminalError(turn.events), null, "a self-healed turn must not report a failure");
   });
 
   it("never replays a turn the user aborted", async () => {
     const controller = new AbortController();
     const { runtime, spawned } = makeHarness([{ stayOpen: true, hangOnInterrupt: true }]);
-    const events = record(
+    const turn = record(
       stream(runtime, prompt, { signal: controller.signal } as SimpleStreamOptions),
     );
-    await settle();
+    await until(() => spawned[0]?.prompts.length === 1, "the turn to reach a live query");
     controller.abort();
-    await settle();
     // The interrupt never lands and the subprocess dies instead: a dead query, but one the
     // user has already walked away from.
     spawned[0].fail(QUERY_CLOSED);
-    await settle();
+    await turn.done;
 
     assert.equal(spawned.length, 1, "an aborted turn was respawned");
-    assert.equal(events.at(-1)?.type, "error");
+    assert.equal(turn.events.at(-1)?.type, "error");
   });
 
   it("never replays a turn whose output already reached pi", async () => {
     const { runtime, spawned } = makeHarness([
       { messages: textEvents("half an answer"), throwAfterMessages: QUERY_CLOSED },
     ]);
-    const events = record(stream(runtime, prompt));
-    await settle();
+    const turn = record(stream(runtime, prompt));
+    await turn.done;
 
     assert.equal(spawned.length, 1, "replaying after partial delivery would duplicate the answer");
-    assert.deepEqual(texts(events), ["half an answer"]);
-    assert.equal(terminalError(events), QUERY_CLOSED);
+    assert.deepEqual(texts(turn.events), ["half an answer"]);
+    assert.equal(terminalError(turn.events), QUERY_CLOSED);
   });
 
   it("replays a turn pushed into a query that had already died", async () => {
@@ -371,8 +363,7 @@ describe("dead query retry", () => {
       },
       { messages: [...textEvents("second"), successResult] },
     ]);
-    record(stream(runtime, prompt));
-    await settle();
+    await record(stream(runtime, prompt)).done;
     assert.equal(spawned.length, 1, "the first turn should not have respawned anything");
     // A real turn learns its session id from Claude Code's init message; the fake query
     // names none, so the sync state a completed turn leaves behind is set here.
@@ -380,12 +371,12 @@ describe("dead query retry", () => {
 
     // The tool set changed, so the reused query is asked to reconcile its MCP servers —
     // and answers as a corpse.
-    const events = record(stream(runtime, secondPrompt, undefined, [bashTool]));
-    await settle();
+    const second = record(stream(runtime, secondPrompt, undefined, [bashTool]));
+    await second.done;
 
     assert.equal(spawned.length, 2, "the pushed-into corpse was not replaced");
-    assert.deepEqual(texts(events), ["second"]);
-    assert.equal(terminalError(events), null);
+    assert.deepEqual(texts(second.events), ["second"]);
+    assert.equal(terminalError(second.events), null);
   });
 
   it("replays a tool-result continuation the warm query died answering", async () => {
@@ -393,12 +384,12 @@ describe("dead query retry", () => {
       { stayOpen: true, messages: toolCallEvents() },
       { stayOpen: true },
     ]);
-    const events = await deliverToolResult(runtime);
+    const continuation = await deliverToolResult(runtime);
     assert.equal(spawned.length, 1, "the continuation must ride the query that made the call");
 
     // The warm query makes its first request with the result and finds its token revoked.
     spawned[0].fail(REVOKED);
-    await settle();
+    await until(() => spawned[1]?.prompts.length === 1, "the replay to be prompted");
 
     assert.equal(spawned.length, 2, "the dead continuation was not respawned");
     assert.match(
@@ -413,11 +404,15 @@ describe("dead query retry", () => {
     );
 
     spawned[1].emit([...textEvents("the tool said a.txt"), successResult]);
-    await settle();
-    assert.deepEqual(texts(events), ["the tool said a.txt"]);
-    assert.equal(events.at(-1)?.type, "done", "the replay's answer did not complete the turn");
+    await continuation.done;
+    assert.deepEqual(texts(continuation.events), ["the tool said a.txt"]);
     assert.equal(
-      events.filter((event) => event.type === "start").length,
+      continuation.events.at(-1)?.type,
+      "done",
+      "the replay's answer did not complete the turn",
+    );
+    assert.equal(
+      continuation.events.filter((event) => event.type === "start").length,
       1,
       "pi saw the continuation start twice",
     );
@@ -429,10 +424,14 @@ describe("dead query retry", () => {
       { messages: [...textEvents("log checked"), successResult] },
     ]);
     // Pi delivers the tool result and a message the user typed while the tool ran.
-    const events = await deliverToolResult(runtime, [
+    const continuation = await deliverToolResult(runtime, [
       ...toolTurn,
       { role: "user", content: STEERING },
     ]);
+    await until(
+      () => spawned[0].prompts.length === 2,
+      "the steering to be queued behind the tool result",
+    );
     assert.equal(
       String(spawned[0].prompts.at(-1)?.message.content),
       STEERING,
@@ -440,7 +439,7 @@ describe("dead query retry", () => {
     );
 
     spawned[0].fail(REVOKED);
-    await settle();
+    await continuation.done;
 
     assert.equal(spawned.length, 2, "the dead continuation was not respawned");
     assert.equal(
@@ -448,8 +447,12 @@ describe("dead query retry", () => {
       STEERING,
       "steering died in the corpse's queue, so the replay must prompt with it instead of the tool-result nudge",
     );
-    assert.deepEqual(texts(events), ["log checked"]);
-    assert.equal(events.at(-1)?.type, "done", "the replay's answer did not complete the turn");
+    assert.deepEqual(texts(continuation.events), ["log checked"]);
+    assert.equal(
+      continuation.events.at(-1)?.type,
+      "done",
+      "the replay's answer did not complete the turn",
+    );
   });
 
   it("replays a reentrant query's continuation as another one-shot", async () => {
@@ -458,23 +461,26 @@ describe("dead query retry", () => {
       { stayOpen: true, messages: toolCallEvents() },
       { stayOpen: true },
     ]);
+    // The host's turn is never answered — it is the mid-flight query the next turn has to
+    // reenter around, so its stream stays open for the rest of the test.
     record(stream(runtime, prompt));
-    await settle();
+    await until(() => spawned[0]?.prompts.length === 1, "the host's turn to reach a live query");
     // A turn arriving while the doppel's query is mid-flight gets a context of its own,
     // and a query that is a one-shot however it ends.
     const nested = record(stream(runtime, secondPrompt, undefined, [bashTool]));
-    await settle();
+    await nested.done;
     assert.equal(spawned.length, 2, "the reentrant turn did not get its own query");
     assert.equal(
-      nested.at(-1)?.type,
+      nested.events.at(-1)?.type,
       "done",
       "the reentrant turn did not hand its tool call to pi",
     );
 
-    const events = record(stream(runtime, answeredToolCall(secondPrompt), undefined, [bashTool]));
-    await settle();
+    const continuation = record(
+      stream(runtime, answeredToolCall(secondPrompt), undefined, [bashTool]),
+    );
     spawned[1].fail(REVOKED);
-    await settle();
+    await until(() => spawned[2]?.promptsEnded === true, "the replay to be prompted and closed");
 
     assert.equal(spawned.length, 3, "the reentrant continuation was not respawned");
     assert.equal(
@@ -484,9 +490,13 @@ describe("dead query retry", () => {
     );
 
     spawned[2].emit([...textEvents("nested answer"), successResult]);
-    await settle();
-    assert.deepEqual(texts(events), ["nested answer"]);
-    assert.equal(events.at(-1)?.type, "done", "the replay's answer did not complete the turn");
+    await continuation.done;
+    assert.deepEqual(texts(continuation.events), ["nested answer"]);
+    assert.equal(
+      continuation.events.at(-1)?.type,
+      "done",
+      "the replay's answer did not complete the turn",
+    );
   });
 
   it("reports the failure when the replayed continuation dies too", async () => {
@@ -494,35 +504,38 @@ describe("dead query retry", () => {
       { stayOpen: true, messages: toolCallEvents() },
       { failInit: QUERY_CLOSED },
     ]);
-    const events = await deliverToolResult(runtime);
+    const continuation = await deliverToolResult(runtime);
     spawned[0].fail(REVOKED);
-    await settle();
+    await continuation.done;
 
     assert.equal(spawned.length, 2, "exactly one replay, and the second failure is final");
-    assert.equal(terminalError(events), QUERY_CLOSED);
+    assert.equal(terminalError(continuation.events), QUERY_CLOSED);
   });
 
   it("never replays a continuation whose output already reached pi", async () => {
     const { runtime, spawned } = makeHarness([{ stayOpen: true, messages: toolCallEvents() }]);
-    const events = await deliverToolResult(runtime);
+    const continuation = await deliverToolResult(runtime);
     spawned[0].emit(textEvents("half an answer"));
-    await settle();
+    await until(
+      () => texts(continuation.events).length === 1,
+      "the partial answer to reach pi, which is what forbids the replay",
+    );
     spawned[0].fail(REVOKED);
-    await settle();
+    await continuation.done;
 
     assert.equal(spawned.length, 1, "replaying after partial delivery would duplicate the answer");
-    assert.deepEqual(texts(events), ["half an answer"]);
-    assert.match(terminalError(events), /401 OAuth access token has been revoked/);
+    assert.deepEqual(texts(continuation.events), ["half an answer"]);
+    assert.match(terminalError(continuation.events), /401 OAuth access token has been revoked/);
   });
 
   it("leaves failures that are not a dead query alone", async () => {
     const { runtime, spawned } = makeHarness([
       { failInit: "Claude Code process exited with code 1" },
     ]);
-    const events = record(stream(runtime, prompt));
-    await settle();
+    const turn = record(stream(runtime, prompt));
+    await turn.done;
 
     assert.equal(spawned.length, 1);
-    assert.equal(terminalError(events), "Claude Code process exited with code 1");
+    assert.equal(terminalError(turn.events), "Claude Code process exited with code 1");
   });
 });

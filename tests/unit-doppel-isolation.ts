@@ -20,6 +20,7 @@ import type {
 import { createBridgeRuntime } from "../src/bridge-runtime.js";
 import { projectCatalogModels } from "../src/models.js";
 import { PushQueue } from "../src/query-state.js";
+import { record } from "./lib/turns.js";
 
 const [fakeModel] = projectCatalogModels(
   [
@@ -110,18 +111,6 @@ function stream(
   );
 }
 
-function record(source: AsyncIterable<AssistantMessageEvent>) {
-  const events: AssistantMessageEvent[] = [];
-  void (async () => {
-    for await (const event of source) events.push(event);
-  })();
-  return events;
-}
-
-const settle = async () => {
-  for (let i = 0; i < 10; i++) await new Promise((resolve) => setTimeout(resolve, 5));
-};
-
 function textEvents(text: string): SDKMessage[] {
   return [
     { type: "stream_event", event: { type: "message_start", message: { usage: {} } } },
@@ -173,12 +162,10 @@ const secondTurn = [
 
 /** Runs a first host turn that leaves a warm persistent query, as a real session does. */
 async function openHostConversation(harness: ReturnType<typeof makeHarness>) {
-  const events = record(stream(harness.runtime, firstTurn));
-  await settle();
+  await record(stream(harness.runtime, firstTurn)).done;
   // A real turn learns its session id from Claude Code's init message; the fake query
   // names none, so the state a completed turn leaves behind is set here.
   harness.runtime.test.setHostSession({ sessionId: HOST_CC_SESSION, cursor: 1 });
-  return events;
 }
 
 /** The two callers that are not the host: pi's keyless auxiliary calls, and another pi session. */
@@ -208,8 +195,8 @@ describe("turns that are not the host's", () => {
       const hostQuery = hostCtx.activeQuery;
       assert.ok(hostQuery, "the first host turn left no persistent query");
 
-      const foreignEvents = record(stream(harness.runtime, caller.messages, caller.options));
-      await settle();
+      const foreign = record(stream(harness.runtime, caller.messages, caller.options));
+      await foreign.done;
 
       assert.equal(harness.spawned.length, 2, "the foreign turn did not get its own subprocess");
       assert.equal(
@@ -219,19 +206,19 @@ describe("turns that are not the host's", () => {
       );
       assert.equal(hostCtx.activeQuery, hostQuery, "the foreign turn took over the host's context");
       assert.equal(hostCtx.readyForInput, true, "the host's query is no longer reusable");
-      assert.deepEqual(texts(foreignEvents), ["A Conversation"]);
+      assert.deepEqual(texts(foreign.events), ["A Conversation"]);
 
-      const hostEvents = record(stream(harness.runtime, secondTurn));
+      const host = record(stream(harness.runtime, secondTurn));
       harness.spawned[0].emit(answer("second"));
-      await settle();
+      await host.done;
 
       assert.equal(
         harness.spawned.length,
         2,
         "the next host turn respawned instead of reusing the warm query",
       );
-      assert.deepEqual(texts(hostEvents), ["second"]);
-      assert.equal(terminalError(hostEvents), null);
+      assert.deepEqual(texts(host.events), ["second"]);
+      assert.equal(terminalError(host.events), null);
     });
 
     it(`does not move the shared session onto ${caller.label}'s own result`, async () => {
@@ -247,10 +234,10 @@ describe("turns that are not the host's", () => {
       await openHostConversation(harness);
       const hostSession = harness.runtime.test.getHostSession();
 
-      const foreignEvents = record(stream(harness.runtime, caller.messages, caller.options));
-      await settle();
+      const foreign = record(stream(harness.runtime, caller.messages, caller.options));
+      await foreign.done;
 
-      assert.deepEqual(texts(foreignEvents), ["A Conversation"]);
+      assert.deepEqual(texts(foreign.events), ["A Conversation"]);
       assert.deepEqual(
         harness.runtime.test.getHostSession(),
         hostSession,
@@ -269,24 +256,24 @@ describe("turns that are not the host's", () => {
     const hostCtx = harness.runtime.test.hostContext;
     const hostQuery = hostCtx.activeQuery;
 
-    const foreignEvents = record(
+    const foreign = record(
       stream(harness.runtime, foreignCallers[0].messages, foreignCallers[0].options),
     );
-    const hostEvents = record(stream(harness.runtime, secondTurn));
+    const host = record(stream(harness.runtime, secondTurn));
     harness.spawned[0].emit(answer("second"));
-    await settle();
+    await Promise.all([foreign.done, host.done]);
 
     assert.equal(harness.spawned.length, 3, "the keyless turn's own retry is the only respawn");
     assert.equal(harness.spawned[0].closed, false, "the host turn's query was force-closed");
     assert.equal(hostCtx.activeQuery, hostQuery);
-    assert.deepEqual(texts(hostEvents), ["second"], "the host turn did not answer");
+    assert.deepEqual(texts(host.events), ["second"], "the host turn did not answer");
     assert.equal(
-      terminalError(hostEvents),
+      terminalError(host.events),
       null,
       "the keyless turn's death was charged to the host turn",
     );
     assert.equal(
-      terminalError(foreignEvents),
+      terminalError(foreign.events),
       QUERY_CLOSED,
       "the keyless turn's failure went unreported",
     );
@@ -306,12 +293,12 @@ describe("turns that are not the host's", () => {
     await openHostConversation(harness);
     const hostSession = harness.runtime.test.getHostSession();
 
-    const foreignEvents = record(
+    const foreign = record(
       stream(harness.runtime, foreignCallers[0].messages, foreignCallers[0].options),
     );
-    await settle();
+    await foreign.done;
 
-    assert.equal(terminalError(foreignEvents), QUERY_CLOSED);
+    assert.equal(terminalError(foreign.events), QUERY_CLOSED);
     assert.deepEqual(
       harness.runtime.test.getHostSession(),
       hostSession,

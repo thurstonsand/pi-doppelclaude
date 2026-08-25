@@ -21,6 +21,7 @@ import type {
 import { createBridgeRuntime } from "../src/bridge-runtime.js";
 import { projectCatalogModels } from "../src/models.js";
 import { PushQueue } from "../src/query-state.js";
+import { record } from "./lib/turns.js";
 
 const [fakeModel] = projectCatalogModels(
   [
@@ -117,18 +118,6 @@ function stream(
   );
 }
 
-function record(source: AsyncIterable<AssistantMessageEvent>) {
-  const events: AssistantMessageEvent[] = [];
-  void (async () => {
-    for await (const event of source) events.push(event);
-  })();
-  return events;
-}
-
-const settle = async () => {
-  for (let i = 0; i < 10; i++) await new Promise((resolve) => setTimeout(resolve, 5));
-};
-
 function answer(text: string, sessionId?: string): SDKMessage[] {
   return [
     ...(sessionId ? [{ type: "system", subtype: "init", session_id: sessionId }] : []),
@@ -178,8 +167,7 @@ describe("doppel lifecycle", () => {
     ]);
     void runtime.designateHost(HOST_SESSION);
 
-    record(stream(runtime, firstTurn, { sessionId: GUEST_SESSION }));
-    await settle();
+    await record(stream(runtime, firstTurn, { sessionId: GUEST_SESSION })).done;
 
     const guest = doppelFor(runtime, GUEST_SESSION);
     assert.ok(guest, "the guest doppel was dropped at turn end");
@@ -187,8 +175,8 @@ describe("doppel lifecycle", () => {
     assert.equal(guest.context.activeQuery, null, "the guest kept a warm query");
     assert.equal(guest.session?.sessionId, "guest-cc-session", "the guest lost its session");
 
-    const events = record(stream(runtime, secondTurn, { sessionId: GUEST_SESSION }));
-    await settle();
+    const second = record(stream(runtime, secondTurn, { sessionId: GUEST_SESSION }));
+    await second.done;
 
     assert.equal(spawned.length, 2, "the second guest turn did not respawn");
     assert.equal(
@@ -196,21 +184,21 @@ describe("doppel lifecycle", () => {
       "guest-cc-session",
       "the guest did not resume its own session",
     );
-    assert.deepEqual(texts(events), ["ok"]);
+    assert.deepEqual(texts(second.events), ["ok"]);
   });
 
   it("leaves no doppel and no transcript behind for a keyless call", async () => {
     const { runtime, spawned } = makeHarness([{ sessionId: "ephemeral-cc-session" }]);
     void runtime.designateHost(HOST_SESSION);
 
-    const events = record(stream(runtime, secondTurn));
-    await settle();
+    const turn = record(stream(runtime, secondTurn));
+    await turn.done;
 
     // A history this long is rebuilt into the store before the turn runs, so there is
     // something to leave behind if the ephemeral leaves anything.
     const rebuilt = spawned[0].options.resume;
     assert.ok(rebuilt, "the ephemeral's history was never rebuilt into a session");
-    assert.deepEqual(texts(events), ["ok"]);
+    assert.deepEqual(texts(turn.events), ["ok"]);
     assert.deepEqual(
       runtime.test.doppels.all().map((doppel) => doppel.kind),
       ["host"],
@@ -230,13 +218,11 @@ describe("doppel lifecycle", () => {
     ]);
     void runtime.designateHost(HOST_SESSION);
 
-    record(stream(runtime, firstTurn, { sessionId: HOST_SESSION }));
-    await settle();
+    await record(stream(runtime, firstTurn, { sessionId: HOST_SESSION })).done;
     const hostSession = runtime.test.getHostSession();
     assert.equal(hostSession?.sessionId, "host-cc-session");
 
-    record(stream(runtime, firstTurn, { sessionId: GUEST_SESSION }));
-    await settle();
+    await record(stream(runtime, firstTurn, { sessionId: GUEST_SESSION })).done;
 
     assert.deepEqual(
       runtime.test.getHostSession(),
@@ -247,24 +233,23 @@ describe("doppel lifecycle", () => {
     assert.equal(spawned[0].closed, false, "the guest turn closed the host's warm query");
 
     // The host's next turn goes into that same warm query rather than a third subprocess.
-    const events = record(stream(runtime, secondTurn, { sessionId: HOST_SESSION }));
+    const second = record(stream(runtime, secondTurn, { sessionId: HOST_SESSION }));
     spawned[0].emit(answer("second"));
-    await settle();
+    await second.done;
 
     assert.equal(
       spawned.length,
       2,
       "the host turn respawned instead of pushing into its warm query",
     );
-    assert.deepEqual(texts(events), ["second"]);
+    assert.deepEqual(texts(second.events), ["second"]);
   });
 
   it("demotes the outgoing host to a guest and closes its query", async () => {
     const { runtime, spawned } = makeHarness([{ sessionId: "host-cc-session", stayOpen: true }]);
     void runtime.designateHost(HOST_SESSION);
 
-    record(stream(runtime, firstTurn, { sessionId: HOST_SESSION }));
-    await settle();
+    await record(stream(runtime, firstTurn, { sessionId: HOST_SESSION })).done;
     const outgoing = doppelFor(runtime, HOST_SESSION);
     assert.ok(outgoing?.context.activeQuery, "the first host turn left no warm query");
 
@@ -287,8 +272,7 @@ describe("doppel lifecycle", () => {
       { sessionId: "host-cc-session", stayOpen: true },
     ]);
 
-    record(stream(runtime, firstTurn, { sessionId: HOST_SESSION }));
-    await settle();
+    await record(stream(runtime, firstTurn, { sessionId: HOST_SESSION })).done;
     const early = doppelFor(runtime, HOST_SESSION);
     assert.equal(early?.kind, "guest", "a keyed call before designation is a guest");
 
@@ -297,8 +281,8 @@ describe("doppel lifecycle", () => {
     assert.equal(early.session?.sessionId, "host-cc-session", "the upgrade lost the session");
     assert.strictEqual(runtime.test.hostContext, early.context);
 
-    const events = record(stream(runtime, secondTurn, { sessionId: HOST_SESSION }));
-    await settle();
+    const second = record(stream(runtime, secondTurn, { sessionId: HOST_SESSION }));
+    await second.done;
 
     assert.equal(
       spawned[1].options.resume,
@@ -310,6 +294,6 @@ describe("doppel lifecycle", () => {
       true,
       "the upgraded host did not get a persistent query",
     );
-    assert.deepEqual(texts(events), ["ok"]);
+    assert.deepEqual(texts(second.events), ["ok"]);
   });
 });

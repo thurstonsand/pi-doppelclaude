@@ -14,6 +14,7 @@ import { createBridgeRuntime } from "../src/bridge-runtime.js";
 import { Doppel } from "../src/doppel.js";
 import type { QueryContext } from "../src/query-state.js";
 import { MCP_SERVER_NAME } from "../src/skills.js";
+import { until } from "./lib/turns.js";
 
 const parameters = Type.Object({
   path: Type.String({ description: "file path" }),
@@ -54,15 +55,16 @@ describe("MCP tool dispatch", () => {
       _meta: { "claudecode/toolUseId": "toolu_bad_args" },
     });
     // The handler blocks until pi answers, which is the backpressure the
-    // generator needs; assert it registered rather than awaiting the call.
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    const pending = queryCtx.pendingToolCalls.get("toolu_bad_args");
-    assert.ok(pending, "expected the malformed call to reach a waiting handler");
-    assert.equal(pending.toolName, "read");
-    pending.resolve({
+    // generator needs; wait for it to register rather than awaiting the call.
+    await until(
+      () => queryCtx.hasPendingToolCall("toolu_bad_args"),
+      "the malformed call to reach a waiting handler",
+    );
+    const answered = queryCtx.deliverToolResult("toolu_bad_args", {
       content: [{ type: "text", text: "Invalid arguments: path must be a string" }],
       isError: true,
     });
+    assert.equal(answered, "read", "the waiting handler was registered under another tool");
     const result = await call;
     assert.deepEqual(result.content, [
       { type: "text", text: "Invalid arguments: path must be a string" },

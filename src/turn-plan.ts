@@ -4,7 +4,14 @@
 // query or spawns a new one — and derive it again, identically, for a replay.
 
 import type { Options } from "@anthropic-ai/claude-agent-sdk";
-import type { Api, Context, Model, SimpleStreamOptions, Tool } from "@earendil-works/pi-ai";
+import type {
+  Api,
+  Context,
+  Model,
+  SimpleStreamOptions,
+  Tool,
+  ToolChoice,
+} from "@earendil-works/pi-ai";
 import { makeCliDebugOptions } from "./debug.js";
 import { claudeCodeModelId, resolveThinkingEffort } from "./models.js";
 import { sdkChildEnv } from "./sdk-child-env.js";
@@ -24,14 +31,22 @@ export interface TurnTools {
   customToolNameToPi: Map<string, string>;
 }
 
-export function resolveMcpTools(context: Context, toolDescriptionCap: number | false): TurnTools {
+/** Pi's tools reach Claude Code only through the MCP bridge — CC's own tools are already off
+ *  (`tools: []` below), so a turn with no MCP tools is a turn Claude Code cannot call one on.
+ *  That makes this the single place where `toolChoice: "none"` has to be honored: every SDK
+ *  request, spawned or reconciled, takes its tool set from here. */
+export function resolveMcpTools(
+  context: Context,
+  toolDescriptionCap: number | false,
+  toolChoice: ToolChoice | undefined,
+): TurnTools {
   const mcpTools: Tool[] = [];
   const originalMcpTools: Tool[] = [];
   const relocations: ToolDescriptionRelocation[] = [];
   const customToolNameToSdk = new Map<string, string>();
   const customToolNameToPi = new Map<string, string>();
 
-  if (!context.tools)
+  if (toolChoice === "none" || !context.tools)
     return {
       mcpTools,
       originalMcpTools,

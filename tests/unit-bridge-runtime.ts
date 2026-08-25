@@ -24,16 +24,19 @@ function makeRuntime() {
 }
 
 describe("bridge runtime isolation", () => {
-  it("owns an independent host query context per runtime", () => {
+  it("owns an independent host query context per runtime", async () => {
     const a = makeRuntime();
     const b = makeRuntime();
     assert.notStrictEqual(a.test.hostContext, b.test.hostContext);
 
     a.test.hostContext.latestCursor = 99;
-    a.test.hostContext.pendingToolCalls.set("t1", { toolName: "read", resolve: () => {} });
+    const blocked = a.test.hostContext.blockOnToolResult("t1", "read");
 
     assert.strictEqual(b.test.hostContext.latestCursor, 0);
-    assert.strictEqual(b.test.hostContext.pendingToolCalls.size, 0);
+    assert.strictEqual(b.test.hostContext.pendingToolCallCount, 0);
+
+    a.test.hostContext.releasePendingToolCalls("Query ended");
+    assert.deepEqual((await blocked).content, [{ type: "text", text: "Query ended" }]);
   });
 
   it("does not bleed host-session state between runtimes", () => {

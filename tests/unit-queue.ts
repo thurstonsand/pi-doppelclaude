@@ -117,14 +117,20 @@ describe("production MCP handlers", () => {
     const first = handler({}, { _meta: { "claudecode/toolUseId": "tool-1" } });
     const second = handler({}, { _meta: { "claudecode/toolUseId": "tool-2" } });
 
-    queryCtx.pendingToolCalls
-      .get("tool-2")
-      .resolve({ toolCallId: "tool-2", content: [{ type: "text", text: "second" }] });
-    queryCtx.pendingToolCalls.delete("tool-2");
-    queryCtx.pendingToolCalls
-      .get("tool-1")
-      .resolve({ toolCallId: "tool-1", content: [{ type: "text", text: "first" }] });
-    queryCtx.pendingToolCalls.delete("tool-1");
+    assert.equal(
+      queryCtx.deliverToolResult("tool-2", {
+        toolCallId: "tool-2",
+        content: [{ type: "text", text: "second" }],
+      }),
+      "read",
+    );
+    assert.equal(
+      queryCtx.deliverToolResult("tool-1", {
+        toolCallId: "tool-1",
+        content: [{ type: "text", text: "first" }],
+      }),
+      "read",
+    );
 
     const secondBlock = (await second).content[0];
     assert(secondBlock.type === "text");

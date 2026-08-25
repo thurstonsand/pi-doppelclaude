@@ -41,6 +41,26 @@ run = "actionlint"
 description = "Lint shell scripts"
 run = "shellcheck -x -P SCRIPTDIR tests/*.sh tests/lib/*.sh"
 
+[tasks.renovate]
+description = "Run Renovate"
+run = "renovate"
+tools.node = "24"
+tools."npm:renovate" = { version = "44.29.4", allow_builds = [
+  "re2",
+], trust_policy_excludes = [
+  "@yarnpkg/libzip@3.2.2",
+] }
+
+[tasks."lint:renovate"]
+description = "Validate Renovate configuration"
+run = "renovate-config-validator renovate.json"
+tools.node = "24"
+tools."npm:renovate" = { version = "44.29.4", allow_builds = [
+  "re2",
+], trust_policy_excludes = [
+  "@yarnpkg/libzip@3.2.2",
+] }
+
 [tasks.format]
 description = "Format and apply safe fixes"
 run = "biome check --write ."

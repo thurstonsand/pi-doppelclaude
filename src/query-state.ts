@@ -19,7 +19,7 @@ import type { ResultVerdict } from "./sdk-signals.js";
 import type { SdkModelUsage } from "./sdk-usage.js";
 import type { SessionStoreWriter } from "./session-store.js";
 
-export interface PendingToolCall {
+interface PendingToolCall {
   toolName: string;
   resolve: (result: McpResult) => void;
 }
@@ -118,7 +118,11 @@ export class QueryContext {
   // Live only from the turn's start until the turn advances, so a failure after pi has
   // moved on cannot replay a stale context.
   turnRetry: (() => void) | null = null;
-  pendingToolCalls = new Map<string, PendingToolCall>();
+  // An MCP handler blocking on pi is a promise held inside the in-process MCP server and,
+  // through it, a Claude Code request waiting on an answer. Losing one hangs both for the
+  // life of the process, so the map is private: every way out of it is a method below, and
+  // there is no way to drop an entry without answering it.
+  #pendingToolCalls = new Map<string, PendingToolCall>();
   pendingResults = new Map<string, McpResult>();
   // Reconciliation is order-independent: a tool call is shown to pi when it is
   // streamed, dispatched when Claude Code invokes its MCP handler, and rejected
@@ -144,6 +148,44 @@ export class QueryContext {
   // holds that translation for the blocks still open, so nothing transient has to ride on
   // the pi content blocks themselves.
   openStreamBlocks = new Map<number, OpenStreamBlock>();
+
+  /** The handler waits here until pi answers the call, which is the backpressure that keeps
+   *  Claude Code from running ahead of pi. */
+  blockOnToolResult(toolCallId: string, toolName: string): Promise<McpResult> {
+    return new Promise<McpResult>((resolve) => {
+      this.#pendingToolCalls.set(toolCallId, { toolName, resolve });
+    });
+  }
+
+  hasPendingToolCall(toolCallId: string): boolean {
+    return this.#pendingToolCalls.has(toolCallId);
+  }
+
+  get pendingToolCallCount(): number {
+    return this.#pendingToolCalls.size;
+  }
+
+  get pendingToolCallIds(): string[] {
+    return [...this.#pendingToolCalls.keys()];
+  }
+
+  /** Answers one blocked handler; returns the tool it was waiting for, or null if no handler
+   *  had fired for that call yet. */
+  deliverToolResult(toolCallId: string, result: McpResult): string | null {
+    const pending = this.#pendingToolCalls.get(toolCallId);
+    if (!pending) return null;
+    this.#pendingToolCalls.delete(toolCallId);
+    pending.resolve(result);
+    return pending.toolName;
+  }
+
+  /** Every handler still blocked, answered at once because the turn they were waiting on is
+   *  over. Whatever ends a turn ends these with it. */
+  releasePendingToolCalls(text: string): void {
+    for (const pending of this.#pendingToolCalls.values())
+      pending.resolve({ content: [{ type: "text", text }] });
+    this.#pendingToolCalls.clear();
+  }
 
   get turnBlocks(): AssistantMessage["content"] {
     if (!this.turnOutput) throw new Error("turnBlocks accessed before resetTurnState");

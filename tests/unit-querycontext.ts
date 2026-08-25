@@ -45,14 +45,20 @@ describe("QueryContext class", () => {
     assert.deepStrictEqual([...c.rejectedToolCallIds], ["id2"]);
   });
 
-  it("fresh instances share no query state", () => {
+  it("fresh instances share no query state", async () => {
     const a = new Doppel("test-doppel", "guest").context;
     const b = new Doppel("test-doppel", "guest").context;
-    a.pendingToolCalls.set("t1", { toolName: "read", resolve: () => {} });
+    const blocked = a.blockOnToolResult("t1", "read");
     a.latestCursor = 42;
-    assert.strictEqual(b.pendingToolCalls.size, 0);
+    assert.strictEqual(b.pendingToolCallCount, 0);
+    assert.strictEqual(b.hasPendingToolCall("t1"), false);
     assert.strictEqual(b.latestCursor, 0);
-    assert.notStrictEqual(a.pendingToolCalls, b.pendingToolCalls);
+
+    // Releasing a's handlers leaves b with nothing to release, and answers the one blocked here.
+    b.releasePendingToolCalls("Query ended");
+    assert.strictEqual(a.pendingToolCallCount, 1);
+    a.releasePendingToolCalls("Query ended");
+    assert.deepEqual((await blocked).content, [{ type: "text", text: "Query ended" }]);
   });
 });
 

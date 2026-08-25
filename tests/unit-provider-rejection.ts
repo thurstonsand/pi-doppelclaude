@@ -19,6 +19,7 @@ import { Type } from "typebox";
 import { createBridgeRuntime } from "../src/bridge-runtime.js";
 import { projectCatalogModels } from "../src/models.js";
 import { PushQueue } from "../src/query-state.js";
+import { record, until } from "./lib/turns.js";
 
 // Only a catalog-confirmed model reaches the query path, so mint one the way the
 // provider does instead of hand-rolling a stand-in.
@@ -47,8 +48,19 @@ const HOST_SESSION = "host-session-id";
 
 function makeHarness() {
   const queue = new PushQueue<SDKMessage>();
+  let pushed = 0;
+  let handled = 0;
+  // Counted on the far side of the yield: the runtime asks for the next message only once
+  // it is done with this one, so handled === pushed means everything the fake said has
+  // been acted on.
+  const iterate = async function* () {
+    for await (const message of queue) {
+      yield message;
+      handled++;
+    }
+  };
   const sdkQuery = {
-    [Symbol.asyncIterator]: () => queue[Symbol.asyncIterator](),
+    [Symbol.asyncIterator]: () => iterate()[Symbol.asyncIterator](),
     initializationResult: async () => ({}),
     setMcpServers: async () => ({}),
     interrupt: async () => ({}),
@@ -59,7 +71,18 @@ function makeHarness() {
     queryFactory: () => sdkQuery,
   });
   void runtime.designateHost(HOST_SESSION);
-  return { queue, runtime };
+  return {
+    runtime,
+    push(...messages: SDKMessage[]) {
+      for (const message of messages) {
+        pushed++;
+        queue.push(message);
+      }
+    },
+    drained: () => until(() => handled === pushed, "Claude Code's output to reach the runtime"),
+    /** The subprocess exits, which is what releases a turn still waiting on it. */
+    close: () => queue.end(),
+  };
 }
 
 function stream(runtime: ReturnType<typeof makeHarness>["runtime"], messages: unknown[]) {
@@ -73,18 +96,6 @@ function stream(runtime: ReturnType<typeof makeHarness>["runtime"], messages: un
     { sessionId: HOST_SESSION },
   );
 }
-
-// Collect events without waiting for the stream to end; the tool-use turns end
-// their pi stream, and the tests assert on what arrived so far.
-function record(source: AsyncIterable<AssistantMessageEvent>) {
-  const events: AssistantMessageEvent[] = [];
-  void (async () => {
-    for await (const event of source) events.push(event);
-  })();
-  return events;
-}
-
-const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
 
 function toolUseEvents(id: string, name: string, args: string): SDKMessage[] {
   return [
@@ -190,35 +201,33 @@ const rejectedTurn = [
 
 describe("Claude Code-rejected tool calls", () => {
   it("streams a rejected name to pi under the marker and never maps a real pi tool", async () => {
-    const { queue, runtime } = makeHarness();
-    const events = record(stream(runtime, prompt));
-    await tick();
-    for (const message of toolUseEvents("call_bad", "bash", '{"command":"ls"}'))
-      queue.push(message);
-    await tick();
+    const { push, runtime } = makeHarness();
+    const turn = record(stream(runtime, prompt));
+    push(...toolUseEvents("call_bad", "bash", '{"command":"ls"}'));
+    await turn.done;
 
-    assert.deepEqual(toolCalls(events), [{ id: "call_bad", name: "cc_no_such_tool__bash" }]);
+    assert.deepEqual(toolCalls(turn.events), [{ id: "call_bad", name: "cc_no_such_tool__bash" }]);
     assert.equal(runtime.test.hostContext.rejectedToolCallIds.has("call_bad"), true);
   });
 
   it("buffers the correction that arrives before pi re-enters (the incident ordering)", async () => {
-    const { queue, runtime } = makeHarness();
-    record(stream(runtime, prompt));
-    await tick();
-    for (const message of toolUseEvents("call_bad", "bash", '{"command":"ls"}'))
-      queue.push(message);
-    queue.push(ccRejection("call_bad"));
-    for (const message of toolUseEvents("call_good", "mcp__custom-tools__bash", '{"command":"ls"}'))
-      queue.push(message);
-    await tick();
+    const { push, drained, close, runtime } = makeHarness();
+    const first = record(stream(runtime, prompt));
+    push(...toolUseEvents("call_bad", "bash", '{"command":"ls"}'));
+    await first.done;
+    push(
+      ccRejection("call_bad"),
+      ...toolUseEvents("call_good", "mcp__custom-tools__bash", '{"command":"ls"}'),
+    );
+    await drained();
 
     const ctx = runtime.test.hostContext;
     assert.ok(ctx.bufferedSdkMessages.length > 0, "correction must be buffered, not discarded");
 
     const second = record(stream(runtime, rejectedTurn));
-    await tick();
-    assert.deepEqual(toolCalls(second), [{ id: "call_good", name: "bash" }]);
-    assert.equal(terminalError(second), null);
+    await second.done;
+    assert.deepEqual(toolCalls(second.events), [{ id: "call_good", name: "bash" }]);
+    assert.equal(terminalError(second.events), null);
     assert.equal(ctx.bufferedSdkMessages.length, 0);
 
     // The corrected call now dispatches and blocks on pi, as a healthy call must.
@@ -227,9 +236,8 @@ describe("Claude Code-rejected tool calls", () => {
       { command: "ls" },
       { _meta: { "claudecode/toolUseId": "call_good" } },
     );
-    await tick();
-    assert.equal(ctx.pendingToolCalls.has("call_good"), true);
-    record(
+    await until(() => ctx.hasPendingToolCall("call_good"), "the corrected call to block on pi");
+    const third = record(
       stream(runtime, [
         ...rejectedTurn,
         {
@@ -242,58 +250,56 @@ describe("Claude Code-rejected tool calls", () => {
       ]),
     );
     assert.deepEqual((await dispatched).content, [{ type: "text", text: "file.txt" }]);
+    close();
+    await third.done;
   });
 
   it("streams the correction live when pi re-enters first (the lucky ordering)", async () => {
-    const { queue, runtime } = makeHarness();
-    record(stream(runtime, prompt));
-    await tick();
-    for (const message of toolUseEvents("call_bad", "bash", '{"command":"ls"}'))
-      queue.push(message);
-    queue.push(ccRejection("call_bad"));
-    await tick();
+    const { push, drained, runtime } = makeHarness();
+    const first = record(stream(runtime, prompt));
+    push(...toolUseEvents("call_bad", "bash", '{"command":"ls"}'));
+    await first.done;
+    push(ccRejection("call_bad"));
+    await drained();
 
     const second = record(stream(runtime, rejectedTurn));
-    await tick();
-    assert.equal(runtime.test.hostContext.bufferedSdkMessages.length, 0);
-    for (const message of toolUseEvents("call_good", "mcp__custom-tools__bash", '{"command":"ls"}'))
-      queue.push(message);
-    await tick();
+    await until(
+      () => runtime.test.hostContext.bufferedSdkMessages.length === 0,
+      "the buffered rejection to be replayed into the re-entering turn",
+    );
+    push(...toolUseEvents("call_good", "mcp__custom-tools__bash", '{"command":"ls"}'));
+    await second.done;
 
-    assert.deepEqual(toolCalls(second), [{ id: "call_good", name: "bash" }]);
-    assert.equal(terminalError(second), null);
+    assert.deepEqual(toolCalls(second.events), [{ id: "call_good", name: "bash" }]);
+    assert.equal(terminalError(second.events), null);
   });
 
   it("replays a buffered text follow-up and its result in order", async () => {
-    const { queue, runtime } = makeHarness();
-    record(stream(runtime, prompt));
-    await tick();
-    for (const message of toolUseEvents("call_bad", "bash", '{"command":"ls"}'))
-      queue.push(message);
-    queue.push(ccRejection("call_bad"));
-    for (const message of textEvents("that tool does not exist here")) queue.push(message);
-    queue.push(resultMessage());
-    await tick();
+    const { push, drained, runtime } = makeHarness();
+    const first = record(stream(runtime, prompt));
+    push(...toolUseEvents("call_bad", "bash", '{"command":"ls"}'));
+    await first.done;
+    push(ccRejection("call_bad"), ...textEvents("that tool does not exist here"), resultMessage());
+    await drained();
 
     const second = record(stream(runtime, rejectedTurn));
-    await tick();
-    assert.deepEqual(texts(second), ["that tool does not exist here"]);
-    const last = second.at(-1);
+    await second.done;
+    assert.deepEqual(texts(second.events), ["that tool does not exist here"]);
+    const last = second.events.at(-1);
     assert.equal(last.type, "done");
     if (last.type !== "done") throw new Error("expected a trailing done event");
     assert.equal(last.reason, "stop");
   });
 
   it("resolves the valid call and drops the rejected one when a message mixes both", async () => {
-    const { queue, runtime } = makeHarness();
+    const { push, close, runtime } = makeHarness();
     const ctx = runtime.test.hostContext;
-    const events = record(stream(runtime, prompt));
-    await tick();
-    queue.push({
+    const turn = record(stream(runtime, prompt));
+    push({
       type: "stream_event",
       event: { type: "message_start", message: { usage: {} } },
     } as unknown as SDKMessage);
-    queue.push({
+    push({
       type: "stream_event",
       event: {
         type: "content_block_start",
@@ -306,11 +312,11 @@ describe("Claude Code-rejected tool calls", () => {
         },
       },
     } as unknown as SDKMessage);
-    queue.push({
+    push({
       type: "stream_event",
       event: { type: "content_block_stop", index: 0 },
     } as unknown as SDKMessage);
-    queue.push({
+    push({
       type: "stream_event",
       event: {
         type: "content_block_start",
@@ -318,17 +324,17 @@ describe("Claude Code-rejected tool calls", () => {
         content_block: { type: "tool_use", id: "call_bad", name: "bash", input: {} },
       },
     } as unknown as SDKMessage);
-    queue.push({
+    push({
       type: "stream_event",
       event: { type: "content_block_stop", index: 1 },
     } as unknown as SDKMessage);
-    queue.push({
+    push({
       type: "stream_event",
       event: { type: "message_delta", delta: { stop_reason: "tool_use" } },
     } as unknown as SDKMessage);
-    queue.push({ type: "stream_event", event: { type: "message_stop" } } as unknown as SDKMessage);
-    await tick();
-    assert.deepEqual(toolCalls(events), [
+    push({ type: "stream_event", event: { type: "message_stop" } } as unknown as SDKMessage);
+    await turn.done;
+    assert.deepEqual(toolCalls(turn.events), [
       { id: "call_good", name: "bash" },
       { id: "call_bad", name: "cc_no_such_tool__bash" },
     ]);
@@ -338,7 +344,7 @@ describe("Claude Code-rejected tool calls", () => {
       { command: "ls" },
       { _meta: { "claudecode/toolUseId": "call_good" } },
     );
-    await tick();
+    await until(() => ctx.hasPendingToolCall("call_good"), "the valid call to block on pi");
 
     const second = record(
       stream(runtime, [
@@ -365,15 +371,17 @@ describe("Claude Code-rejected tool calls", () => {
       ]),
     );
     assert.deepEqual((await dispatched).content, [{ type: "text", text: "file.txt" }]);
-    assert.equal(terminalError(second), null);
+    assert.equal(terminalError(second.events), null);
     assert.equal(ctx.pendingResults.size, 0);
+    close();
+    await second.done;
   });
 
   it("never replays a dead turn's buffer into the next command", async () => {
-    const { queue, runtime } = makeHarness();
+    const { push, drained, close, runtime } = makeHarness();
     const ctx = runtime.test.hostContext;
     const abort = new AbortController();
-    record(
+    const aborted = record(
       runtime.test.streamClaudeAgentSdk(
         fakeModel,
         {
@@ -384,11 +392,10 @@ describe("Claude Code-rejected tool calls", () => {
         { sessionId: HOST_SESSION, signal: abort.signal },
       ),
     );
-    await tick();
-    for (const message of toolUseEvents("call_bad", "bash", '{"command":"ls"}'))
-      queue.push(message);
-    for (const message of textEvents("orphaned follow-up")) queue.push(message);
-    await tick();
+    push(...toolUseEvents("call_bad", "bash", '{"command":"ls"}'));
+    await aborted.done;
+    push(...textEvents("orphaned follow-up"));
+    await drained();
     assert.ok(ctx.bufferedSdkMessages.length > 0, "expected an open window holding the follow-up");
 
     // The abort kills the turn, so its buffer dies with it — asserted synchronously,
@@ -405,19 +412,20 @@ describe("Claude Code-rejected tool calls", () => {
     assert.equal(ctx.bufferedSdkMessages.length, 0);
     assert.equal(ctx.rejectionWindowOpen, false);
 
+    // Nothing is coming for this turn, so the subprocess exits and the stream is read to
+    // its end: whatever it never carried, it never will.
     const second = record(stream(runtime, rejectedTurn));
-    await tick();
-    assert.deepEqual(texts(second), []);
-    assert.deepEqual(toolCalls(second), []);
+    close();
+    await second.done;
+    assert.deepEqual(texts(second.events), []);
+    assert.deepEqual(toolCalls(second.events), []);
   });
 
   it("terminates the turn when pi delivers a result for a call it was never shown", async () => {
-    const { queue, runtime } = makeHarness();
-    record(stream(runtime, prompt));
-    await tick();
-    for (const message of toolUseEvents("call_bad", "bash", '{"command":"ls"}'))
-      queue.push(message);
-    await tick();
+    const { push, runtime } = makeHarness();
+    const first = record(stream(runtime, prompt));
+    push(...toolUseEvents("call_bad", "bash", '{"command":"ls"}'));
+    await first.done;
 
     const second = record(
       stream(runtime, [
@@ -425,20 +433,25 @@ describe("Claude Code-rejected tool calls", () => {
         { role: "toolResult", toolCallId: "call_phantom", content: "who asked", isError: false },
       ]),
     );
-    await tick();
-    assert.match(terminalError(second), /never streamed to pi/);
+    await second.done;
+    assert.match(terminalError(second.events), /never streamed to pi/);
+    // pi's history and Claude Code's transcript have parted ways, so the subprocess must not
+    // stay warm to stream the rest of that turn into an unrelated one.
+    await until(
+      () => runtime.test.hostContext.activeQuery === null,
+      "the desynced query to be discarded",
+    );
   });
 
   it("terminates the turn when a handler is still waiting after full delivery", async () => {
-    const { queue, runtime } = makeHarness();
+    const { push, runtime } = makeHarness();
     const ctx = runtime.test.hostContext;
-    record(stream(runtime, prompt));
-    await tick();
-    queue.push({
+    const first = record(stream(runtime, prompt));
+    push({
       type: "stream_event",
       event: { type: "message_start", message: { usage: {} } },
     } as unknown as SDKMessage);
-    queue.push({
+    push({
       type: "stream_event",
       event: {
         type: "content_block_start",
@@ -451,11 +464,11 @@ describe("Claude Code-rejected tool calls", () => {
         },
       },
     } as unknown as SDKMessage);
-    queue.push({
+    push({
       type: "stream_event",
       event: { type: "content_block_stop", index: 0 },
     } as unknown as SDKMessage);
-    queue.push({
+    push({
       type: "stream_event",
       event: {
         type: "content_block_start",
@@ -468,20 +481,20 @@ describe("Claude Code-rejected tool calls", () => {
         },
       },
     } as unknown as SDKMessage);
-    queue.push({
+    push({
       type: "stream_event",
       event: { type: "content_block_stop", index: 1 },
     } as unknown as SDKMessage);
-    queue.push({
+    push({
       type: "stream_event",
       event: { type: "message_delta", delta: { stop_reason: "tool_use" } },
     } as unknown as SDKMessage);
-    queue.push({ type: "stream_event", event: { type: "message_stop" } } as unknown as SDKMessage);
-    await tick();
+    push({ type: "stream_event", event: { type: "message_stop" } } as unknown as SDKMessage);
+    await first.done;
 
     const handler = runtime.test.createMcpToolHandler("bash", ctx);
-    void handler({ command: "ls" }, { _meta: { "claudecode/toolUseId": "call_good" } });
-    await tick();
+    const blocked = handler({ command: "ls" }, { _meta: { "claudecode/toolUseId": "call_good" } });
+    await until(() => ctx.hasPendingToolCall("call_good"), "the first call to block on pi");
 
     // pi answers only the second call, leaving the first handler blocked.
     const second = record(
@@ -497,7 +510,19 @@ describe("Claude Code-rejected tool calls", () => {
         { role: "toolResult", toolCallId: "call_other", content: "unrelated" },
       ]),
     );
-    await tick();
-    assert.match(terminalError(second), /still waiting/);
+    await second.done;
+    assert.match(terminalError(second.events), /still waiting/);
+    // The turn that blocked it is over, so the handler is answered. Left hanging, it would
+    // hold Claude Code's request open and sit in the MCP server for the life of the process.
+    assert.deepEqual((await blocked).content, [
+      {
+        type: "text",
+        text: "Claude bridge: 1 tool handler(s) still waiting after 1 result(s) [call_good]",
+      },
+    ]);
+    await until(
+      () => runtime.test.hostContext.activeQuery === null,
+      "the desynced query to be discarded",
+    );
   });
 });

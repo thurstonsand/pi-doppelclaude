@@ -118,9 +118,11 @@ Query-scoped sets on `QueryContext` — `shownToolCallIds` (accumulating; replac
 1. Handler waiting → resolve (unchanged).
 2. Id in `rejectedToolCallIds` → drop with debug log. CC already holds its own error result for that id; forwarding pi's would be a duplicate answer to a question CC considers closed.
 3. Id in `shownToolCallIds` → park in `pendingResults` for a handler that has not fired yet (unchanged legitimate race).
-4. Otherwise → `emitTerminalError`: pi delivered a result for a call it was never shown; that is a bridge bug, and a terminated turn beats a silent hang.
+4. Otherwise → `failReconciliation`: pi delivered a result for a call it was never shown; that is a bridge bug, and a terminated turn beats a silent hang.
 
 Likewise, handlers still waiting after a full result delivery — previously the deadlock's warning symptom — now hard-fail the turn. The abort path (resolve-with-"Operation aborted") runs first and is unaffected.
+
+A hard-fail ends the turn for pi *and* force-closes the query. Reporting the desync to pi while leaving the subprocess warm was its own hang: the handler CC was blocked on never got an answer, and the context kept an `activeQuery` no turn could use, so every later turn in that conversation was read as reentrant and got a one-shot subprocess. `emitTerminalError` releases the handlers still blocked on the stream it ends, since pi answers a tool call through that stream and has just stopped being able to.
 
 ## Edge Cases & Failure Modes
 

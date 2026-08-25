@@ -123,7 +123,7 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
   ): void {
     if (c.currentPiStream && !completedStreams.has(c.currentPiStream as object)) {
       debug(
-        `WARNING: currentPiStream overwritten before terminal event (${label}); activeQuery=${Boolean(c.activeQuery)} pendingHandlers=${c.pendingToolCalls.size}`,
+        `WARNING: currentPiStream overwritten before terminal event (${label}); activeQuery=${Boolean(c.activeQuery)} pendingHandlers=${c.pendingToolCallCount}`,
       );
     }
     if (c.rejectionWindowOpen) {
@@ -266,6 +266,10 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
 
   function emitTerminalError(c: QueryContext, reason: "aborted" | "error", message: string): void {
     recapServedModel(c);
+    // pi answers a tool call through the stream this ends, so a handler still blocked here has
+    // just run out of ways to be answered. Releasing it is not cleanup after the fact: it is
+    // what "the turn is over" means for the Claude Code request waiting on the other side.
+    c.releasePendingToolCalls(message);
     if (!c.turnOutput) return;
     c.turnOutput.stopReason = reason;
     c.turnOutput.errorMessage = reason === "error" ? withReloginHint(message) : message;

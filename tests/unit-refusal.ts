@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createRequire } from "node:module";
 import { describe, it } from "node:test";
 import type {
   Query,
@@ -7,7 +8,7 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import { type Api, createAssistantMessageEventStream, type Model } from "@earendil-works/pi-ai";
 import type { CustomEntry, ExtensionUIContext, Theme } from "@earendil-works/pi-coding-agent";
-import { KeybindingsManager, setKeybindings } from "@earendil-works/pi-tui";
+import type { KeybindingsManager as KeybindingsManagerType } from "@earendil-works/pi-tui";
 import { createBridgeRuntime } from "../src/bridge-runtime.js";
 import { Doppel } from "../src/doppel.js";
 import {
@@ -16,6 +17,20 @@ import {
   refusalEntryData,
   renderRefusalEntry,
 } from "../src/refusal.js";
+
+// pi-coding-agent 0.84.3 ships a shrinkwrap, so its pi-tui is a second copy nested under it and
+// the keybindings singleton `keyText` reads is that copy's, not the hoisted one this repo
+// installs for its own imports. Reach the singleton `keyText` actually observes; under real pi
+// there is one module graph and this distinction does not exist.
+const piTui = (await import(
+  createRequire(import.meta.resolve("@earendil-works/pi-coding-agent")).resolve(
+    "@earendil-works/pi-tui",
+  )
+)) as {
+  KeybindingsManager: new (definitions: never, userBindings?: never) => KeybindingsManagerType;
+  setKeybindings: (manager: KeybindingsManagerType) => void;
+};
+const { KeybindingsManager, setKeybindings } = piTui;
 
 const fakeModel = {
   api: "doppelclaude",
