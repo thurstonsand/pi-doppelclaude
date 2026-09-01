@@ -41,9 +41,14 @@ run = "actionlint"
 description = "Lint shell scripts"
 run = "shellcheck -x -P SCRIPTDIR tests/*.sh tests/lib/*.sh"
 
+# Renovate's bin shim ends in `exec node`, and mise builds a task's PATH from the shell's
+# pre-activation ordering, which on a Homebrew machine starts at /opt/homebrew/bin -- ahead of the
+# node this task declares. re2 is then compiled by mise's node and loaded by Homebrew's, which
+# fails the ABI check and downgrades regex validation to JavaScript RegExp with only a warning.
+# Naming the interpreter is the same move UV_PYTHON makes in ansiblonomicon.
 [tasks.renovate]
 description = "Run Renovate"
-run = "renovate"
+run = "PATH=\"{{ tools.node.path }}/bin:$PATH\" renovate"
 tools.node = "24"
 tools."npm:renovate" = { version = "44.29.4", allow_builds = [
   "re2",
@@ -53,7 +58,7 @@ tools."npm:renovate" = { version = "44.29.4", allow_builds = [
 
 [tasks."lint:renovate"]
 description = "Validate Renovate configuration"
-run = "renovate-config-validator renovate.json"
+run = "PATH=\"{{ tools.node.path }}/bin:$PATH\" renovate-config-validator renovate.json"
 tools.node = "24"
 tools."npm:renovate" = { version = "44.29.4", allow_builds = [
   "re2",
