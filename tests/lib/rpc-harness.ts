@@ -182,6 +182,15 @@ export function isolateAgentDir(name: string, logdir: string, customAgentDir?: s
       if (existsSync(src)) copyFileSync(src, join(sandbox, file));
     }
   }
+  const modelsStorePath = join(sandbox, "models-store.json");
+  const modelsStore = existsSync(modelsStorePath)
+    ? record(JSON.parse(readFileSync(modelsStorePath, "utf8")), "models store")
+    : {};
+  modelsStore.doppelclaude = {
+    models: [],
+    supportedModelIds: ["claude-haiku-4-5"],
+  };
+  writeFileSync(modelsStorePath, JSON.stringify(modelsStore));
   const settingsPath = join(sandbox, "settings.json");
   const settings = existsSync(settingsPath)
     ? (JSON.parse(readFileSync(settingsPath, "utf8")) as Record<string, unknown>)
