@@ -54,6 +54,23 @@ install_dependencies() {
   mise bootstrap --yes --quiet
 }
 
+install_claude() {
+  local bundled_cli expected_version
+  bundled_cli="$(find node_modules/@anthropic-ai -maxdepth 2 \
+    -path '*/claude-agent-sdk-linux-*/claude' -type f -print -quit)"
+  if [[ -z "${bundled_cli}" ]]; then
+    printf 'Could not find the Claude Code binary bundled with the Agent SDK.\n' >&2
+    return 1
+  fi
+  expected_version="$("${bundled_cli}" --version | awk 'NR == 1 { print $1 }')"
+
+  if [[ "$(claude --version 2>/dev/null | awk 'NR == 1 { print $1 }' || true)" == "${expected_version}" ]]; then
+    return
+  fi
+
+  curl -fsSL https://claude.ai/install.sh | bash -s -- "${expected_version}"
+}
+
 install_pi() {
   local expected_version
   expected_version="$(node -p "require('./node_modules/@earendil-works/pi-coding-agent/package.json').version")"
@@ -71,6 +88,7 @@ configure_mise_path
 export PATH="${HOME}/.local/share/mise/shims:${HOME}/.local/bin:${PATH}"
 run_step 'project toolchain' install_toolchain
 run_step 'project dependencies' install_dependencies
+run_step 'Claude Code CLI' install_claude
 run_step 'Pi CLI' install_pi
 
 printf '\nOrb setup complete.\n'
