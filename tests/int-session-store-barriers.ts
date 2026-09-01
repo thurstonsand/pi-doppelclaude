@@ -54,6 +54,8 @@ const runtime = createBridgeRuntime({
   providerSettings: { systemPromptMode: "claude-code" },
   sessionStore: store,
 });
+const PI_SESSION_ID = "session-store-barriers";
+await runtime.designateHost(PI_SESSION_ID);
 const context: Context = {
   systemPrompt: "You are concise.",
   messages: [{ role: "user", content: "Reply only BARRIER_OK.", timestamp: Date.now() }],
@@ -61,7 +63,9 @@ const context: Context = {
 
 try {
   let terminal = false;
-  const completion = terminalMessage(runtime.stream(model, context)).then((message) => {
+  const completion = terminalMessage(
+    runtime.stream(model, context, { sessionId: PI_SESSION_ID }),
+  ).then((message) => {
     terminal = true;
     return message;
   });
