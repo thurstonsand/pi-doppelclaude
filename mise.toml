@@ -39,7 +39,7 @@ run = "actionlint"
 
 [tasks."lint:shell"]
 description = "Lint shell scripts"
-run = "shellcheck -x -P SCRIPTDIR tests/*.sh tests/lib/*.sh"
+run = "shellcheck -x -P SCRIPTDIR .agents/setup .agents/resume tests/*.sh tests/lib/*.sh"
 
 # Renovate's bin shim ends in `exec node`, and mise builds a task's PATH from the shell's
 # pre-activation ordering, which on a Homebrew machine starts at /opt/homebrew/bin -- ahead of the

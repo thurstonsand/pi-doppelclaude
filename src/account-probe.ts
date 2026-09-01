@@ -6,6 +6,7 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import { Type } from "typebox";
 import { errorMessage } from "./errors.js";
+import { sdkChildEnv } from "./sdk-child-env.js";
 import type { ProviderSettings } from "./settings.js";
 import { parseValue } from "./validation.js";
 
@@ -91,7 +92,10 @@ export function createAccountProbe(dependencies: AccountProbeDependencies): Acco
         prompt: noPrompt(),
         options: {
           abortController,
+          env: sdkChildEnv(),
           tools: [],
+          mcpServers: {},
+          strictMcpConfig: true,
           settingSources: [],
           skills: [],
           persistSession: false,
@@ -119,6 +123,7 @@ export function createAccountProbe(dependencies: AccountProbeDependencies): Acco
       );
     } finally {
       if (timeout) clearTimeout(timeout);
+      abortController.abort();
       controlQuery?.close();
     }
   };

@@ -49,7 +49,11 @@ describe("Claude Code account probe", () => {
     assert.deepEqual(await probe(), { available: true, supportedModels });
     assert.equal(closes, 1);
     assert.ok(options?.abortController instanceof AbortController);
+    assert.equal(options.abortController.signal.aborted, true);
+    assert.equal(options.env?.CLAUDE_CODE_DISABLE_AUTO_MEMORY, "1");
     assert.deepEqual(options?.tools, []);
+    assert.deepEqual(options?.mcpServers, {});
+    assert.equal(options?.strictMcpConfig, true);
     assert.deepEqual(options?.settingSources, []);
     assert.deepEqual(options?.skills, []);
     assert.equal(options?.persistSession, false);
@@ -82,20 +86,30 @@ describe("Claude Code account probe", () => {
 
   it("rejects malformed account information and still closes the Query", async () => {
     let closes = 0;
+    let options: Options | undefined;
     await assert.rejects(
-      probeFor({ apiProvider: "firstParty", email: 42 }, () => {
-        closes++;
-      })(),
+      probeFor(
+        { apiProvider: "firstParty", email: 42 },
+        () => {
+          closes++;
+        },
+        (value) => {
+          options = value;
+        },
+      )(),
       /malformed account information.*claude auth login/,
     );
     assert.equal(closes, 1);
+    assert.equal(options?.abortController?.signal.aborted, true);
   });
 
   it("turns control Query failures into actionable diagnostics", async () => {
     let closes = 0;
+    let options: Options | undefined;
     const probe = createAccountProbe({
       providerSettings: { systemPromptMode: "claude-code" },
-      queryFactory() {
+      queryFactory(request) {
+        options = request.options;
         return {
           accountInfo: async () => {
             throw new Error("control channel failed");
@@ -109,5 +123,6 @@ describe("Claude Code account probe", () => {
     });
     await assert.rejects(probe(), /control channel failed.*claude auth login/);
     assert.equal(closes, 1);
+    assert.equal(options?.abortController?.signal.aborted, true);
   });
 });

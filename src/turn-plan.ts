@@ -130,7 +130,7 @@ export function planTurn(input: {
   });
   const queryOptions: Options = {
     cwd,
-    env: sdkChildEnv({ ENABLE_CLAUDEAI_MCP_SERVERS: "0", DISABLE_AUTO_COMPACT: "1" }),
+    env: sdkChildEnv({ DISABLE_AUTO_COMPACT: "1" }),
     tools: [],
     permissionMode: "bypassPermissions",
     allowDangerouslySkipPermissions: true,
