@@ -19,11 +19,25 @@ const ACCOUNT_INFO_SCHEMA = Type.Object({
   apiProvider: Type.Optional(Type.String()),
 });
 
+// Parsing cleans unknown keys, so anything the catalog synthesizes a model from has to be named
+// here or it never survives the probe.
 const MODEL_INFO_SCHEMA = Type.Object({
   value: Type.String(),
   resolvedModel: Type.Optional(Type.String()),
   displayName: Type.String(),
   description: Type.String(),
+  supportedEffortLevels: Type.Optional(
+    Type.Array(
+      Type.Union([
+        Type.Literal("low"),
+        Type.Literal("medium"),
+        Type.Literal("high"),
+        Type.Literal("xhigh"),
+        Type.Literal("max"),
+      ]),
+    ),
+  ),
+  supportsAdaptiveThinking: Type.Optional(Type.Boolean()),
 });
 const SUPPORTED_MODELS_SCHEMA = Type.Array(MODEL_INFO_SCHEMA);
 

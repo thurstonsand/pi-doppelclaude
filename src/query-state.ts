@@ -82,7 +82,7 @@ export class QueryContext {
   /** The conversation this context speaks for. Set once, by the doppel that made it. */
   constructor(readonly doppel: Doppel) {}
 
-  // Query-scoped (fully isolated per query)
+  // Query-scoped: reassigned by spawnFreshQuery for every query this context serves.
   activeQuery: Query | null = null;
   inputQueue: PushQueue<SDKUserMessage> | null = null;
   sessionStoreWriter: SessionStoreWriter | null = null;

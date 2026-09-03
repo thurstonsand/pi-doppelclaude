@@ -7,11 +7,13 @@ import {
 import { type Static, Type } from "typebox";
 import { debug } from "./debug.js";
 import {
+  type AdvertisedModel,
   type BridgeModel,
   canonicalClaudeModelId,
   compareModels,
   isStableClaudeModelId,
   projectCatalogModels,
+  synthesizeModel,
 } from "./models.js";
 import { parseValue } from "./validation.js";
 
@@ -60,6 +62,22 @@ const CATALOG_SCHEMA = Type.Union([
   Type.Object({ models: CANONICAL_MODELS_SCHEMA }),
   Type.Record(Type.String(), CANONICAL_MODEL_SCHEMA),
 ]);
+const ADVERTISED_MODEL_SCHEMA = Type.Object({
+  id: Type.String({ minLength: 1 }),
+  displayName: Type.String({ minLength: 1 }),
+  supportedEffortLevels: Type.Optional(
+    Type.Array(
+      Type.Union([
+        Type.Literal("low"),
+        Type.Literal("medium"),
+        Type.Literal("high"),
+        Type.Literal("xhigh"),
+        Type.Literal("max"),
+      ]),
+    ),
+  ),
+  supportsAdaptiveThinking: Type.Optional(Type.Boolean()),
+});
 const STORE_ENTRY_SCHEMA = Type.Object({
   models: CANONICAL_MODELS_SCHEMA,
   checkedAt: Type.Optional(Type.Number()),
@@ -67,6 +85,7 @@ const STORE_ENTRY_SCHEMA = Type.Object({
   etag: Type.Optional(Type.String()),
   supportedModelIds: Type.Optional(Type.Array(Type.String())),
   observedModelIds: Type.Optional(Type.Array(Type.String())),
+  advertisedModels: Type.Optional(Type.Array(ADVERTISED_MODEL_SCHEMA)),
 });
 
 type CanonicalModel = Static<typeof CANONICAL_MODEL_SCHEMA>;
@@ -109,17 +128,40 @@ function parseStoreEntry(value: unknown): StoredCatalog | undefined {
 // Claude Code advertises a model under whichever name it currently prefers: a mutable alias
 // (`sonnet`), a long-context form, or a dated snapshot. Mutable aliases name no family, so they
 // fail the stable-ID test and never reach the catalog.
-function advertisedModelIds(models: readonly ModelInfo[]): Set<string> {
-  const ids = new Set<string>();
-  const add = (advertised: string) => {
+function advertisedModels(models: readonly ModelInfo[]): Map<string, AdvertisedModel> {
+  const rows = new Map<string, AdvertisedModel>();
+  const add = (advertised: string, row: ModelInfo, named: boolean) => {
     const id = canonicalClaudeModelId(advertised);
-    if (isStableClaudeModelId(id)) ids.add(id);
+    // The bare and `[1m]` rows of one model collapse onto the same id; either describes it.
+    if (!isStableClaudeModelId(id) || rows.has(id)) return;
+    rows.set(id, {
+      displayName: named ? row.displayName : id,
+      ...(row.supportedEffortLevels ? { supportedEffortLevels: row.supportedEffortLevels } : {}),
+      ...(row.supportsAdaptiveThinking === undefined
+        ? {}
+        : { supportsAdaptiveThinking: row.supportsAdaptiveThinking }),
+    });
   };
-  for (const model of models) {
-    if (model.resolvedModel) add(model.resolvedModel);
-    add(model.value);
+  // `default` is the account's current preference rather than a model
+  const sentinel = (model: ModelInfo) => model.value === "default";
+  for (const model of models.filter((model) => !sentinel(model))) {
+    if (model.resolvedModel) add(model.resolvedModel, model, true);
+    add(model.value, model, true);
   }
-  return ids;
+  for (const model of models.filter(sentinel)) {
+    if (model.resolvedModel) add(model.resolvedModel, model, false);
+  }
+  return rows;
+}
+
+function storedAdvertisedModels(entry: StoredCatalog | undefined): Map<string, AdvertisedModel> {
+  return new Map((entry?.advertisedModels ?? []).map(({ id, ...row }) => [id, row]));
+}
+
+function advertisedModelList(rows: ReadonlyMap<string, AdvertisedModel>) {
+  return [...rows]
+    .map(([id, row]) => ({ id, ...row }))
+    .sort((left, right) => left.id.localeCompare(right.id));
 }
 
 function sameModelIds(left: readonly string[] | undefined, right: readonly string[]): boolean {
@@ -168,6 +210,8 @@ export function createBridgeModelCatalog(
   let models: readonly BridgeModel[] = [];
   let overlayModels: readonly Model<Api>[] = [];
   let advertisedIds: ReadonlySet<string> = new Set();
+  let advertisedRows: ReadonlyMap<string, AdvertisedModel> = new Map();
+  let describedIds: ReadonlySet<string> = new Set();
   const observedIds = new Set<string>();
   let dynamicLastModified = -1;
   // Pi owns storage and mints a fresh generation-fenced publish capability per refresh, so the
@@ -188,18 +232,26 @@ export function createBridgeModelCatalog(
     return target({ persist: entry, update });
   };
 
-  // Pi's bundled metadata is the floor and a canonical catalog overlays it, so a model Claude Code
-  // confirmed is offered as soon as either source can describe it.
+  // A synthesized entry is the floor, Pi's bundled metadata overrides it, and a canonical catalog
+  // overrides that, so a model Claude Code confirmed is offered whether or not anyone can describe
+  // it, and gets described the moment someone can.
   const project = () => {
     const allowedIds = new Set([...advertisedIds, ...observedIds]);
-    const merged = new Map(
-      projectCatalogModels(dependencies.builtinModels, allowedIds).map((model) => [
-        model.id,
-        model,
-      ]),
-    );
-    for (const model of projectCatalogModels(overlayModels, allowedIds))
-      merged.set(model.id, model);
+    const merged = new Map<string, BridgeModel>();
+    for (const id of allowedIds) {
+      if (!isStableClaudeModelId(id)) continue;
+      // A model Claude Code served without advertising, or one allowlisted by a store entry written
+      // before descriptions were kept, has only its id to go by.
+      merged.set(id, synthesizeModel(id, advertisedRows.get(id) ?? { displayName: id }));
+    }
+    const described = new Set<string>();
+    for (const source of [dependencies.builtinModels, overlayModels]) {
+      for (const model of projectCatalogModels(source, allowedIds)) {
+        merged.set(model.id, model);
+        described.add(model.id);
+      }
+    }
+    describedIds = described;
     models = [...merged.values()].sort(compareModels);
   };
 
@@ -208,9 +260,11 @@ export function createBridgeModelCatalog(
   const applyModels = (
     overlay: readonly Model<Api>[],
     allowedIds: ReadonlySet<string>,
+    rows: ReadonlyMap<string, AdvertisedModel>,
     lastModified: number,
   ) => {
     advertisedIds = allowedIds;
+    advertisedRows = rows;
     if (lastModified >= dynamicLastModified) {
       overlayModels = overlay;
       dynamicLastModified = lastModified;
@@ -267,6 +321,7 @@ export function createBridgeModelCatalog(
       await persist(publish, {
         ...(stored ?? { models: [] }),
         supportedModelIds: stored?.supportedModelIds ?? [...advertisedIds].sort(),
+        advertisedModels: stored?.advertisedModels ?? advertisedModelList(advertisedRows),
         observedModelIds: [...observedIds].sort(),
       });
     },
@@ -283,8 +338,11 @@ export function createBridgeModelCatalog(
       // and a failed catalog both write an entry, so a bootstrapped installation never discovers on
       // startup again. A probe that never answered leaves it unbootstrapped for the next start.
       const discovering = context.allowNetwork || stored === undefined;
+      const rows = discovering
+        ? advertisedModels(await requestSupportedModels())
+        : storedAdvertisedModels(stored);
       const allowedIds = discovering
-        ? advertisedModelIds(await requestSupportedModels())
+        ? new Set(rows.keys())
         : new Set(stored?.supportedModelIds ?? []);
       const overlay = overlayFor(stored);
       const restored = await context.publish({
@@ -292,16 +350,18 @@ export function createBridgeModelCatalog(
           applyModels(
             overlay?.models ?? [],
             allowedIds,
+            rows,
             overlay?.lastModified ?? dependencies.builtinGeneratedAt ?? 0,
           ),
       });
       if (!discovering || !restored) return;
 
       const supportedModelIds = [...allowedIds].sort();
+      const advertised = advertisedModelList(rows);
       // Claude Code can begin serving a model that neither the built-ins nor the cached catalog
       // describe. An allowlist entry alone cannot surface it, so freshness yields to a refetch.
       const undescribed = [...supportedModelIds, ...observedIds].some(
-        (id) => !models.some((model) => model.id === id),
+        (id) => !describedIds.has(id),
       );
       if (
         !context.force &&
@@ -315,6 +375,7 @@ export function createBridgeModelCatalog(
           await persist(context.publish, {
             ...(storedCatalog ?? stored),
             supportedModelIds,
+            advertisedModels: advertised,
             observedModelIds: [...observedIds].sort(),
           });
         }
@@ -332,6 +393,7 @@ export function createBridgeModelCatalog(
           await persist(context.publish, {
             ...(storedCatalog ?? stored ?? { models: [] }),
             supportedModelIds,
+            advertisedModels: advertised,
             observedModelIds: [...observedIds].sort(),
             checkedAt: dependencies.now(),
           });
@@ -344,9 +406,11 @@ export function createBridgeModelCatalog(
           {
             ...canonicalEntry,
             supportedModelIds,
+            advertisedModels: advertised,
             observedModelIds: [...observedIds].sort(),
           },
-          () => applyModels(canonicalEntry.models, allowedIds, canonicalEntry.lastModified ?? 0),
+          () =>
+            applyModels(canonicalEntry.models, allowedIds, rows, canonicalEntry.lastModified ?? 0),
         );
       } catch (error) {
         if (!context.signal.aborted) {
@@ -356,6 +420,7 @@ export function createBridgeModelCatalog(
           await persist(context.publish, {
             ...(storedCatalog ?? { models: [] }),
             supportedModelIds,
+            advertisedModels: advertised,
             observedModelIds: [...observedIds].sort(),
             checkedAt: dependencies.now(),
           });

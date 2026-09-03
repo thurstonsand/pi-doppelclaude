@@ -10,7 +10,7 @@ import { afterEach, describe, it } from "node:test";
 import type { Message as PiMessage } from "@earendil-works/pi-ai";
 import { getSessionPath } from "cc-session-io";
 import { createBridgeRuntime } from "../src/bridge-runtime.js";
-import { planSessionSync } from "../src/doppel.js";
+import { describeSyncReason, planSessionSync } from "../src/doppel.js";
 
 const runtime = createBridgeRuntime({
   providerSettings: { systemPromptMode: "claude-code" },
@@ -27,6 +27,7 @@ describe("session sync planning", () => {
     const plan = planSessionSync([{ role: "user", content: "hello", timestamp: Date.now() }], null);
     assert.equal(plan.path, "clean-start");
     assert.equal(plan.previousSession, null);
+    assert.equal(plan.reason.kind, "no-session");
   });
 
   it("plans reuse for a trailing assistant without mutating the session", () => {
@@ -42,6 +43,7 @@ describe("session sync planning", () => {
     assert.equal(plan.path, "reuse");
     assert.equal(plan.advanceCursor, true);
     assert.equal(session.cursor, 1);
+    assert.equal(plan.reason.kind, "trailing-assistant");
   });
 
   it("plans rebuild for divergent history", () => {
@@ -56,6 +58,38 @@ describe("session sync planning", () => {
       session,
     );
     assert.equal(plan.path, "rebuild");
+    assert.deepEqual(plan.reason, { kind: "missed-messages", missed: 2 });
+  });
+
+  // Every rebuild reports the condition that chose it. Without this the only
+  // record of a forced rebuild was a separate log line from whichever site set
+  // the flag, and the two could only be tied together by their shared process.
+  it("names the cause a forced rebuild was marked with", () => {
+    const plan = planSessionSync(
+      [
+        { role: "user", content: "first", timestamp: 1 },
+        { role: "user", content: "next", timestamp: 2 },
+      ] as unknown as PiMessage[],
+      {
+        sessionId: "11111111-1111-4111-8111-111111111111",
+        cursor: 1,
+        rebuildReason: "session_compact:manual",
+      },
+    );
+    assert.equal(plan.path, "rebuild");
+    assert.equal(describeSyncReason(plan.reason), "forced(session_compact:manual)");
+  });
+
+  it("reports the cursor and history length when the history is shorter than the cursor", () => {
+    const plan = planSessionSync(
+      [
+        { role: "user", content: "first", timestamp: 1 },
+        { role: "user", content: "next", timestamp: 2 },
+      ] as unknown as PiMessage[],
+      { sessionId: "11111111-1111-4111-8111-111111111111", cursor: 42 },
+    );
+    assert.equal(plan.path, "rebuild");
+    assert.equal(describeSyncReason(plan.reason), "history-shrank(cursor=42 priors=1)");
   });
 
   it("rebuilds into the store without writing Claude's project directory", () => {
@@ -79,7 +113,7 @@ describe("session sync planning", () => {
       assert.equal(test.getStoredSession(first.sessionId).length, 2);
       assert.equal(existsSync(getSessionPath(first.sessionId, cwd)), false);
 
-      test.setHostSession({ sessionId: first.sessionId, cursor: 0, needsRebuild: true });
+      test.setHostSession({ sessionId: first.sessionId, cursor: 0, rebuildReason: "test" });
       const second = test.syncHostSession(messages, cwd);
       assert.equal(second.sessionId, first.sessionId);
       assert.equal(test.getStoredSession(first.sessionId).length, 2);

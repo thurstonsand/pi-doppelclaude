@@ -52,7 +52,7 @@ try {
   assert.equal(failed.stopReason, "error");
   assert.match(failed.errorMessage ?? "", /transcript mirror failed.*deliberate mirror failure/i);
   const invalidated = runtime.test.getHostSession();
-  assert.equal(invalidated?.needsRebuild, true);
+  assert.match(invalidated?.rebuildReason ?? "", /mirror failed/i);
   assert.equal(
     sessionStore.load(invalidated.sessionId),
     null,

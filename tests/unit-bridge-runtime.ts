@@ -142,7 +142,7 @@ describe("bridge runtime isolation", () => {
     const closing = runtime.test.closeQueryContext(context, "unsafe", "force");
     assert.equal(forceClosed, true);
     assert.equal(writerClosed, true);
-    assert.equal(runtime.test.getHostSession().needsRebuild, true);
+    assert.equal(runtime.test.getHostSession().rebuildReason, "force-close:unsafe");
     finishQuery();
     await closing;
   });
@@ -200,6 +200,9 @@ describe("bridge runtime isolation", () => {
 
     runtime.test.settleInterruptedQuery(context);
     assert.equal(context.readyForInput, false);
-    assert.equal(runtime.test.getHostSession().needsRebuild, true);
+    assert.match(
+      runtime.test.getHostSession().rebuildReason ?? "",
+      /^force-close:.*session will rebuild/,
+    );
   });
 });

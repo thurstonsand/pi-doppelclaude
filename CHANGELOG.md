@@ -2,6 +2,20 @@
 
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Use models before pi.dev reports them** — when Anthropic releases new models, they will show up in Claude Code before being present from pi.dev. In those cases, surface them as selectable, but missing some of the metadata from pi. Still fully usable.
+
+### Fixed
+
+- **Stop re-sending the entire conversation after compactions** — after a `/compact` or a rewind, each later turn rebuilt the transcript into a fresh Claude Code process, often paying the full cache cost again.
+
+### Changed
+
+- Improved logging of session rebuilds so that it's easier to track why
+
 ## 0.10.0 — 2026-08-16
 
 ### Fixed

@@ -24,11 +24,40 @@ export interface SessionState {
   cursor: number;
   // Force the next sync down the REBUILD path when pi has mutated its messages
   // array out from under us (compact, tree navigation, or abort). REBUILD
-  // atomically replaces the authoritative store transcript.
-  needsRebuild?: boolean;
+  // atomically replaces the authoritative store transcript. The string is the
+  // cause, carried from the site that set the flag to the sync that consumes it,
+  // so one log line names both why a rebuild was forced and where it was decided.
+  rebuildReason?: string;
 }
 
 export type SyncPath = "reuse" | "rebuild" | "clean-start";
+
+/** Why a plan chose the path it did. Reported on every sync so a rebuild is never
+ *  attributable only by correlating separate log lines across a shared process. */
+export type SyncReason =
+  | { kind: "in-sync" }
+  | { kind: "trailing-assistant" }
+  | { kind: "no-session" }
+  | { kind: "forced"; cause: string }
+  | { kind: "history-shrank"; cursor: number; priors: number }
+  | { kind: "missed-messages"; missed: number };
+
+export function describeSyncReason(reason: SyncReason): string {
+  switch (reason.kind) {
+    case "in-sync":
+      return "in-sync";
+    case "trailing-assistant":
+      return "trailing-assistant";
+    case "no-session":
+      return "no-session";
+    case "forced":
+      return `forced(${reason.cause})`;
+    case "history-shrank":
+      return `history-shrank(cursor=${reason.cursor} priors=${reason.priors})`;
+    case "missed-messages":
+      return `missed-messages(${reason.missed})`;
+  }
+}
 
 // Two semantic paths:
 //   REUSE — pi's history is in sync with the doppel's live session.
@@ -50,11 +79,13 @@ export type SyncPlan =
       priorMessages: Context["messages"];
       previousSession: SessionState;
       advanceCursor: boolean;
+      reason: SyncReason;
     }
   | {
       path: "rebuild" | "clean-start";
       priorMessages: Context["messages"];
       previousSession: SessionState | null;
+      reason: SyncReason;
     };
 
 export interface SyncResult {
@@ -178,28 +209,44 @@ function planFor(
   priorMessages: Context["messages"],
   currentSession: SessionState | null,
 ): SyncPlan {
-  if (
-    currentSession &&
-    !currentSession.needsRebuild &&
-    priorMessages.length >= currentSession.cursor
-  ) {
-    const missed = priorMessages.slice(currentSession.cursor);
-    const trailingAssistantOnly =
-      missed.length === 1 && (missed[0] as { role?: string }).role === "assistant";
-    if (missed.length === 0 || trailingAssistantOnly) {
-      return {
-        path: "reuse",
-        priorMessages,
-        previousSession: currentSession,
-        advanceCursor: trailingAssistantOnly,
-      };
-    }
+  const reason = diagnose(priorMessages, currentSession);
+  if (reason.kind === "in-sync" || reason.kind === "trailing-assistant") {
+    // Only the reuse branch proves a session exists, so the narrowing is the diagnosis'.
+    if (!currentSession) throw new Error("Claude bridge: reuse diagnosed without a session");
+    return {
+      path: "reuse",
+      priorMessages,
+      previousSession: currentSession,
+      advanceCursor: reason.kind === "trailing-assistant",
+      reason,
+    };
   }
   return {
     path: priorMessages.length === 0 ? "clean-start" : "rebuild",
     priorMessages,
     previousSession: currentSession,
+    reason,
   };
+}
+
+/** The single place that decides a sync path, so the logged reason cannot drift from it. */
+function diagnose(
+  priorMessages: Context["messages"],
+  currentSession: SessionState | null,
+): SyncReason {
+  if (!currentSession) return { kind: "no-session" };
+  if (currentSession.rebuildReason) return { kind: "forced", cause: currentSession.rebuildReason };
+  if (priorMessages.length < currentSession.cursor)
+    return {
+      kind: "history-shrank",
+      cursor: currentSession.cursor,
+      priors: priorMessages.length,
+    };
+  const missed = priorMessages.slice(currentSession.cursor);
+  if (missed.length === 0) return { kind: "in-sync" };
+  if (missed.length === 1 && (missed[0] as { role?: string }).role === "assistant")
+    return { kind: "trailing-assistant" };
+  return { kind: "missed-messages", missed: missed.length };
 }
 
 /** Apply a plan to its doppel: the session it resumes from, and the transcript the store holds. */
@@ -212,22 +259,25 @@ export function applySessionSync(input: {
   modelId?: string;
 }): SyncResult {
   const { doppel, plan, cwd, sessionStore, customToolNameToSdk, modelId } = input;
+  const why = describeSyncReason(plan.reason);
   if (plan.path === "reuse") {
     const previous = plan.previousSession;
     doppel.session = plan.advanceCursor
       ? { ...previous, cursor: plan.priorMessages.length }
       : previous;
     debug(
-      `Case 3: ${plan.advanceCursor ? "advanced cursor past trailing assistant, " : ""}resuming session ${previous.sessionId.slice(0, 8)}, cursor=${doppel.session.cursor}`,
+      `Case 3: doppel=${doppel.label} ${plan.advanceCursor ? "advanced cursor past trailing assistant, " : ""}resuming session ${previous.sessionId.slice(0, 8)}, cursor=${doppel.session.cursor}`,
     );
     debug(
-      `syncResult: path=reuse doppel=${doppel.label} sessionId=${previous.sessionId} cursor=${doppel.session.cursor}`,
+      `syncResult: path=reuse doppel=${doppel.label} reason=${why} sessionId=${previous.sessionId} cursor=${doppel.session.cursor}`,
     );
     return { sessionId: previous.sessionId, path: "reuse" };
   }
   if (plan.path === "clean-start") {
-    debug(`Case 1: clean start, ${plan.priorMessages.length + 1} total messages`);
-    debug(`syncResult: path=clean-start doppel=${doppel.label}`);
+    debug(
+      `Case 1: doppel=${doppel.label} clean start, ${plan.priorMessages.length + 1} total messages`,
+    );
+    debug(`syncResult: path=clean-start doppel=${doppel.label} reason=${why}`);
     return { sessionId: null, path: "clean-start" };
   }
 
@@ -243,16 +293,16 @@ export function applySessionSync(input: {
   doppel.session = { sessionId: session.sessionId, cursor: plan.priorMessages.length };
   if (previousSessionId === undefined) {
     debug(
-      `Case 2: first turn with ${plan.priorMessages.length} prior messages → session ${session.sessionId.slice(0, 8)}, ${session.records.length} records`,
+      `Case 2: doppel=${doppel.label} first turn with ${plan.priorMessages.length} prior messages → session ${session.sessionId.slice(0, 8)}, ${session.records.length} records`,
     );
   } else {
     const missedCount = plan.priorMessages.length - previousCursor;
     debug(
-      `Case 4: ${missedCount} missed messages, ${plan.priorMessages.length} total → replaced session ${session.sessionId.slice(0, 8)} (same id), ${session.records.length} records`,
+      `Case 4: doppel=${doppel.label} ${missedCount} missed messages, ${plan.priorMessages.length} total → replaced session ${session.sessionId.slice(0, 8)} (same id), ${session.records.length} records`,
     );
   }
   debug(
-    `syncResult: path=rebuild doppel=${doppel.label} sessionId=${session.sessionId} priors=${plan.priorMessages.length} ${previousSessionId === undefined ? "first" : "preserved"}`,
+    `syncResult: path=rebuild doppel=${doppel.label} reason=${why} sessionId=${session.sessionId} priors=${plan.priorMessages.length} cursor=${previousCursor} ${previousSessionId === undefined ? "first" : "preserved"}`,
   );
   return { sessionId: session.sessionId, path: "rebuild" };
 }

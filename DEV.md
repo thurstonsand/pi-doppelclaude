@@ -63,7 +63,7 @@ mise run test:usage                                 # on-demand A/B subscription
 ## Debugging
 
 - Enable with `doppelclaude.debug.enabled` in Pi settings, or ephemerally with `DOPPELCLAUDE_DEBUG=1` (`DOPPELCLAUDE_DEBUG_PATH` overrides the log path). Env beats settings.
-- **Bridge log** (`~/.pi/agent/doppelclaude.log` by default): sync decisions (`syncResult:`), session-store operations, MCP reconciliation, served-model usage, CC stderr.
+- **Bridge log** (`~/.pi/agent/doppelclaude.log` by default): sync decisions (`syncResult:doppel=...,reason=...`), session-store operations, MCP reconciliation, served-model usage, CC stderr.
 - **Per-query CC CLI logs** in `cc-cli-logs/` beside the bridge log: the subprocess's own view of session loading and API requests, one file per `query()`. Writer labels `provider` vs `provider-child` distinguish root from reentrant queries.
 - Quick live smoke:
 

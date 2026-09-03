@@ -1,5 +1,5 @@
 import type { EffortLevel } from "@anthropic-ai/claude-agent-sdk";
-import type { Api, Model } from "@earendil-works/pi-ai";
+import type { Api, Model, ThinkingLevelMap } from "@earendil-works/pi-ai";
 
 export const PROVIDER_ID = "doppelclaude";
 export const PROVIDER_NAME = "Doppelclaude";
@@ -17,9 +17,52 @@ const SHORT_MODEL_VERSION_PART = /^\d{1,2}$/u;
 const LONG_CONTEXT_FORM = /\[1m\]$/u;
 const DATED_SNAPSHOT = /-\d{8}$/u;
 const TWO_HUNDRED_K_CONTEXT = 200_000;
+// Every model Claude Code currently serves is offered at 1M through the `[1m]` form, so a model
+// nobody can describe yet is assumed to be one more of them.
+const SYNTHESIZED_CONTEXT_WINDOW = 1_000_000;
+const SYNTHESIZED_MAX_TOKENS = 64_000;
 
 export interface BridgeModel extends Model<typeof PROVIDER_API> {
   readonly [BRIDGE_MODEL]: string;
+}
+
+/** The part of Claude Code's `ModelInfo` that describes a model rather than names one. */
+export interface AdvertisedModel {
+  displayName: string;
+  supportedEffortLevels?: EffortLevel[];
+  supportsAdaptiveThinking?: boolean;
+}
+
+function advertisedThinkingLevels(advertised: AdvertisedModel): ThinkingLevelMap | undefined {
+  if (!advertised.supportedEffortLevels && !advertised.supportsAdaptiveThinking) return undefined;
+  const map: ThinkingLevelMap = {};
+  // Pi hides a level absent from an explicit map, and adaptive thinking is Claude deciding for
+  // itself, which is exactly the model that cannot be told to stop.
+  if (advertised.supportsAdaptiveThinking) map.off = null;
+  for (const level of advertised.supportedEffortLevels ?? []) map[level] = level;
+  return map;
+}
+
+// Claude Code serves a model the moment Anthropic ships it; Pi's catalog describes it a day or two
+// later. Until then the model is offered on what Claude Code itself said plus floors: zero cost,
+// because the SDK's own `costUSD` is what the turn total is built from, and a window the whole
+// current lineup honors. The described entry supersedes this one as soon as it arrives.
+export function synthesizeModel(id: string, advertised: AdvertisedModel): BridgeModel {
+  const thinkingLevelMap = advertisedThinkingLevels(advertised);
+  return {
+    id,
+    name: advertised.displayName,
+    api: PROVIDER_API,
+    provider: PROVIDER_ID,
+    baseUrl: PROVIDER_BASE_URL,
+    reasoning: true,
+    ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
+    input: ["text", "image"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: SYNTHESIZED_CONTEXT_WINDOW,
+    maxTokens: SYNTHESIZED_MAX_TOKENS,
+    [BRIDGE_MODEL]: id,
+  };
 }
 
 export function isSupportedModel(model: Model<Api>): model is BridgeModel {

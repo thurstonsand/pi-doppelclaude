@@ -383,7 +383,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
     // have parted ways — including when there is nothing left to close, which is how an
     // interrupt that kept queued input arrives here.
     if (mode === "force" && doppel.session)
-      doppel.session = { ...doppel.session, needsRebuild: true };
+      doppel.session = { ...doppel.session, rebuildReason: `force-close:${label}` };
     // Nothing can address an ephemeral again once its own turn is over.
     if (doppel.kind === "ephemeral" && c === doppel.context) doppels.discard(doppel);
     if (c.closeCompletion) return c.closeCompletion;
@@ -526,7 +526,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
   function invalidateStoredSession(doppel: Doppel, sessionId: string, reason: string): void {
     sessionStore.delete(sessionId);
     if (doppel.session?.sessionId === sessionId)
-      doppel.session = { ...doppel.session, needsRebuild: true };
+      doppel.session = { ...doppel.session, rebuildReason: `invalid-resume:${reason}` };
     debug(`provider: invalidated session ${sessionId.slice(0, 8)} (${reason})`);
   }
 
@@ -870,7 +870,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
       }
       resultCtx.activeModel = model;
       resultCtx.resetTurnState(model);
-      resultCtx.latestCursor = Math.max(resultCtx.latestCursor, context.messages.length);
+      resultCtx.latestCursor = context.messages.length;
       debug(
         `provider: tool results, ${allResults.length} results, ${resultCtx.pendingToolCallCount} waiting handlers, ctx.msgs=${context.messages.length}`,
       );
@@ -1019,7 +1019,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
       // Installed after beginCommand, which clears it. Exactly one replay per turn: the
       // second attempt arms nothing, so a retry that dies the same way is reported.
       queryCtx.turnRetry = attempt === 0 ? () => beginTurn(attempt + 1) : null;
-      queryCtx.latestCursor = Math.max(queryCtx.latestCursor, context.messages.length);
+      queryCtx.latestCursor = context.messages.length;
       queryCtx.fatalError = null;
 
       if (canPush) {
@@ -1125,10 +1125,13 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies) {
     const hostDoppel = doppels.host();
     if (!hostDoppel.session) return;
     debug(
-      `${reason}: marking needsRebuild on ${hostDoppel.label} session ${hostDoppel.session.sessionId.slice(0, 8)}`,
+      `${reason}: marking rebuild on ${hostDoppel.label} session ${hostDoppel.session.sessionId.slice(0, 8)}`,
     );
     await closePersistentQuery(reason);
-    hostDoppel.session = { ...hostDoppel.session, needsRebuild: true };
+    // The close above runs a turn-complete write-back that would drop the flag, so the
+    // mark lands after it, on whatever session state that left behind.
+    const marked = hostDoppel.session;
+    if (marked) hostDoppel.session = { ...marked, rebuildReason: reason };
   }
 
   function setHost(next: BridgeHost | null): void {

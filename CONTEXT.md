@@ -33,6 +33,7 @@
 ## Session sync
 
 - **Sync paths**: `reuse` (Pi's history matches the live session; send only the new tail), `rebuild` (history diverged — including a rewind to a shorter context; synthesize a complete CC transcript and atomically replace the store entry), and `clean-start` (no prior context). Each doppel plans its own.
+- **Cursor**: how many of Pi's messages Claude Code has been shown.
 
 ## Models and usage
 

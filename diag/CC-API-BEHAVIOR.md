@@ -86,6 +86,37 @@ If the tax is real it is Claude Code's, not the bridge's: the worst cases were
 records implicated are the ones CC itself appended during the previous query. That
 would make every SDK consumer that resumes a session pay it.
 
+### Reproduced in the audited regime, and it is intermittent
+
+Nine days of bridge log (2026-08-25 onward, `claude-fable-5-1` at 100–400k) reach
+the regime the captures never did. Weaker instrument than the proxy — these are
+the SDK's own per-turn `usage:` totals, not wire bodies — so the sample is
+restricted to turns that ran no tools, where the turn total is a single API call
+and `cacheWrite / (input + cacheRead + cacheWrite)` is unambiguous.
+
+| boundary                        | turns | re-cached                                         |
+| ------------------------------- | ----- | ------------------------------------------------- |
+| push into the live query        | 20    | 0.00–0.04, every one                              |
+| fresh process (`rebuild` spawn) | 9     | five at 0.00–0.04, four at 0.75, 0.84, 0.95, 0.97 |
+
+So the tax is real, it is confined to the process boundary, and it is _not_
+charged every time. Inside a live query the cache never broke, 20 for 20, at
+contexts up to 615k. Crossing a process boundary it broke four times in nine, and
+when it broke it re-cached essentially everything: the 01:47:41 turn read back
+11,449 tokens and wrote 217,356, which is the system-and-tools prefix surviving
+and the entire message history not. Four cold turns cost $17.12; the five warm
+ones cost $5.93 across strictly larger contexts.
+
+That rate is the same order as upstream's ~25% corpus figure rather than a
+contradiction of it, and it is what the controlled Haiku runs were too small to
+see. TTL expiry is ruled out for at least one case: 01:47:41 spawned five seconds
+after the previous turn completed.
+
+Still open is what separates the two halves. Both groups are the same doppel, the
+same model, and the same session id, so the discriminator is not the transcript
+the bridge hands over. A capture across a spawn boundary at this size would
+settle it; the log cannot.
+
 ## Also worth knowing
 
 Claude Code has its own cache-break detector

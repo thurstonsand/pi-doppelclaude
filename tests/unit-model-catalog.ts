@@ -356,7 +356,11 @@ describe("first load", () => {
 
     await catalog.refresh(context(store, false), ask);
     assert.equal(asked, 1);
-    assert.deepEqual(catalog.getModels(), []);
+    assert.deepEqual(
+      catalog.getModels().map((model) => model.id),
+      ["claude-opus-99"],
+      "Claude Code confirmed the model, so a catalog nobody could fetch does not hide it",
+    );
   });
 
   it("keeps a confirmed allowlist that the built-ins can already describe when the fetch fails", async () => {
@@ -473,17 +477,24 @@ describe("first load", () => {
     });
     await catalog.refresh(context(store, true), advertises(supportedModels));
     await catalog.noteServedModel("claude-opus-6");
-    assert.equal(
-      catalog.getModels().some((model) => model.id === "claude-opus-6"),
-      false,
+    assert.deepEqual(
+      required(
+        catalog.getModels().find((model) => model.id === "claude-opus-6"),
+        "the served model to be offered on synthesized metadata",
+      ).cost,
+      { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     );
 
     // The catalog on hand is minutes old, but it cannot name the model that just answered.
     await catalog.refresh({ ...context(store, true), force: false }, advertises(supportedModels));
     assert.equal(fetches, 2);
-    assert.equal(
-      catalog.getModels().some((model) => model.id === "claude-opus-6"),
-      true,
+    assert.deepEqual(
+      required(
+        catalog.getModels().find((model) => model.id === "claude-opus-6"),
+        "the served model to survive the refetch",
+      ).cost,
+      future.cost,
+      "a described model supersedes the synthesized one",
     );
   });
 
@@ -660,13 +671,20 @@ describe("first load", () => {
 
   it("drops a stale refresh's write instead of clobbering a newer one", async () => {
     let releaseFetch = () => {};
+    let reachedFetch = () => {};
     const gate = new Promise<void>((resolve) => {
       releaseFetch = resolve;
+    });
+    // The stale refresh has to get past its own restore before the newer one starts, or the race
+    // under test never happens.
+    const inFlight = new Promise<void>((resolve) => {
+      reachedFetch = resolve;
     });
     const catalog = createBridgeModelCatalog({
       ...testDependencies,
       now: () => Date.parse("2026-07-25T00:00:00Z"),
       requestCatalog: async () => {
+        reachedFetch();
         await gate;
         return response([...builtinModels, opus5, future]);
       },
@@ -677,6 +695,7 @@ describe("first load", () => {
       context(staleStore, true),
       advertises([...supportedModels, { ...supportedModels[0], resolvedModel: "claude-opus-6" }]),
     );
+    await inFlight;
 
     const newerStore = memoryStore({
       models: [...builtinModels, opus5],
@@ -706,6 +725,157 @@ describe("first load", () => {
       catalog.refresh(context(memoryStore(), true), advertises(undescribedModels)),
       /malformed metadata/,
     );
-    assert.deepEqual(catalog.getModels(), []);
+    assert.deepEqual(
+      catalog.getModels().map((model) => model.name),
+      ["Opus"],
+      "nothing from the malformed body describes the synthesized model",
+    );
+  });
+});
+
+describe("models Pi cannot describe yet", () => {
+  const newlyShipped: ModelInfo[] = [
+    {
+      value: "opus[1m]",
+      resolvedModel: "claude-opus-99[1m]",
+      displayName: "Opus 99",
+      description: "The one Pi has not heard of",
+      supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
+      supportsAdaptiveThinking: true,
+    },
+  ];
+
+  it("offers it on what Claude Code said about it", async () => {
+    const catalog = createBridgeModelCatalog({
+      ...testDependencies,
+      requestCatalog: async () => response(builtinModels),
+    });
+    await catalog.refresh(context(memoryStore(), true), advertises(newlyShipped));
+
+    const synthesized = required(
+      catalog.getModels().find((model) => model.id === "claude-opus-99"),
+      "the catalog to offer a model nothing describes",
+    );
+    assert.equal(synthesized.name, "Opus 99");
+    assert.equal(synthesized.provider, PROVIDER_ID);
+    assert.equal(claudeCodeModelId(synthesized), "claude-opus-99[1m]");
+    assert.equal(synthesized.maxTokens, 64_000);
+    assert.deepEqual(synthesized.cost, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+    assert.deepEqual(synthesized.thinkingLevelMap, {
+      off: null,
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "xhigh",
+      max: "max",
+    });
+  });
+
+  it("never takes its name from Claude Code's default row", async () => {
+    const catalog = createBridgeModelCatalog({
+      ...testDependencies,
+      requestCatalog: async () => response(builtinModels),
+    });
+    await catalog.refresh(
+      context(memoryStore(), true),
+      advertises([
+        {
+          value: "default",
+          resolvedModel: "claude-opus-99[1m]",
+          displayName: "Default (recommended)",
+          description: "",
+        },
+        {
+          value: "opus[1m]",
+          resolvedModel: "claude-opus-99[1m]",
+          displayName: "Opus (1M context)",
+          description: "",
+        },
+      ]),
+    );
+    assert.deepEqual(
+      catalog.getModels().map((model) => model.name),
+      ["Opus (1M context)"],
+    );
+  });
+
+  it("still admits a model only the default row names, under its id", async () => {
+    const catalog = createBridgeModelCatalog({
+      ...testDependencies,
+      requestCatalog: async () => response(builtinModels),
+    });
+    await catalog.refresh(
+      context(memoryStore(), true),
+      advertises([
+        {
+          value: "default",
+          resolvedModel: "claude-opus-99[1m]",
+          displayName: "Default (recommended)",
+          description: "",
+          supportedEffortLevels: ["low", "max"],
+        },
+      ]),
+    );
+    const admitted = required(
+      catalog.getModels().find((model) => model.id === "claude-opus-99"),
+      "a model named by nothing but the default row to still be offered",
+    );
+    assert.equal(admitted.name, "claude-opus-99");
+    assert.deepEqual(
+      admitted.thinkingLevelMap,
+      { low: "low", max: "max" },
+      "the default row still describes whatever it points at",
+    );
+  });
+
+  it("yields to the canonical entry the moment one describes it", async () => {
+    const catalog = createBridgeModelCatalog({
+      ...testDependencies,
+      requestCatalog: async () => response([...builtinModels, opus5]),
+    });
+    await catalog.refresh(context(memoryStore(), true), advertises(supportedModels));
+    const described = required(
+      catalog.getModels().find((model) => model.id === "claude-opus-5"),
+      "the catalog to describe claude-opus-5",
+    );
+    assert.equal(described.name, "Claude Opus 5", "the advertised display name does not win");
+    assert.deepEqual(described.cost, opus5.cost);
+  });
+
+  it("replays what Claude Code said on a cold offline start", async () => {
+    const store = memoryStore();
+    const catalog = createBridgeModelCatalog({
+      ...testDependencies,
+      requestCatalog: async () => response(builtinModels),
+    });
+    await catalog.refresh(context(store, true), advertises(newlyShipped));
+
+    const restarted = createBridgeModelCatalog(testDependencies);
+    await restarted.refresh(context(store, false), neverAsked);
+    assert.equal(
+      required(
+        restarted.getModels().find((model) => model.id === "claude-opus-99"),
+        "the synthesized model to survive a restart",
+      ).name,
+      "Opus 99",
+    );
+  });
+
+  it("falls back to the id when the store predates advertised descriptions", async () => {
+    const store = memoryStore({
+      models: builtinModels,
+      checkedAt: Date.parse("2026-07-25T00:00:00Z"),
+      lastModified: Date.parse("2026-07-24T19:15:06Z"),
+      supportedModelIds: ["claude-opus-99"],
+    } as ModelsStoreEntry);
+    const catalog = createBridgeModelCatalog(testDependencies);
+    await catalog.refresh(context(store, false), neverAsked);
+    assert.equal(
+      required(
+        catalog.getModels().find((model) => model.id === "claude-opus-99"),
+        "an allowlisted model with no description to still be offered",
+      ).name,
+      "claude-opus-99",
+    );
   });
 });

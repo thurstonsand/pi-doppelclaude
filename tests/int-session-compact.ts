@@ -8,7 +8,7 @@
 // session, which then thrashes its own autocompact (issue #8).
 //
 // Fix: subscribe to pi's `session_compact` event and set
-// sharedSession.needsRebuild = true so the next syncSharedSession call
+// sharedSession.rebuildReason is set so the next syncSharedSession call
 // takes the REBUILD path.
 
 console.log("=== int-session-compact.ts ===");
