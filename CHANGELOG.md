@@ -2,7 +2,7 @@
 
 # Changelog
 
-## Unreleased
+## 0.10.1 — 2026-09-03
 
 ### Added
 
@@ -11,9 +11,13 @@
 ### Fixed
 
 - **Stop re-sending the entire conversation after compactions** — after a `/compact` or a rewind, each later turn rebuilt the transcript into a fresh Claude Code process, often paying the full cache cost again.
+- **A failed tool call no longer degrades the rest of the session** — a tool handler left waiting for a result it could never get would strand the query, and every later turn in that conversation got its own throwaway Claude Code subprocess. Terminal errors now release whatever is still waiting.
+- **Stop allowing tools during compaction** — explicitly set `toolChoice: "none"` for summarizer.
+- **Better selection of system prompt replacement** — tune the regex to better select the part of the system prompt to replace, preventing accidental replacements elsewhere.
 
 ### Changed
 
+- Bump to pi 0.84.3
 - Improved logging of session rebuilds so that it's easier to track why
 
 ## 0.10.0 — 2026-08-16
