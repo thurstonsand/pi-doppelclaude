@@ -9,6 +9,7 @@ import { createDefaultToolDescriptionCap } from "./description-cap.js";
 import { errorMessage } from "./errors.js";
 import { createBridgeModelCatalog } from "./model-catalog.js";
 import { PROVIDER_ID } from "./models.js";
+import { resolveOauthToken, runShellCommand } from "./oauth-token.js";
 import { createAnthropicAgentSdkProvider } from "./provider.js";
 import { REFUSAL_CUSTOM_TYPE, renderRefusalEntry } from "./refusal.js";
 import { loadBridgeSettings } from "./settings.js";
@@ -20,6 +21,12 @@ export default function activate(pi: ExtensionAPI): void {
   configureDebug(settings.debug);
   debug("loadSettings:", JSON.stringify(settings));
   const { provider: providerSettings } = settings;
+  resolveOauthToken({
+    providerSettings,
+    env: process.env,
+    runCommand: runShellCommand,
+    debug,
+  });
   const toolDescriptionCap = createDefaultToolDescriptionCap(providerSettings);
 
   const compaction = createCompaction({

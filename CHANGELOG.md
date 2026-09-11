@@ -2,6 +2,12 @@
 
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **`oauthTokenCommand` setting** — a command that prints a long-lived subscription token, run once at startup to populate `CLAUDE_CODE_OAUTH_TOKEN` for the Claude Code subprocesses. Allows for pulling credentials from a password manager.
+
 ## 0.10.1 — 2026-09-03
 
 ### Added

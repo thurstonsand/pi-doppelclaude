@@ -62,7 +62,8 @@ Configuration lives under the `doppelclaude` key in pi's global settings at `~/.
           "instructions": ["...", "..."]
         }
       },
-      "pathToClaudeCodeExecutable": "/home/you/.nix-profile/bin/claude"
+      "pathToClaudeCodeExecutable": "/home/you/.nix-profile/bin/claude",
+      "oauthTokenCommand": "op read op://vault/claude-code/credential"
     },
     "debug": {
       "enabled": false,
