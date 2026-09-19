@@ -264,7 +264,7 @@ Context for the implementer: `createBridgeRuntime` (`src/bridge-runtime.ts`) exp
   - Work: done 2026-09-15; findings above.
   - Validation: the findings file.
 
-- [ ] Phase 1: Amp-only HTTP spike against the existing runtime
+- [x] Phase 1: Amp-only HTTP spike against the existing runtime
   - Goal: Verify identity, streaming, warm tool continuation, and isolation before extracting packages.
   - Files: `diag/http-spike/`, `tests/unit-http-spike.ts`, explicit imported-tool-result replay in `src/bridge-runtime.ts`.
   - Work: require exactly one labelled Amp thread URL; one warm runtime per key; TypeBox validation; authenticated Messages SSE and model listing; map renamed tool IDs without depending on result order; rebuild on changed history or spawn settings. Log sync decisions and usage, never raw requests or credentials.
@@ -274,7 +274,7 @@ Context for the implementer: `createBridgeRuntime` (`src/bridge-runtime.ts`) exp
   - Goal: Verify divergence, cancellation, cold tool-result replay after restart, and new-key history import.
   - Work: rebuild within a key; reject concurrent requests for that key; keep handlers alive after normal tool-use response completion; clean up on cancellation/shutdown. Add idle eviction before persistent deployment.
   - Validation: asymmetric parallel tool-result tests; edited histories with unchanged lengths; restart while a tool is pending; live Amp compaction and fork, checking the marker each time. Do not infer a fork from shared history.
-  - Evidence: `diag/http-spike/live-lifecycle.ts` passed pending-tool server replacement, isolated branch recall, shortened-history import, and mid-stream cancellation recovery against Opus 4.6, including the production package on 2026-09-19. Transcript assertions verify discarded history is absent. Idle eviction and cold replay after eviction have offline regression coverage. Actual Amp fork/compaction and OS-process crash recovery remain unverified.
+  - Evidence: `diag/http-spike/live-lifecycle.ts` passed pending-tool server replacement, isolated branch recall, shortened-history import, and mid-stream cancellation recovery against Opus 4.6, including the production package on 2026-09-19. Transcript assertions verify discarded history is absent. Idle eviction and cold replay after eviction have offline regression coverage. Deployed Amp conversations subsequently passed graceful restart, idle SIGKILL with explicit start, and actual automatic compaction with tool continuation; see `diag/http-spike/README.md`. Phase 2 remains open for actual Amp UI fork verification; direct history import is not a substitute. In-flight crash and automatic restart policy remain untested.
 
 - [x] Phase 3: Core contract in Messages API shapes
   - Goal: `runtime.turn()` takes `{key, model, system, messages, tools, effort, thinkingDisplay, maxOutputTokens, signal}` and yields raw stream events; pi conversion lives at the edge. No behavior change for pi.
