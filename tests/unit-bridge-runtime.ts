@@ -9,10 +9,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import type { Query } from "@anthropic-ai/claude-agent-sdk";
+import type { MessageParam } from "@anthropic-ai/sdk/resources/messages/messages";
 import type { Message as PiMessage } from "@earendil-works/pi-ai";
-import { createBridgeRuntime } from "../src/bridge-runtime.js";
-import { PushQueue } from "../src/query-state.js";
-import type { SessionStoreWriter } from "../src/session-store.js";
+import { PushQueue } from "doppelclaude/query-state";
+import type { SessionStoreWriter } from "doppelclaude/session-store";
+import { convertPiMessages } from "pi-doppelclaude/convert";
+import { createPiBridgeRuntime as createBridgeRuntime } from "pi-doppelclaude/pi-runtime";
 
 function makeRuntime() {
   const runtime = createBridgeRuntime({
@@ -69,7 +71,8 @@ describe("bridge runtime isolation", () => {
         },
         { role: "user", content: "next", timestamp: 3 },
       ] as unknown as PiMessage[];
-      const result = a.test.syncHostSession(messages, cwd);
+      const nativeMessages = convertPiMessages(messages).anthropicMessages as MessageParam[];
+      const result = a.test.syncHostSession(nativeMessages, cwd);
       assert.equal(result.path, "rebuild");
       assert.ok(a.test.getStoredSession(result.sessionId).length > 0);
 

@@ -10,7 +10,7 @@ import {
   PROVIDER_ID,
   projectCatalogModels,
   resolveThinkingEffort,
-} from "../src/models.js";
+} from "pi-doppelclaude/models";
 import { required } from "./lib/expect.js";
 
 const canonicalModels = getBuiltinModels("anthropic");

@@ -13,16 +13,16 @@ import {
   type SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import type { AccountSnapshot } from "../src/account-probe.js";
-import type { BridgeModelCatalog } from "../src/model-catalog.js";
+import type { AccountSnapshot } from "pi-doppelclaude/account-probe";
+import type { BridgeModelCatalog } from "pi-doppelclaude/model-catalog";
 import {
   type BridgeModel,
   PROVIDER_API,
   PROVIDER_BASE_URL,
   PROVIDER_ID,
   PROVIDER_NAME,
-} from "../src/models.js";
-import { createAnthropicAgentSdkProvider } from "../src/provider.js";
+} from "pi-doppelclaude/models";
+import { createAnthropicAgentSdkProvider } from "pi-doppelclaude/provider";
 import { required } from "./lib/expect.js";
 import { bridgeModel } from "./lib/models.js";
 

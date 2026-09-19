@@ -2,6 +2,16 @@
 
 # Changelog
 
+## UNRELEASED
+
+### Added
+
+- **Amp HTTP frontend** — `http-doppelclaude` provides an authenticated Messages endpoint with thread-keyed warm sessions, renamed tool-ID reconciliation, restart/history recovery, idle eviction, bounded retries, streaming keepalives, and graceful shutdown. Requires Node 24 and first-party subscription authentication.
+
+### Changed
+
+- **Shared core** — split the repository into `doppelclaude`, `pi-doppelclaude`, and `http-doppelclaude` workspaces. Pi's published package name and configuration remain unchanged; packages now ship built JavaScript. Tool-description handling and account probing are shared without a Pi dependency in core.
+
 ## 0.11.0 — 2026-09-11
 
 ### Added

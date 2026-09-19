@@ -4,9 +4,14 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { Message as PiMessage } from "@earendil-works/pi-ai";
+import type { Query, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { Api, Context, Model, Message as PiMessage } from "@earendil-works/pi-ai";
 import type { ContentBlock, Message as SessionMessage } from "cc-session-io";
-import { convertPiMessages, mapPiToolNameToSdk, mapSdkToolNameToPi } from "../src/convert.js";
+import { mapPiToolNameToSdk, mapSdkToolNameToPi } from "doppelclaude/tool-names";
+import { convertPiMessages } from "pi-doppelclaude/convert";
+import { projectCatalogModels } from "pi-doppelclaude/models";
+import { createPiBridgeRuntime as createBridgeRuntime } from "pi-doppelclaude/pi-runtime";
+import { record } from "./lib/turns.js";
 
 // Narrow a converted message's content to its block array. The converter returns
 // cc-session-io's `string | ContentBlock[]` union; the block-indexing tests only
@@ -95,6 +100,115 @@ describe("SDK tool conversion", () => {
     assert.equal(use.name, "bash");
     assert.deepEqual(use.input, { command: "ls" });
     assert.equal(block(result[1], 0, "tool_result").is_error, true);
+  });
+});
+
+describe("runtime rebuild tool names", () => {
+  const [model] = projectCatalogModels(
+    [
+      {
+        id: "claude-haiku-4-5",
+        api: "anthropic-messages",
+        provider: "anthropic",
+        baseUrl: "https://api.anthropic.com",
+        contextWindow: 200_000,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      } as unknown as Model<Api>,
+    ],
+    new Set(["claude-haiku-4-5"]),
+  );
+
+  async function importedToolName(piName: string): Promise<string> {
+    let loaded: Promise<unknown> | undefined;
+    const runtime = createBridgeRuntime({
+      providerSettings: { systemPromptMode: "claude-code" },
+      queryFactory: ({ options }) => {
+        assert.ok(options?.resume);
+        assert.ok(options.sessionStore);
+        loaded = options.sessionStore.load({
+          sessionId: options.resume,
+          projectKey: process.cwd(),
+        });
+        const messages = [
+          { type: "stream_event", event: { type: "message_start", message: { usage: {} } } },
+          {
+            type: "stream_event",
+            event: {
+              type: "content_block_start",
+              index: 0,
+              content_block: { type: "text", text: "" },
+            },
+          },
+          {
+            type: "stream_event",
+            event: {
+              type: "content_block_delta",
+              index: 0,
+              delta: { type: "text_delta", text: "ok" },
+            },
+          },
+          { type: "stream_event", event: { type: "content_block_stop", index: 0 } },
+          {
+            type: "stream_event",
+            event: { type: "message_delta", delta: { stop_reason: "end_turn" } },
+          },
+          { type: "stream_event", event: { type: "message_stop" } },
+          { type: "result", subtype: "success", result: "", is_error: false, modelUsage: {} },
+        ] as unknown as SDKMessage[];
+        return {
+          async *[Symbol.asyncIterator]() {
+            yield* messages;
+          },
+          initializationResult: async () => ({}),
+          setMcpServers: async () => ({
+            added: [] as string[],
+            removed: [] as string[],
+            errors: {},
+          }),
+          setModel: async () => {},
+          interrupt: async () => ({}),
+          close: () => {},
+        } as unknown as Query;
+      },
+    });
+    void runtime.designateHost("host");
+    const context = {
+      systemPrompt: "",
+      tools: [
+        {
+          name: "LookUp",
+          description: "Look something up",
+          parameters: { type: "object", properties: {} },
+          execute: async () => ({ content: [] as Array<{ type: "text"; text: string }> }),
+        },
+      ],
+      messages: [
+        { role: "user", content: "use it" },
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call.1", name: piName, arguments: {} }],
+        },
+        { role: "toolResult", toolCallId: "call.1", toolName: piName, content: "done" },
+        { role: "user", content: "continue" },
+      ],
+    } as unknown as Context;
+
+    await record(runtime.stream(model, context, { sessionId: "guest" })).done;
+    assert.ok(loaded, "query did not load the rebuilt transcript");
+    const entries = (await loaded) as Array<{ message?: { content?: ContentBlock[] } }>;
+    const toolUse = entries
+      .flatMap((entry) => entry.message?.content ?? [])
+      .find((candidate) => candidate.type === "tool_use");
+    assert.ok(toolUse && toolUse.type === "tool_use");
+    return toolUse.name;
+  }
+
+  it("uses served casing for a historical lowercase lookup", async () => {
+    assert.equal(await importedToolName("lookup"), "mcp__custom-tools__LookUp");
+  });
+
+  it("preserves a rejected Claude Code tool as its native name", async () => {
+    assert.equal(await importedToolName("cc_no_such_tool__bash"), "bash");
   });
 });
 

@@ -23,8 +23,10 @@ describe("typebox pin", () => {
   });
 
   it("declares that version exactly, so npm update cannot float off it", () => {
-    const local = readJson<{ devDependencies: { typebox: string } }>("../package.json");
-    assert.equal(local.devDependencies.typebox, piPinnedVersion);
+    const local = readJson<{ dependencies: { typebox: string } }>(
+      "../packages/pi-doppelclaude/package.json",
+    );
+    assert.equal(local.dependencies.typebox, piPinnedVersion);
   });
 });
 
@@ -48,7 +50,9 @@ describe("partial-json pin", () => {
   });
 
   it("declares that version exactly, so npm update cannot float off it", () => {
-    const local = readJson<{ dependencies: { "partial-json": string } }>("../package.json");
+    const local = readJson<{ dependencies: { "partial-json": string } }>(
+      "../packages/pi-doppelclaude/package.json",
+    );
     assert.equal(local.dependencies["partial-json"], piPinnedVersion);
   });
 });

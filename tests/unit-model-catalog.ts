@@ -3,8 +3,11 @@ import { describe, it } from "node:test";
 import type { ModelInfo } from "@anthropic-ai/claude-agent-sdk";
 import type { Api, Model, ModelsStoreEntry, RefreshModelsContext } from "@earendil-works/pi-ai";
 import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
-import { createBridgeModelCatalog, type ModelCatalogDependencies } from "../src/model-catalog.js";
-import { claudeCodeModelId, PROVIDER_ID } from "../src/models.js";
+import {
+  createBridgeModelCatalog,
+  type ModelCatalogDependencies,
+} from "pi-doppelclaude/model-catalog";
+import { claudeCodeModelId, PROVIDER_ID } from "pi-doppelclaude/models";
 import { required } from "./lib/expect.js";
 
 const builtinModels = getBuiltinModels("anthropic");

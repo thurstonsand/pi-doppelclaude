@@ -5,12 +5,11 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { Api, Model } from "@earendil-works/pi-ai";
-import { Doppel } from "../src/doppel.js";
-import { PushQueue } from "../src/query-state.js";
+import type { CoreResponseEvent } from "doppelclaude/core-response";
+import { Doppel } from "doppelclaude/doppel";
+import { PushQueue } from "doppelclaude/query-state";
 
-// Minimal stand-in for pi-ai's Model; resetTurnState only records identity here.
-const fakeModel = { api: "doppelclaude", provider: "doppelclaude", id: "test-model" } as Model<Api>;
+const queue = () => new PushQueue<CoreResponseEvent>();
 
 describe("QueryContext class", () => {
   it("turnBlocks throws before resetTurnState", () => {
@@ -20,17 +19,17 @@ describe("QueryContext class", () => {
 
   it("turnBlocks reflects turnOutput.content after resetTurnState", () => {
     const c = new Doppel("test-doppel", "guest").context;
-    c.resetTurnState(fakeModel);
+    c.resetTurnState("test-model", queue());
     assert.ok(Array.isArray(c.turnBlocks));
     assert.strictEqual(c.turnBlocks.length, 0);
 
-    c.turnBlocks.push({ type: "text", text: "hello" });
-    assert.strictEqual(c.turnOutput.content.length, 1);
-    const firstBlock = c.turnOutput.content[0];
+    c.turnBlocks.push({ type: "text", text: "hello", citations: null });
+    assert.strictEqual(c.turnOutput.message.content.length, 1);
+    const firstBlock = c.turnOutput.message.content[0];
     assert(firstBlock.type === "text");
     assert.strictEqual(firstBlock.text, "hello");
     // Same array reference
-    assert.strictEqual(c.turnBlocks, c.turnOutput.content);
+    assert.strictEqual(c.turnBlocks, c.turnOutput.message.content);
   });
 
   it("resetTurnState preserves query-scoped tool call tracking", () => {
@@ -38,7 +37,7 @@ describe("QueryContext class", () => {
     c.shownToolCallIds.add("id1");
     c.dispatchedToolCallIds.add("id1");
     c.rejectedToolCallIds.add("id2");
-    c.resetTurnState(fakeModel);
+    c.resetTurnState("test-model", queue());
 
     assert.deepStrictEqual([...c.shownToolCallIds], ["id1"]);
     assert.deepStrictEqual([...c.dispatchedToolCallIds], ["id1"]);

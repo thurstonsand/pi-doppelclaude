@@ -18,10 +18,11 @@ import type {
   Message as PiMessage,
   SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
-import { createBridgeRuntime } from "../src/bridge-runtime.js";
-import { planSessionSync } from "../src/doppel.js";
-import { projectCatalogModels } from "../src/models.js";
-import { PushQueue } from "../src/query-state.js";
+import { planSessionSync } from "doppelclaude/doppel";
+import { PushQueue } from "doppelclaude/query-state";
+import { convertPiMessages } from "pi-doppelclaude/convert";
+import { projectCatalogModels } from "pi-doppelclaude/models";
+import { createPiBridgeRuntime as createBridgeRuntime } from "pi-doppelclaude/pi-runtime";
 import { record } from "./lib/turns.js";
 
 const [fakeModel] = projectCatalogModels(
@@ -92,7 +93,7 @@ function answer(text: string): SDKMessage[] {
 }
 
 function stream(runtime: ReturnType<typeof makeRuntime>, messages: unknown[]) {
-  return runtime.test.streamClaudeAgentSdk(
+  return runtime.stream(
     fakeModel,
     { systemPrompt: "", messages: messages as PiMessage[], tools: [] } as unknown as Context,
     { sessionId: HOST_SESSION } as SimpleStreamOptions,
@@ -107,6 +108,27 @@ const compacted = [
 ];
 
 describe("cursor tracking across a shrinking history", () => {
+  it("counts a parallel result batch as one Messages user message", async () => {
+    const runtime = makeRuntime();
+    runtime.test.setHostSession({ sessionId: HOST_CC_SESSION, cursor: 1 });
+    const parallelTurn = [
+      { role: "user", content: "read both" },
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call-1", name: "read", arguments: { path: "one" } },
+          { type: "toolCall", id: "call-2", name: "read", arguments: { path: "two" } },
+        ],
+      },
+      { role: "toolResult", toolCallId: "call-1", toolName: "read", content: "one" },
+      { role: "toolResult", toolCallId: "call-2", toolName: "read", content: "two" },
+    ];
+
+    await record(stream(runtime, parallelTurn)).done;
+
+    assert.equal(runtime.test.getHostSession().cursor, 3);
+  });
+
   it("lands on the compacted length instead of the pre-compaction peak", async () => {
     const runtime = makeRuntime();
     // The state a long conversation left behind, the moment before pi compacted it.
@@ -129,7 +151,11 @@ describe("cursor tracking across a shrinking history", () => {
       { role: "assistant", content: [{ type: "text", text: "ok" }] },
       { role: "user", content: "and again" },
     ];
-    const plan = planSessionSync(next as PiMessage[], runtime.test.getHostSession());
+    const plan = planSessionSync(
+      convertPiMessages(next as PiMessage[])
+        .anthropicMessages as unknown as import("@anthropic-ai/sdk/resources").MessageParam[],
+      runtime.test.getHostSession(),
+    );
 
     assert.equal(plan.path, "reuse");
   });

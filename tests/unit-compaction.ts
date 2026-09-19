@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import { createCompaction } from "../src/compaction.js";
+import { createCompaction } from "pi-doppelclaude/compaction";
 import { required } from "./lib/expect.js";
 import { bridgeModel } from "./lib/models.js";
 

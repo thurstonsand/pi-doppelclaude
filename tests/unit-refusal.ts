@@ -6,17 +6,18 @@ import type {
   SDKModelRefusalFallbackMessage,
   SDKModelRefusalNoFallbackMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import { type Api, createAssistantMessageEventStream, type Model } from "@earendil-works/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import type { CustomEntry, ExtensionUIContext, Theme } from "@earendil-works/pi-coding-agent";
 import type { KeybindingsManager as KeybindingsManagerType } from "@earendil-works/pi-tui";
-import { createBridgeRuntime } from "../src/bridge-runtime.js";
-import { Doppel } from "../src/doppel.js";
+import { Doppel } from "doppelclaude/doppel";
 import {
   REFUSAL_CUSTOM_TYPE,
   type RefusalEntryData,
   refusalEntryData,
-  renderRefusalEntry,
-} from "../src/refusal.js";
+} from "doppelclaude/refusal-data";
+import { createPiBridgeRuntime as createBridgeRuntime } from "pi-doppelclaude/pi-runtime";
+import { renderRefusalEntry } from "pi-doppelclaude/refusal";
+import { beginProjectedCommand } from "./lib/native-response.js";
 
 // pi-coding-agent 0.84.3 ships a shrinkwrap, so its pi-tui is a second copy nested under it and
 // the keybindings singleton `keyText` reads is that copy's, not the hoisted one this repo
@@ -158,8 +159,7 @@ describe("Claude refusal entries", () => {
 
     const queryCtx = new Doppel("test-doppel", "guest").context;
     queryCtx.persistent = true;
-    queryCtx.currentPiStream = createAssistantMessageEventStream();
-    queryCtx.beginCommand(fakeModel);
+    beginProjectedCommand(queryCtx, fakeModel);
 
     const sdkQuery = (async function* () {
       yield FALLBACK;
@@ -171,7 +171,7 @@ describe("Claude refusal entries", () => {
       yield { type: "stream_event", event: { type: "message_stop" } };
     })() as unknown as Query;
 
-    await runtime.test.consumeQuery(sdkQuery, new Map(), fakeModel, queryCtx, {
+    await runtime.test.consumeQuery(sdkQuery, new Map(), fakeModel.id, queryCtx, {
       onResult() {},
       onSessionId() {},
     });
@@ -182,7 +182,7 @@ describe("Claude refusal entries", () => {
     );
     assert.equal(entries[0].data.servedModel, "claude-opus-4-8");
     assert.deepEqual(warnings, []);
-    assert.equal(queryCtx.turnOutput?.responseModel, "claude-opus-4-8");
+    assert.equal(queryCtx.turnOutput?.message.model, "claude-opus-4-8");
 
     // A turn that ends after a refusal must not resurrect the warning as a recap.
     runtime.test.emitTerminalError(queryCtx, "aborted", "Operation aborted");

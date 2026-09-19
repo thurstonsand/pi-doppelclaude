@@ -1,0 +1,764 @@
+import assert from "node:assert/strict";
+import { once } from "node:events";
+import { request as httpRequest } from "node:http";
+import { describe, it } from "node:test";
+import type { Query, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { Message, MessageParam } from "@anthropic-ai/sdk/resources/messages/messages";
+import type { CoreResponseEvent } from "doppelclaude/core-response";
+import type { RuntimeRequest } from "doppelclaude/runtime-request";
+import { createHttpServer, projectHttpModels } from "http-doppelclaude";
+
+const KEY = "test-key";
+const A = "T-11111111-1111-4111-8111-111111111111";
+const B = "T-22222222-2222-4222-8222-222222222222";
+
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+function message(content: Message["content"], stop: Message["stop_reason"] = "end_turn"): Message {
+  return {
+    id: "msg_test",
+    type: "message",
+    role: "assistant",
+    content,
+    model: "claude-haiku-4-5",
+    stop_reason: stop,
+    stop_sequence: null,
+    container: null,
+    stop_details: null,
+    usage: {
+      input_tokens: 11,
+      output_tokens: 7,
+      cache_creation_input_tokens: 3,
+      cache_read_input_tokens: 5,
+      cache_creation: null,
+      inference_geo: null,
+      output_tokens_details: null,
+      server_tool_use: null,
+      service_tier: null,
+    },
+  };
+}
+async function* native(
+  content: Message["content"],
+  stop: Message["stop_reason"] = "end_turn",
+): AsyncIterable<CoreResponseEvent> {
+  const value = message(content, stop);
+  yield { type: "message_start", message: { ...value, content: [] } };
+  for (const [index, block] of content.entries()) {
+    yield { type: "content_block_start", index, content_block: block };
+    if (block.type === "thinking")
+      yield {
+        type: "content_block_delta",
+        index,
+        delta: { type: "signature_delta", signature: block.signature },
+      };
+    yield { type: "content_block_stop", index };
+  }
+  yield {
+    type: "message_delta",
+    delta: { stop_reason: stop, stop_sequence: null, container: null, stop_details: null },
+    usage: value.usage,
+  };
+  yield { type: "message_stop" };
+  yield {
+    type: "response",
+    response: {
+      commandId: "c",
+      id: "r",
+      requestedModel: value.model,
+      message: value,
+      lifecycle: "closed",
+      error: null,
+    },
+  };
+}
+
+function fakeRuntime(requests: RuntimeRequest[], rebuilds: string[] = []) {
+  return {
+    turn(request: RuntimeRequest) {
+      requests.push(request);
+      return native(
+        [
+          { type: "tool_use", id: "sdk-1", name: "lookup", input: { n: 1 } },
+          { type: "tool_use", id: "sdk-2", name: "lookup", input: { n: 2 } },
+        ] as Message["content"],
+        "tool_use",
+      );
+    },
+    replay(request: RuntimeRequest) {
+      requests.push(request);
+      return native([
+        { type: "thinking", thinking: "why", signature: "signed" },
+        { type: "text", text: "done" },
+      ] as Message["content"]);
+    },
+    async clear() {},
+    async closePersistent() {},
+    async markRebuild(reason: string) {
+      rebuilds.push(reason);
+    },
+    async designateHost() {},
+    test: {} as never,
+  };
+}
+
+function body(thread: string, messages: unknown[] = [{ role: "user", content: "go" }]) {
+  return {
+    model: "claude-haiku-4-5",
+    max_tokens: 100,
+    stream: true,
+    system: `x\nAmp Thread URL: https://ampcode.com/threads/${thread}`,
+    tools: [
+      {
+        name: "lookup",
+        description: "lookup",
+        input_schema: { type: "object", properties: { n: { type: "number" } } },
+      },
+    ],
+    messages,
+  };
+}
+async function harness() {
+  const requests = new Map<string, RuntimeRequest[]>();
+  const rebuilds = new Map<string, string[]>();
+  const server = createHttpServer({
+    apiKey: KEY,
+    supportedModels: [],
+    createRuntime(id) {
+      const seen: RuntimeRequest[] = [];
+      const marked: string[] = [];
+      requests.set(id, seen);
+      rebuilds.set(id, marked);
+      return fakeRuntime(seen, marked) as never;
+    },
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const url = `http://127.0.0.1:${address.port}`;
+  return {
+    requests,
+    rebuilds,
+    post: (value: unknown, key = KEY) =>
+      fetch(`${url}/v1/messages`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-api-key": key },
+        body: JSON.stringify(value),
+      }),
+    rawPost: (value: string) =>
+      fetch(`${url}/v1/messages`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-api-key": KEY },
+        body: value,
+      }),
+    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+  };
+}
+
+describe("native HTTP frontend", () => {
+  it("projects resolved catalog models, filters aliases, and deduplicates stable IDs", () => {
+    assert.deepEqual(
+      projectHttpModels([
+        {
+          value: "opus[1m]",
+          resolvedModel: "claude-opus-5[1m]",
+          displayName: "Opus 5",
+          description: "",
+        },
+        {
+          value: "claude-opus-5-20260901",
+          resolvedModel: "claude-opus-5",
+          displayName: "Duplicate Opus",
+          description: "",
+        },
+        {
+          value: "claude-haiku-4-5",
+          displayName: "Haiku 4.5",
+          description: "",
+        },
+        { value: "sonnet", displayName: "Alias", description: "" },
+      ]),
+      [
+        { id: "claude-opus-5", type: "model", display_name: "Opus 5", created_at: null },
+        {
+          id: "claude-haiku-4-5",
+          type: "model",
+          display_name: "Haiku 4.5",
+          created_at: null,
+        },
+      ],
+    );
+  });
+
+  it("authenticates before parsing and strictly identifies Amp threads", async () => {
+    const app = await harness();
+    try {
+      assert.equal((await app.post("bad", "wrong")).status, 401);
+      assert.equal((await app.post({ ...body(A), system: "none" })).status, 400);
+      assert.equal(
+        (
+          await app.post({
+            ...body(A),
+            system: `Amp Thread URL: https://ampcode.com/threads/${A} trailing`,
+          })
+        ).status,
+        400,
+      );
+      assert.equal(
+        (
+          await app.post({
+            ...body(A),
+            system: `Amp Thread URL: https://ampcode.com/threads/${A}\nAmp Thread URL: https://ampcode.com/threads/${B}`,
+          })
+        ).status,
+        400,
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("sends native requests, parameters, schemas, maps, and raw SSE", async () => {
+    const app = await harness();
+    try {
+      const schema = {
+        type: "object",
+        properties: { n: { type: "number", minimum: 1 } },
+        required: ["n"],
+        additionalProperties: false,
+        custom: { untouched: true },
+      };
+      const response = await app.post({
+        ...body(A),
+        max_tokens: 128_000,
+        tools: [{ name: "lookup", description: "lookup", input_schema: schema }],
+        thinking: { type: "adaptive", display: "summarized" },
+        output_config: { effort: "high" },
+      });
+      const text = await response.text();
+      assert.equal(response.status, 200);
+      assert.match(text, /"stop_reason":"tool_use"/);
+      assert.match(text, /"input_tokens":11/);
+      const request = app.requests.get(A)?.[0];
+      assert.ok(request);
+      assert.deepEqual(request.messages, [{ role: "user", content: "go" }]);
+      assert.deepEqual(request.tools?.[0]?.input_schema, schema);
+      assert.equal(request.toolNameToSdk?.get("lookup"), "mcp__custom-tools__lookup");
+      assert.equal(request.effort, "high");
+      assert.equal(request.maxTokens, 128_000);
+      assert.deepEqual(request.options?.tools, []);
+      assert.deepEqual(request.options?.settingSources, []);
+      assert.deepEqual(request.options?.thinking, { type: "adaptive" });
+      assert.deepEqual(request.options?.extraArgs, { "thinking-display": "summarized" });
+      assert.equal(request.options?.env?.ENABLE_TOOL_SEARCH, "false");
+      assert.equal(request.options?.env?.DISABLE_AUTO_COMPACT, "1");
+      assert.equal(request.options?.env?.CLAUDE_CODE_DISABLE_AUTO_MEMORY, "1");
+      assert.equal(request.options?.env?.CLAUDE_CODE_MAX_OUTPUT_TOKENS, "128000");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("resolves renamed parallel results by assistant call position and result id", async () => {
+    const app = await harness();
+    try {
+      await (await app.post(body(A))).text();
+      const history = [
+        { role: "user", content: "go" },
+        {
+          role: "assistant",
+          content: [
+            { type: "tool_use", id: "renamed-a", name: "lookup", input: { n: 1 } },
+            { type: "tool_use", id: "renamed-b", name: "lookup", input: { n: 2 } },
+          ],
+        },
+        {
+          role: "user",
+          content: [
+            { type: "tool_result", tool_use_id: "renamed-b", content: "two" },
+            { type: "tool_result", tool_use_id: "renamed-a", content: "one" },
+          ],
+        },
+      ];
+      await (await app.post(body(A, history))).text();
+      const messages = app.requests.get(A)?.[1]?.messages as MessageParam[];
+      const results = messages[2].content as Array<{
+        type: string;
+        tool_use_id: string;
+        content: string;
+      }>;
+      assert.deepEqual(
+        results.map(({ tool_use_id, content }) => ({ tool_use_id, content })),
+        [
+          { tool_use_id: "sdk-2", content: "two" },
+          { tool_use_id: "sdk-1", content: "one" },
+        ],
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("strips cache controls and explicitly replays cold tool-result history", async () => {
+    const app = await harness();
+    try {
+      const history = [
+        { role: "user", content: "go", cache_control: { type: "ephemeral" } },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: "client",
+              name: "lookup",
+              input: { n: 1, nested: { cache_control: "keep-input" } },
+              cache_control: { type: "ephemeral" },
+            },
+          ],
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "client",
+              content: [
+                {
+                  type: "text",
+                  text: "ok",
+                  cache_control: { type: "ephemeral" },
+                },
+              ],
+              cache_control: { type: "ephemeral" },
+            },
+          ],
+        },
+      ];
+      const text = await (await app.post(body(A, history))).text();
+      assert.match(text, /signature_delta/);
+      const sent = JSON.stringify(app.requests.get(A)?.[0]?.messages);
+      assert.match(sent, /keep-input/);
+      assert.equal((sent.match(/cache_control/g) ?? []).length, 1);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects empty and role-invalid message histories", async () => {
+    const app = await harness();
+    try {
+      for (const messages of [
+        [],
+        [{ role: "user", content: "" }],
+        [{ role: "user", content: [] }],
+        [{ role: "assistant", content: [{ type: "tool_result", tool_use_id: "x", content: "x" }] }],
+        [{ role: "user", content: [{ type: "tool_use", id: "x", name: "lookup", input: {} }] }],
+      ])
+        assert.equal((await app.post(body(A, messages))).status, 400);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects non-object tool schemas before allocating a runtime", async () => {
+    const app = await harness();
+    try {
+      for (const input_schema of [{ properties: {} }, { type: "array", items: {} }]) {
+        const response = await app.post({
+          ...body(A),
+          tools: [{ name: "lookup", input_schema }],
+        });
+        assert.equal(response.status, 400);
+      }
+      assert.equal(app.requests.size, 0);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("validates JSON, markers, model, results, and tool_choice none over HTTP", async () => {
+    const app = await harness();
+    try {
+      assert.equal((await app.rawPost("{")).status, 400);
+      assert.equal((await app.post({ ...body(A), model: "wrong" })).status, 400);
+      assert.equal((await app.post({ ...body(A), model: "/claude-haiku-4-5" })).status, 400);
+      assert.equal((await app.post({ ...body(A), model: "claude-haiku-latest" })).status, 400);
+      assert.equal((await app.post({ ...body(A), temperature: 0 })).status, 400);
+      assert.equal(
+        (
+          await app.post({
+            ...body(A),
+            system: [
+              { type: "text", text: `Amp Thread URL: https://ampcode.com/threads/${A}` },
+              { type: "text", text: `Amp Thread URL: https://ampcode.com/threads/${B}` },
+            ],
+          })
+        ).status,
+        400,
+      );
+      for (const content of [
+        [{ type: "tool_result", tool_use_id: "missing", content: "x" }],
+        [
+          { type: "tool_result", tool_use_id: "x", content: "one" },
+          { type: "tool_result", tool_use_id: "x", content: "two" },
+        ],
+      ]) {
+        const messages = [
+          { role: "user", content: "go" },
+          {
+            role: "assistant",
+            content: [{ type: "tool_use", id: "x", name: "lookup", input: {} }],
+          },
+          { role: "user", content },
+        ];
+        assert.equal((await app.post(body(A, messages))).status, 400);
+      }
+      assert.equal(
+        (
+          await app.post(
+            body(A, [
+              { role: "user", content: "go" },
+              {
+                role: "assistant",
+                content: [
+                  { type: "tool_use", id: "x", name: "lookup", input: {} },
+                  { type: "tool_use", id: "y", name: "lookup", input: {} },
+                ],
+              },
+              {
+                role: "user",
+                content: [{ type: "tool_result", tool_use_id: "x", content: "one" }],
+              },
+            ]),
+          )
+        ).status,
+        400,
+      );
+      const none = await app.post({ ...body(B), tool_choice: { type: "none" } });
+      await none.text();
+      assert.deepEqual(app.requests.get(B)?.[0]?.tools, []);
+      assert.equal(app.requests.get(B)?.[0]?.model, "claude-haiku-4-5");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("normalizes requester models independently", async () => {
+    const app = await harness();
+    try {
+      const first = await app.post({ ...body(A), model: "claude-opus-4-6" });
+      assert.equal(first.status, 200);
+      await first.text();
+      const other = await app.post({ ...body(B), model: "vendor/claude-haiku-4-5" });
+      assert.equal(other.status, 200);
+      await other.text();
+      const switched = await app.post({ ...body(A), model: "claude-sonnet-5" });
+      assert.equal(switched.status, 200);
+      await switched.text();
+      assert.deepEqual(
+        app.requests.get(A)?.map((request) => request.model),
+        ["claude-opus-4-6", "claude-sonnet-5"],
+      );
+      assert.deepEqual(
+        app.requests.get(B)?.map((request) => request.model),
+        ["claude-haiku-4-5"],
+      );
+      assert.ok(app.rebuilds.get(A)?.includes("HTTP history diverged"));
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("enforces body and runtime capacity limits", async () => {
+    const server = createHttpServer({
+      apiKey: KEY,
+      supportedModels: [],
+      maxBodyBytes: 2_000,
+      maxRuntimes: 1,
+      createRuntime: () => fakeRuntime([]) as never,
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    const post = (value: unknown) =>
+      fetch(`http://127.0.0.1:${address.port}/v1/messages`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-api-key": KEY },
+        body: JSON.stringify(value),
+      });
+    try {
+      assert.equal((await post({ padding: "x".repeat(3_000) })).status, 413);
+      // Invalid requests do not consume runtime capacity.
+      assert.equal((await post({ ...body(A), stream: false })).status, 400);
+      const first = await post(body(A));
+      await first.text();
+      // Capacity pressure evicts the least-recently-used idle runtime.
+      assert.equal((await post(body(B))).status, 200);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("isolates simultaneous threads, retains a same-thread lock, and rebuilds after abort", async () => {
+    const entered = deferred();
+    const release = deferred();
+    const interrupted = deferred();
+    const rebuilds = new Map<string, string[]>();
+    const identities = new Map<string, object>();
+    const server = createHttpServer({
+      apiKey: KEY,
+      supportedModels: [],
+      createRuntime(id) {
+        const identity = {};
+        identities.set(id, identity);
+        const marked: string[] = [];
+        rebuilds.set(id, marked);
+        let turns = 0;
+        return {
+          ...fakeRuntime([], marked),
+          turn(request: RuntimeRequest) {
+            turns++;
+            if (id === A && turns === 1) {
+              request.signal?.addEventListener("abort", interrupted.resolve, { once: true });
+              return (async function* () {
+                yield {
+                  type: "message_start",
+                  message: { ...message([]), content: [] },
+                } as CoreResponseEvent;
+                entered.resolve();
+                await release.promise;
+                yield* native([{ type: "text", text: "A literal", citations: null }]);
+              })();
+            }
+            return native([
+              { type: "text", text: id === A ? "A next" : "B literal", citations: null },
+            ]);
+          },
+        } as never;
+      },
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    const url = `http://127.0.0.1:${address.port}/v1/messages`;
+    const post = (value: unknown, signal?: AbortSignal) =>
+      fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-api-key": KEY },
+        body: JSON.stringify(value),
+        signal,
+      });
+    try {
+      const firstA = new Promise<import("node:http").IncomingMessage>((resolve, reject) => {
+        const outgoing = httpRequest(
+          url,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json", "x-api-key": KEY },
+          },
+          resolve,
+        );
+        outgoing.on("error", reject);
+        outgoing.end(JSON.stringify(body(A)));
+      });
+      await entered.promise;
+      const firstResponse = await firstA;
+      assert.equal((await post(body(A))).status, 409);
+      const bText = await (await post(body(B))).text();
+      assert.match(bText, /B literal/);
+      assert.notEqual(identities.get(A), identities.get(B));
+      assert.equal((await post(body(A))).status, 409);
+      const closed = once(firstResponse.socket, "close");
+      firstResponse.socket.destroy();
+      await closed;
+      await interrupted.promise;
+      release.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const next = await post(body(A));
+      assert.match(await next.text(), /A next/);
+      assert.ok(
+        rebuilds.get(A)?.some((reason) => reason.includes("previous request failed")),
+        JSON.stringify(rebuilds.get(A)),
+      );
+    } finally {
+      release.resolve();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("does not emit a successful terminal stop after a native stream error", async () => {
+    const server = createHttpServer({
+      apiKey: KEY,
+      supportedModels: [],
+      createRuntime: () =>
+        ({
+          ...fakeRuntime([]),
+          turn: () =>
+            (async function* (): AsyncIterable<CoreResponseEvent> {
+              yield {
+                type: "message_start",
+                message: { ...message([]), content: [] },
+              };
+              yield { type: "message_stop" };
+              yield {
+                type: "terminal_error",
+                reason: "error",
+                message: "native boom",
+                response: {
+                  commandId: "c",
+                  id: "r",
+                  requestedModel: "claude-haiku-4-5",
+                  message: message([]),
+                  lifecycle: "failed",
+                  error: { reason: "error", message: "native boom" },
+                },
+              };
+            })(),
+        }) as never,
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    try {
+      const response = await fetch(`http://127.0.0.1:${address.port}/v1/messages`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-api-key": KEY },
+        body: JSON.stringify(body(A)),
+      });
+      const text = await response.text();
+      assert.match(text, /event: error/);
+      assert.match(text, /native boom/);
+      assert.doesNotMatch(text, /event: message_stop/);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("forces rebuilds for edited history and changed request signatures", async () => {
+    const app = await harness();
+    try {
+      await (await app.post(body(A))).text();
+      await (
+        await app.post(
+          body(A, [
+            { role: "user", content: "edited" },
+            { role: "assistant", content: [{ type: "text", text: "old" }] },
+            { role: "user", content: "next" },
+          ]),
+        )
+      ).text();
+      assert.match(app.rebuilds.get(A)?.[0] ?? "", /history diverged/);
+      await (
+        await app.post({
+          ...body(A, [
+            { role: "user", content: "edited" },
+            { role: "assistant", content: [{ type: "text", text: "old" }] },
+            { role: "user", content: "next" },
+            { role: "assistant", content: [{ type: "text", text: "done" }] },
+            { role: "user", content: "again" },
+          ]),
+          max_tokens: 101,
+        })
+      ).text();
+      assert.ok(app.rebuilds.get(A)?.some((reason) => reason.includes("settings changed")));
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("passes normalized models through the real core and switches a warm thread", async () => {
+    const sdkModels: Array<string | undefined> = [];
+    const server = createHttpServer({
+      apiKey: KEY,
+      supportedModels: [],
+      queryFactory: ({ options }) => {
+        sdkModels.push(options?.model);
+        const stream = [
+          { type: "stream_event", event: { type: "message_start", message: { usage: {} } } },
+          {
+            type: "stream_event",
+            event: {
+              type: "content_block_start",
+              index: 0,
+              content_block: { type: "text", text: "" },
+            },
+          },
+          {
+            type: "stream_event",
+            event: {
+              type: "content_block_delta",
+              index: 0,
+              delta: { type: "text_delta", text: "replayed" },
+            },
+          },
+          { type: "stream_event", event: { type: "content_block_stop", index: 0 } },
+          {
+            type: "stream_event",
+            event: { type: "message_delta", delta: { stop_reason: "end_turn" } },
+          },
+          { type: "stream_event", event: { type: "message_stop" } },
+          {
+            type: "result",
+            subtype: "success",
+            result: "replayed",
+            is_error: false,
+            modelUsage: {},
+          },
+        ] as unknown as SDKMessage[];
+        return {
+          async *[Symbol.asyncIterator]() {
+            yield* stream;
+          },
+          initializationResult: async () => ({}),
+          setMcpServers: async () => ({
+            added: [] as string[],
+            removed: [] as string[],
+            errors: {},
+          }),
+          setModel: async () => {},
+          interrupt: async () => ({}),
+          close: () => {},
+        } as unknown as Query;
+      },
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    try {
+      const post = (value: unknown) =>
+        fetch(`http://127.0.0.1:${address.port}/v1/messages`, {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-api-key": KEY },
+          body: JSON.stringify(value),
+        });
+      const first = await post({
+        ...body(A),
+        model: "vendor/claude-haiku-4-5-20251001",
+      });
+      assert.match(await first.text(), /replayed/);
+      const second = await post({
+        ...body(A, [
+          { role: "user", content: "go" },
+          { role: "assistant", content: [{ type: "text", text: "replayed" }] },
+          { role: "user", content: "next" },
+        ]),
+        model: "claude-opus-5",
+      });
+      assert.match(await second.text(), /replayed/);
+      assert.deepEqual(sdkModels, ["claude-haiku-4-5-20251001", "claude-opus-5"]);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+});

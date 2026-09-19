@@ -1,15 +1,14 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { Query } from "@anthropic-ai/claude-agent-sdk";
-import {
-  type Api,
-  type AssistantMessageEventStream,
-  createAssistantMessageEventStream,
-  type Model,
-} from "@earendil-works/pi-ai";
+import type { Query, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { Api, AssistantMessageEventStream, Model } from "@earendil-works/pi-ai";
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
-import { createBridgeRuntime } from "../src/bridge-runtime.js";
-import { Doppel } from "../src/doppel.js";
+import { createBridgeRuntime as createCoreBridgeRuntime } from "doppelclaude/bridge-runtime";
+import type { CoreResponseEvent } from "doppelclaude/core-response";
+import { Doppel } from "doppelclaude/doppel";
+import { PushQueue } from "doppelclaude/query-state";
+import { createPiBridgeRuntime as createBridgeRuntime } from "pi-doppelclaude/pi-runtime";
+import { beginProjectedCommand } from "./lib/native-response.js";
 
 const runtime = createBridgeRuntime({
   providerSettings: { systemPromptMode: "claude-code" },
@@ -41,15 +40,19 @@ describe("provider SDK result errors", () => {
       };
     })();
     const queryCtx = new Doppel("test-doppel", "guest").context;
-    queryCtx.currentPiStream = createAssistantMessageEventStream();
-    queryCtx.resetTurnState(fakeModel);
-    const stream = queryCtx.currentPiStream;
+    const stream = beginProjectedCommand(queryCtx, fakeModel);
 
-    await runtime.test.consumeQuery(sdkQuery as unknown as Query, new Map(), fakeModel, queryCtx, {
-      onResult() {},
-      onSessionId() {},
-    });
-    runtime.test.finalizeCurrentStream(queryCtx);
+    await runtime.test.consumeQuery(
+      sdkQuery as unknown as Query,
+      new Map(),
+      fakeModel.id,
+      queryCtx,
+      {
+        onResult() {},
+        onSessionId() {},
+      },
+    );
+    runtime.test.finalizeCurrentResponse(queryCtx);
 
     const events = await collect(stream);
     const last = events.at(-1);
@@ -102,15 +105,19 @@ describe("provider SDK result errors", () => {
       };
     })();
     const queryCtx = new Doppel("test-doppel", "guest").context;
-    queryCtx.currentPiStream = createAssistantMessageEventStream();
-    queryCtx.beginCommand(fakeModel);
-    const stream = queryCtx.currentPiStream;
+    const stream = beginProjectedCommand(queryCtx, fakeModel);
 
-    await runtime.test.consumeQuery(sdkQuery as unknown as Query, new Map(), fakeModel, queryCtx, {
-      onResult() {},
-      onSessionId() {},
-    });
-    runtime.test.finalizeCurrentStream(queryCtx);
+    await runtime.test.consumeQuery(
+      sdkQuery as unknown as Query,
+      new Map(),
+      fakeModel.id,
+      queryCtx,
+      {
+        onResult() {},
+        onSessionId() {},
+      },
+    );
+    runtime.test.finalizeCurrentResponse(queryCtx);
 
     const events = await collect(stream);
     const last = events.at(-1);
@@ -163,15 +170,19 @@ describe("provider stop reasons", () => {
       for (const message of messages) yield message;
     })();
     const queryCtx = new Doppel("test-doppel", "guest").context;
-    queryCtx.currentPiStream = createAssistantMessageEventStream();
-    queryCtx.resetTurnState(fakeModel);
-    const stream = queryCtx.currentPiStream;
+    const stream = beginProjectedCommand(queryCtx, fakeModel);
 
-    await runtime.test.consumeQuery(sdkQuery as unknown as Query, new Map(), fakeModel, queryCtx, {
-      onResult() {},
-      onSessionId() {},
-    });
-    runtime.test.finalizeCurrentStream(queryCtx);
+    await runtime.test.consumeQuery(
+      sdkQuery as unknown as Query,
+      new Map(),
+      fakeModel.id,
+      queryCtx,
+      {
+        onResult() {},
+        onSessionId() {},
+      },
+    );
+    runtime.test.finalizeCurrentResponse(queryCtx);
 
     const events = await collect(stream);
     return events.at(-1);
@@ -226,5 +237,235 @@ describe("provider stop reasons", () => {
     assert.equal(last.type, "done");
     if (last.type !== "done") throw new Error("expected a trailing done event");
     assert.equal(last.message.stopReason, "stop");
+  });
+});
+
+describe("native response completion", () => {
+  const coreRuntime = createCoreBridgeRuntime();
+
+  async function runNative(messages: SDKMessage[]) {
+    const context = new Doppel("native-completion", "guest").context;
+    const native = new PushQueue<CoreResponseEvent>();
+    context.beginCommand(fakeModel.id, native);
+    const events: CoreResponseEvent[] = [];
+    const collecting = (async () => {
+      for await (const event of native) events.push(event);
+    })();
+    const query = (async function* () {
+      for (const message of messages) yield message;
+    })();
+    await coreRuntime.test.consumeQuery(
+      query as unknown as Query,
+      new Map(),
+      fakeModel.id,
+      context,
+      { onResult() {}, onSessionId() {} },
+    );
+    coreRuntime.test.finalizeCurrentResponse(context);
+    await collecting;
+    return events;
+  }
+
+  const result = (overrides: Record<string, unknown> = {}) =>
+    ({
+      type: "result",
+      subtype: "success",
+      result: "answer",
+      is_error: false,
+      modelUsage: {},
+      ...overrides,
+    }) as SDKMessage;
+
+  function terminalError(events: CoreResponseEvent[]) {
+    const terminal = events.at(-1);
+    assert.equal(terminal?.type, "terminal_error");
+    if (terminal?.type !== "terminal_error") throw new Error("expected terminal_error");
+    return terminal;
+  }
+
+  it("carries retry status from a structured overloaded assistant error", async () => {
+    const terminal = terminalError(
+      await runNative([
+        {
+          type: "assistant",
+          error: "overloaded",
+          message: { role: "assistant", model: "<synthetic>", content: [] },
+        } as SDKMessage,
+        result(),
+      ]),
+    );
+    assert.equal(terminal.retryableStatus, 529);
+  });
+
+  it("carries retry status from result api_error_status", async () => {
+    const terminal = terminalError(
+      await runNative([result({ api_error_status: 529, is_error: true })]),
+    );
+    assert.equal(terminal.retryableStatus, 529);
+  });
+
+  it("carries 429 for a rejected structured rate-limit event", async () => {
+    const terminal = terminalError(
+      await runNative([
+        {
+          type: "rate_limit_event",
+          rate_limit_info: { status: "rejected", rateLimitType: "five_hour" },
+        } as SDKMessage,
+        result(),
+      ]),
+    );
+    assert.equal(terminal.retryableStatus, 429);
+  });
+
+  it("does not infer retry status from error text", async () => {
+    const terminal = terminalError(
+      await runNative([
+        result({
+          subtype: "error_during_execution",
+          is_error: true,
+          errors: ["upstream returned 529 overloaded"],
+        }),
+      ]),
+    );
+    assert.equal(terminal.retryableStatus, undefined);
+  });
+
+  it("resets retry status before the subsequent turn", async () => {
+    const context = new Doppel("native-retry-reset", "guest").context;
+
+    async function runTurn(messages: SDKMessage[], first: boolean) {
+      const native = new PushQueue<CoreResponseEvent>();
+      if (first) context.beginCommand(fakeModel.id, native);
+      else context.resetTurnState(fakeModel.id, native);
+      const events: CoreResponseEvent[] = [];
+      const collecting = (async () => {
+        for await (const event of native) events.push(event);
+      })();
+      const query = (async function* () {
+        for (const message of messages) yield message;
+      })();
+      await coreRuntime.test.consumeQuery(
+        query as unknown as Query,
+        new Map(),
+        fakeModel.id,
+        context,
+        { onResult() {}, onSessionId() {} },
+      );
+      coreRuntime.test.finalizeCurrentResponse(context);
+      await collecting;
+      return terminalError(events);
+    }
+
+    assert.equal(
+      (await runTurn([result({ api_error_status: 529, is_error: true })], true)).retryableStatus,
+      529,
+    );
+    assert.equal(
+      (
+        await runTurn(
+          [result({ subtype: "error_during_execution", is_error: true, errors: ["plain"] })],
+          false,
+        )
+      ).retryableStatus,
+      undefined,
+    );
+  });
+
+  it("withholds message_stop until a successful SDK result and emits it exactly once", async () => {
+    let releaseResult: () => void;
+    const resultReady = new Promise<void>((resolve) => {
+      releaseResult = resolve;
+    });
+    const context = new Doppel("native-withholding", "guest").context;
+    const native = new PushQueue<CoreResponseEvent>();
+    context.beginCommand(fakeModel.id, native);
+    const events: CoreResponseEvent[] = [];
+    const collecting = (async () => {
+      for await (const event of native) events.push(event);
+    })();
+    const query = (async function* () {
+      yield {
+        type: "stream_event",
+        event: { type: "message_delta", delta: { stop_reason: "end_turn" } },
+      } as SDKMessage;
+      yield { type: "stream_event", event: { type: "message_stop" } } as SDKMessage;
+      await resultReady;
+      yield result();
+    })();
+    const consuming = coreRuntime.test.consumeQuery(
+      query as unknown as Query,
+      new Map(),
+      fakeModel.id,
+      context,
+      { onResult() {}, onSessionId() {} },
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(
+      events.some((event) => event.type === "message_stop"),
+      false,
+    );
+    assert.ok(releaseResult);
+    releaseResult();
+    await consuming;
+    coreRuntime.test.finalizeCurrentResponse(context);
+    await collecting;
+    assert.equal(events.filter((event) => event.type === "message_stop").length, 1);
+    assert.deepEqual(
+      events.slice(-2).map((event) => event.type),
+      ["message_stop", "response"],
+    );
+  });
+
+  it("omits message_stop after an SDK result error", async () => {
+    const events = await runNative([
+      result({ subtype: "error_during_execution", is_error: true, errors: ["literal failure"] }),
+    ]);
+    assert.deepEqual(
+      events.map((event) => event.type),
+      ["terminal_error"],
+    );
+    const terminal = events.at(-1);
+    assert.equal(terminal?.type, "terminal_error");
+    if (terminal?.type === "terminal_error") assert.equal(terminal.message, "literal failure");
+  });
+
+  it("completes assistant-only and result-only fallback sequences", async () => {
+    const assistantOnly = await runNative([
+      {
+        type: "assistant",
+        message: {
+          role: "assistant",
+          model: fakeModel.id,
+          content: [{ type: "text", text: "assistant fallback", citations: null }],
+        },
+      } as SDKMessage,
+      result({ result: "assistant fallback" }),
+    ]);
+    const resultOnly = await runNative([result({ result: "result fallback" })]);
+    for (const events of [assistantOnly, resultOnly]) {
+      assert.deepEqual(
+        events.slice(-3).map((event) => event.type),
+        ["message_delta", "message_stop", "response"],
+      );
+    }
+  });
+
+  it("hands off a tool response before the SDK result", async () => {
+    const events = await runNative([
+      {
+        type: "assistant",
+        message: {
+          role: "assistant",
+          model: fakeModel.id,
+          content: [{ type: "tool_use", id: "tool-1", name: "read", input: { path: "x" } }],
+        },
+      } as SDKMessage,
+      result({ result: "" }),
+    ]);
+    assert.equal(events.filter((event) => event.type === "message_stop").length, 1);
+    const terminal = events.at(-1);
+    assert.equal(terminal?.type, "response");
+    if (terminal?.type === "response")
+      assert.equal(terminal.response.message.stop_reason, "tool_use");
   });
 });

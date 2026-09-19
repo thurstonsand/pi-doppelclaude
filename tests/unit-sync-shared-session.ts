@@ -7,10 +7,12 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
+import type { MessageParam } from "@anthropic-ai/sdk/resources";
 import type { Message as PiMessage } from "@earendil-works/pi-ai";
 import { getSessionPath } from "cc-session-io";
-import { createBridgeRuntime } from "../src/bridge-runtime.js";
-import { describeSyncReason, planSessionSync } from "../src/doppel.js";
+import { describeSyncReason, planSessionSync } from "doppelclaude/doppel";
+import { convertPiMessages } from "pi-doppelclaude/convert";
+import { createPiBridgeRuntime as createBridgeRuntime } from "pi-doppelclaude/pi-runtime";
 
 const runtime = createBridgeRuntime({
   providerSettings: { systemPromptMode: "claude-code" },
@@ -24,7 +26,7 @@ describe("session sync planning", () => {
   });
 
   it("plans a clean start when no session exists", () => {
-    const plan = planSessionSync([{ role: "user", content: "hello", timestamp: Date.now() }], null);
+    const plan = planSessionSync([{ role: "user", content: "hello" }], null);
     assert.equal(plan.path, "clean-start");
     assert.equal(plan.previousSession, null);
     assert.equal(plan.reason.kind, "no-session");
@@ -34,10 +36,10 @@ describe("session sync planning", () => {
     const session = { sessionId: "11111111-1111-4111-8111-111111111111", cursor: 1 };
     const plan = planSessionSync(
       [
-        { role: "user", content: "first", timestamp: 1 },
-        { role: "assistant", content: [{ type: "text", text: "answer" }], timestamp: 2 },
-        { role: "user", content: "next", timestamp: 3 },
-      ] as unknown as PiMessage[],
+        { role: "user", content: "first" },
+        { role: "assistant", content: [{ type: "text", text: "answer" }] },
+        { role: "user", content: "next" },
+      ] as MessageParam[],
       session,
     );
     assert.equal(plan.path, "reuse");
@@ -50,11 +52,11 @@ describe("session sync planning", () => {
     const session = { sessionId: "11111111-1111-4111-8111-111111111111", cursor: 1 };
     const plan = planSessionSync(
       [
-        { role: "user", content: "first", timestamp: 1 },
-        { role: "user", content: "foreign turn", timestamp: 2 },
-        { role: "assistant", content: [{ type: "text", text: "foreign answer" }], timestamp: 3 },
-        { role: "user", content: "next", timestamp: 4 },
-      ] as unknown as PiMessage[],
+        { role: "user", content: "first" },
+        { role: "user", content: "foreign turn" },
+        { role: "assistant", content: [{ type: "text", text: "foreign answer" }] },
+        { role: "user", content: "next" },
+      ] as MessageParam[],
       session,
     );
     assert.equal(plan.path, "rebuild");
@@ -67,9 +69,9 @@ describe("session sync planning", () => {
   it("names the cause a forced rebuild was marked with", () => {
     const plan = planSessionSync(
       [
-        { role: "user", content: "first", timestamp: 1 },
-        { role: "user", content: "next", timestamp: 2 },
-      ] as unknown as PiMessage[],
+        { role: "user", content: "first" },
+        { role: "user", content: "next" },
+      ] as MessageParam[],
       {
         sessionId: "11111111-1111-4111-8111-111111111111",
         cursor: 1,
@@ -83,9 +85,9 @@ describe("session sync planning", () => {
   it("reports the cursor and history length when the history is shorter than the cursor", () => {
     const plan = planSessionSync(
       [
-        { role: "user", content: "first", timestamp: 1 },
-        { role: "user", content: "next", timestamp: 2 },
-      ] as unknown as PiMessage[],
+        { role: "user", content: "first" },
+        { role: "user", content: "next" },
+      ] as MessageParam[],
       { sessionId: "11111111-1111-4111-8111-111111111111", cursor: 42 },
     );
     assert.equal(plan.path, "rebuild");
@@ -107,14 +109,15 @@ describe("session sync planning", () => {
         },
         { role: "user", content: "next", timestamp: 3 },
       ] as unknown as PiMessage[];
-      const first = test.syncHostSession(messages, cwd);
+      const nativeMessages = convertPiMessages(messages).anthropicMessages as MessageParam[];
+      const first = test.syncHostSession(nativeMessages, cwd);
       assert.equal(first.path, "rebuild");
       assert.ok(first.sessionId);
       assert.equal(test.getStoredSession(first.sessionId).length, 2);
       assert.equal(existsSync(getSessionPath(first.sessionId, cwd)), false);
 
       test.setHostSession({ sessionId: first.sessionId, cursor: 0, rebuildReason: "test" });
-      const second = test.syncHostSession(messages, cwd);
+      const second = test.syncHostSession(nativeMessages, cwd);
       assert.equal(second.sessionId, first.sessionId);
       assert.equal(test.getStoredSession(first.sessionId).length, 2);
     } finally {
@@ -128,21 +131,20 @@ describe("session sync planning", () => {
       const sessionId = "11111111-1111-4111-8111-111111111111";
       test.setHostSession({ sessionId, cursor: 42 });
 
-      const result = test.syncHostSession(
-        [
-          { role: "user", content: "first", timestamp: 1 },
-          {
-            role: "assistant",
-            content: [{ type: "text", text: "one" }],
-            api: "doppelclaude",
-            provider: "doppelclaude",
-            model: "claude-haiku-4-5",
-            timestamp: 2,
-          },
-          { role: "user", content: "take that back", timestamp: 3 },
-        ] as unknown as PiMessage[],
-        cwd,
-      );
+      const messages = [
+        { role: "user", content: "first", timestamp: 1 },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "one" }],
+          api: "doppelclaude",
+          provider: "doppelclaude",
+          model: "claude-haiku-4-5",
+          timestamp: 2,
+        },
+        { role: "user", content: "take that back", timestamp: 3 },
+      ] as unknown as PiMessage[];
+      const nativeMessages = convertPiMessages(messages).anthropicMessages as MessageParam[];
+      const result = test.syncHostSession(nativeMessages, cwd);
 
       assert.equal(
         result.path,

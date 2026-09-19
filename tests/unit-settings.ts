@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
-import { loadBridgeSettings } from "../src/settings.js";
+import { loadBridgeSettings } from "pi-doppelclaude/settings";
 import { required } from "./lib/expect.js";
 
 function withSettingsDirs(

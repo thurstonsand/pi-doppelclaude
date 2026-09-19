@@ -17,10 +17,10 @@ import type {
   SimpleStreamOptions,
   Tool,
 } from "@earendil-works/pi-ai";
+import { PushQueue } from "doppelclaude/query-state";
+import { projectCatalogModels } from "pi-doppelclaude/models";
+import { createPiBridgeRuntime as createBridgeRuntime } from "pi-doppelclaude/pi-runtime";
 import { Type } from "typebox";
-import { createBridgeRuntime } from "../src/bridge-runtime.js";
-import { projectCatalogModels } from "../src/models.js";
-import { PushQueue } from "../src/query-state.js";
 import { record, until } from "./lib/turns.js";
 
 const [fakeModel] = projectCatalogModels(
@@ -132,7 +132,7 @@ function stream(
   options?: SimpleStreamOptions,
   tools: Tool[] = [],
 ) {
-  return runtime.test.streamClaudeAgentSdk(
+  return runtime.stream(
     fakeModel,
     {
       systemPrompt: "",

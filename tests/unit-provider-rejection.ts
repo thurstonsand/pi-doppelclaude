@@ -15,10 +15,11 @@ import type {
   Message as PiMessage,
   Tool,
 } from "@earendil-works/pi-ai";
+import { PushQueue } from "doppelclaude/query-state";
+import { projectCatalogModels } from "pi-doppelclaude/models";
+import { createPiResponseRuntime } from "pi-doppelclaude/pi-response";
+import { createPiBridgeRuntime as createBridgeRuntime } from "pi-doppelclaude/pi-runtime";
 import { Type } from "typebox";
-import { createBridgeRuntime } from "../src/bridge-runtime.js";
-import { projectCatalogModels } from "../src/models.js";
-import { PushQueue } from "../src/query-state.js";
 import { record, until } from "./lib/turns.js";
 
 // Only a catalog-confirmed model reaches the query path, so mint one the way the
@@ -86,7 +87,7 @@ function makeHarness() {
 }
 
 function stream(runtime: ReturnType<typeof makeHarness>["runtime"], messages: unknown[]) {
-  return runtime.test.streamClaudeAgentSdk(
+  return runtime.stream(
     fakeModel,
     {
       systemPrompt: "",
@@ -382,7 +383,7 @@ describe("Claude Code-rejected tool calls", () => {
     const ctx = runtime.test.hostContext;
     const abort = new AbortController();
     const aborted = record(
-      runtime.test.streamClaudeAgentSdk(
+      runtime.stream(
         fakeModel,
         {
           systemPrompt: "",
@@ -408,7 +409,8 @@ describe("Claude Code-rejected tool calls", () => {
     // boundary would replay a dead turn's content into an unrelated one.
     ctx.bufferedSdkMessages = [...textEvents("stale content")];
     ctx.rejectionWindowOpen = true;
-    ctx.beginCommand(fakeModel);
+    const projection = createPiResponseRuntime();
+    ctx.beginCommand(fakeModel.id, projection.adapt(fakeModel).native);
     assert.equal(ctx.bufferedSdkMessages.length, 0);
     assert.equal(ctx.rejectionWindowOpen, false);
 

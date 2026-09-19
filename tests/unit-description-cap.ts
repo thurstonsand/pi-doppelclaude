@@ -5,10 +5,10 @@ import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import {
   createDescriptionCapProbe,
-  createToolDescriptionCap,
   FALLBACK_TOOL_DESCRIPTION_CAP,
   scanToolDescriptionCap,
-} from "../src/description-cap.js";
+} from "doppelclaude/description-cap";
+import { createToolDescriptionCap } from "pi-doppelclaude/description-cap";
 
 const roots: string[] = [];
 
@@ -159,6 +159,14 @@ describe("scanToolDescriptionCap", () => {
         reason: "no in-bounds cap assignment found",
       });
     }
+  });
+
+  it("rejects an already-aborted scan", async () => {
+    const path = await fixture(`cap=4096;${ANCHOR}`);
+    const controller = new AbortController();
+    controller.abort(new Error("scan cancelled"));
+
+    await assert.rejects(scanToolDescriptionCap(path, controller.signal), /scan cancelled/u);
   });
 });
 

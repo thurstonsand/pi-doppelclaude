@@ -39,7 +39,7 @@ run = "actionlint"
 
 [tasks."lint:shell"]
 description = "Lint shell scripts"
-run = "shellcheck -x -P SCRIPTDIR .agents/setup .agents/resume tests/*.sh tests/lib/*.sh"
+run = "shellcheck -x -P SCRIPTDIR .agents/setup .agents/resume scripts/*.sh tests/*.sh tests/lib/*.sh"
 
 # Renovate's bin shim ends in `exec node`, and mise builds a task's PATH from the shell's
 # pre-activation ordering, which on a Homebrew machine starts at /opt/homebrew/bin -- ahead of the
@@ -70,9 +70,17 @@ tools."npm:renovate" = { version = "44.29.4", allow_builds = [
 description = "Format and apply safe fixes"
 run = "biome check --write ."
 
+[tasks.build]
+description = "Build all publishable packages in dependency order"
+run = [
+    "tsc -p packages/doppelclaude",
+    "tsc -p packages/pi-doppelclaude",
+    "tsc -p packages/http-doppelclaude",
+]
+
 [tasks.typecheck]
 description = "Type-check TypeScript"
-run = "tsc --noEmit"
+run = "mise run build && tsc --noEmit"
 
 [tasks.test]
 description = "Run the full test suite (hits live APIs)"
@@ -80,7 +88,7 @@ run = "set -a && [ -f .env.test ] && . ./.env.test; set +a && mise run test:unit
 
 [tasks."test:unit"]
 description = "Run the offline unit tests"
-run = "node --import tsx --test tests/unit-*.ts"
+run = "mise run build && node --import tsx --test tests/unit-*.ts"
 
 [tasks."test:usage"]
 description = "On-demand subscription-usage diagnostic (rate-limited endpoint)"

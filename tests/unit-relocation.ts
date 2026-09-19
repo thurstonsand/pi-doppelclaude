@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import type { Tool as AnthropicTool } from "@anthropic-ai/sdk/resources/messages/messages";
 import type { Context, Tool } from "@earendil-works/pi-ai";
+import { MCP_TOOL_PREFIX } from "doppelclaude/skills";
+import { prepareToolDescriptions } from "doppelclaude/tool-description-relocation";
+import { buildClaudeSystemPrompt } from "pi-doppelclaude/system-prompt";
+import { mcpSignature, planTurn, resolveMcpTools } from "pi-doppelclaude/turn-plan";
 import { Type } from "typebox";
-import { MCP_TOOL_PREFIX } from "../src/skills.js";
-import { buildClaudeSystemPrompt } from "../src/system-prompt.js";
-import { mcpSignature, planTurn, resolveMcpTools } from "../src/turn-plan.js";
 import { bridgeModel } from "./lib/models.js";
 
 const REPLACEMENTS = {
@@ -63,6 +65,33 @@ function planned(description: string, cap: number) {
 }
 
 describe("tool description relocation", () => {
+  it("prepares native tools without mutating input and preserves schemas and order", () => {
+    const tools: AnthropicTool[] = [
+      { name: "short", description: "1234", input_schema: { type: "object", properties: {} } },
+      { name: "long", description: "😀😀😀", input_schema: { type: "object", required: ["x"] } },
+    ];
+    const snapshot = structuredClone(tools);
+
+    const prepared = prepareToolDescriptions(tools, "System", 4);
+
+    assert.deepEqual(tools, snapshot);
+    assert.deepEqual(
+      prepared.tools.map(({ name, description }) => ({ name, description })),
+      [
+        { name: "short", description: "1234" },
+        { name: "long", description: "" },
+      ],
+    );
+    assert.deepEqual(
+      prepared.tools.map((entry) => entry.input_schema),
+      [tools[0].input_schema, tools[1].input_schema],
+    );
+    assert.deepEqual(prepared.relocations, [
+      { name: `${MCP_TOOL_PREFIX}long`, description: "😀😀😀" },
+    ]);
+    assert.match(prepared.systemPrompt, /^<extended_function_descriptions>/);
+  });
+
   it("advertises an empty description and renders the full description for an oversized tool", () => {
     const description = "x".repeat(21);
     const { mcpTools, relocations } = resolveMcpTools(context(description), 20, undefined);

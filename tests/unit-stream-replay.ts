@@ -16,17 +16,12 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import type { Query, SDKMessage, SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
-import type {
-  Api,
-  AssistantMessageEvent,
-  AssistantMessageEventStream,
-  Model,
-  ToolCall,
-} from "@earendil-works/pi-ai";
-import { createBridgeRuntime } from "../src/bridge-runtime.js";
-import { isCcRejectedToolName } from "../src/convert.js";
-import { Doppel } from "../src/doppel.js";
-import { projectCatalogModels } from "../src/models.js";
+import type { Api, AssistantMessageEvent, Model } from "@earendil-works/pi-ai";
+import { Doppel } from "doppelclaude/doppel";
+import { isCcRejectedToolName } from "doppelclaude/tool-names";
+import { projectCatalogModels } from "pi-doppelclaude/models";
+import { createPiBridgeRuntime as createBridgeRuntime } from "pi-doppelclaude/pi-runtime";
+import { beginProjectedCommand } from "./lib/native-response.js";
 
 // `cost` matters: a recorded stream carries real usage, so consumeQuery reaches
 // pi-ai's cost calculation, which the hand-built streams never exercise. Zeros are
@@ -59,11 +54,10 @@ function fixture(name: string): SDKMessage[] {
 async function replay(name: string, { toolNames = ["read"] }: { toolNames?: string[] } = {}) {
   const events: AssistantMessageEvent[] = [];
   const c = new Doppel("stream-replay", "guest").context;
-  c.currentPiStream = {
-    push: (event: AssistantMessageEvent) => events.push(event),
-    end: () => {},
-  } as unknown as AssistantMessageEventStream;
-  c.beginCommand(model);
+  const piStream = beginProjectedCommand(c, model);
+  const projected = (async () => {
+    for await (const event of piStream) events.push(event);
+  })();
   // The map the provider path builds from the served tool list: SDK name → pi name.
   const customToolNameToPi = new Map(toolNames.map((n) => [`mcp__custom-tools__${n}`, n]));
 
@@ -73,19 +67,21 @@ async function replay(name: string, { toolNames = ["read"] }: { toolNames?: stri
   }
   let capturedSessionId: string | undefined;
   const results: SDKResultMessage[] = [];
-  await runtime.test.consumeQuery(stream() as unknown as Query, customToolNameToPi, model, c, {
+  await runtime.test.consumeQuery(stream() as unknown as Query, customToolNameToPi, model.id, c, {
     onResult: (message: SDKResultMessage) => results.push(message),
     onSessionId: (sessionId: string) => {
       capturedSessionId = sessionId;
     },
   });
+  runtime.test.finalizeCurrentResponse(c);
+  await projected;
   return { events, ctx: c, results, capturedSessionId };
 }
 
 type Ctx = Awaited<ReturnType<typeof replay>>["ctx"];
 const blocks = <T extends string>(ctx: Ctx, type: T) =>
   // biome-ignore lint/suspicious/noExplicitAny: narrowing recorded content by discriminant
-  ctx.turnOutput.content.filter((b): b is any => b.type === type);
+  ctx.turnOutput.message.content.filter((b): b is any => b.type === type);
 
 describe("replaying a recorded text-only turn", () => {
   it("produces the assistant text and a clean stop", async () => {
@@ -96,7 +92,7 @@ describe("replaying a recorded text-only turn", () => {
       .join("")
       .trim();
     assert.equal(text, "ALPHA");
-    assert.equal(ctx.turnOutput.stopReason, "stop");
+    assert.equal(ctx.turnOutput.message.stop_reason, "end_turn");
     assert.equal(ctx.turnSawToolCall, false);
     assert.ok(
       events.some((e) => e.type === "text_delta"),
@@ -107,11 +103,11 @@ describe("replaying a recorded text-only turn", () => {
   it("reports usage and captures the session id", async () => {
     const { ctx, results, capturedSessionId } = await replay("text");
 
-    assert.ok(ctx.turnOutput.usage.output > 0, "output tokens");
+    assert.ok(ctx.turnOutput.message.usage.output_tokens > 0, "output tokens");
     assert.ok(
-      ctx.turnOutput.usage.input +
-        ctx.turnOutput.usage.cacheRead +
-        ctx.turnOutput.usage.cacheWrite >
+      ctx.turnOutput.message.usage.input_tokens +
+        ctx.turnOutput.message.usage.cache_read_input_tokens +
+        ctx.turnOutput.message.usage.cache_creation_input_tokens >
         0,
       "prompt tokens",
     );
@@ -124,7 +120,7 @@ describe("replaying a recorded single-tool turn", () => {
   it("surfaces the tool call under its pi name", async () => {
     const { ctx } = await replay("single-tool");
 
-    const calls: ToolCall[] = blocks(ctx, "toolCall");
+    const calls = blocks(ctx, "tool_use");
     assert.equal(calls.length, 1);
     assert.equal(calls[0].name, "read", "SDK's mcp__custom-tools__read must arrive as pi's read");
     assert.ok(calls[0].id.startsWith("toolu_"));
@@ -137,7 +133,7 @@ describe("replaying a recorded parallel-tool turn", () => {
   it("keeps every parallel call, in emission order", async () => {
     const { ctx } = await replay("parallel-tools");
 
-    const calls: ToolCall[] = blocks(ctx, "toolCall");
+    const calls = blocks(ctx, "tool_use");
     assert.ok(calls.length >= 2, `expected a parallel batch, got ${calls.length}`);
     for (const call of calls) assert.equal(call.name, "read");
     assert.equal(new Set(calls.map((c) => c.id)).size, calls.length, "no duplicate ids");
@@ -150,7 +146,7 @@ describe("replaying a recorded parallel-tool turn", () => {
   it("mangles every call when the served tool list is empty", async () => {
     const { ctx } = await replay("parallel-tools", { toolNames: [] });
 
-    const calls: ToolCall[] = blocks(ctx, "toolCall");
+    const calls = blocks(ctx, "tool_use");
     assert.ok(calls.length >= 2, "the recorded calls still surface");
     for (const call of calls) {
       assert.ok(

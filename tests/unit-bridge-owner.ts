@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
-import { acquireBridgeOwner } from "../src/bridge-owner.js";
-import { createBridgeRuntime } from "../src/bridge-runtime.js";
-import { createAnthropicAgentSdkProvider } from "../src/provider.js";
+import { acquireBridgeOwner } from "pi-doppelclaude/bridge-owner";
+import { createPiBridgeRuntime as createBridgeRuntime } from "pi-doppelclaude/pi-runtime";
+import { createAnthropicAgentSdkProvider } from "pi-doppelclaude/provider";
 
 const openRoots: Array<{ release(): void }> = [];
 afterEach(() => {

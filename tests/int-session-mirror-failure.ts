@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
 import type { AssistantMessage, AssistantMessageEvent, Context } from "@earendil-works/pi-ai";
-import { createBridgeRuntime } from "../src/bridge-runtime.js";
-import { BridgeSessionStore, type SessionStoreWriter } from "../src/session-store.js";
+import { BridgeSessionStore, type SessionStoreWriter } from "doppelclaude/session-store";
+import { createPiBridgeRuntime as createBridgeRuntime } from "pi-doppelclaude/pi-runtime";
 import { bridgeModel } from "./lib/models.js";
 
 class FailFirstMirrorBatchStore extends BridgeSessionStore {

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { OAUTH_TOKEN_ENV, resolveOauthToken, runShellCommand } from "../src/oauth-token.js";
-import type { ProviderSettings } from "../src/settings.js";
+import { OAUTH_TOKEN_ENV, resolveOauthToken, runShellCommand } from "pi-doppelclaude/oauth-token";
+import type { ProviderSettings } from "pi-doppelclaude/settings";
 
 function providerSettings(oauthTokenCommand?: string): ProviderSettings {
   return { systemPromptMode: "claude-code", ...(oauthTokenCommand ? { oauthTokenCommand } : {}) };

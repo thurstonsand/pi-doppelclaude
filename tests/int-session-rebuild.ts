@@ -7,7 +7,7 @@ import { existsSync } from "node:fs";
 import { test } from "node:test";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { createSession, getSessionPath } from "cc-session-io";
-import { BridgeSessionStore } from "../src/session-store.js";
+import { BridgeSessionStore } from "doppelclaude/session-store";
 
 const CWD = process.cwd();
 const MODEL = "claude-haiku-4-5";

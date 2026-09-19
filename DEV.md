@@ -6,7 +6,7 @@
 mise trust && mise run bootstrap
 ```
 
-The mise enter hook keeps the bootstrap current (npm ci, hk git hooks). Bootstrap also deletes `node_modules/.bin/pi`: this repo's PATH puts `node_modules/.bin` first, and the devDependency copy of pi would otherwise shadow the global install, so smoke tests would exercise the wrong binary. Pi loads the extension directly from TypeScript source at `src/index.ts` — there is no build step.
+The mise enter hook keeps the bootstrap current (npm ci, hk git hooks). Bootstrap also deletes `node_modules/.bin/pi`: this repo's PATH puts `node_modules/.bin` first, and the devDependency copy of pi would otherwise shadow the global install, so smoke tests would exercise the wrong binary. Published packages load built JavaScript from `dist/`; repository tests build the workspaces first.
 
 ## Commands
 
@@ -15,6 +15,7 @@ mise is the task runner of record; the `npm run` scripts are thin aliases onto i
 ```bash
 mise run lint       # biome + actionlint + shellcheck (also the pre-commit hook)
 mise run format     # biome check --write: format and apply safe fixes
+mise run build      # build core, then Pi and HTTP frontends
 mise run check      # offline verification: lint + typecheck + unit tests
 mise run test       # full suite: unit + integration
 
@@ -42,22 +43,24 @@ mise run test:usage                                 # on-demand A/B subscription
 
 - Biome owns formatting and lint (`biome.json`): two-space indent, 100 columns, double quotes, semicolons, trailing commas.
 
-- All Pi registration (`pi.registerProvider`, `pi.on`, …) lives in `src/index.ts`; implementations live in sibling modules built as `create*` factories taking explicit dependencies.
+- All Pi registration (`pi.registerProvider`, `pi.on`, …) lives in `packages/pi-doppelclaude/src/index.ts`; implementations live in sibling modules built as `create*` factories taking explicit dependencies.
 - Conform at the edges: untrusted input (settings files, catalog responses, SDK payloads) is validated with TypeBox schemas once, at the boundary.
 
 ## Project structure
 
-- **Entrypoint / composition root**: `src/index.ts` — settings load, owner acquisition, provider registration, event wiring.
-- **Bridge owner**: `src/bridge-owner.ts` — process-scoped singleton across activations.
-- **Bridge runtime**: `src/bridge-runtime.ts` — query/session/MCP state machine; the heart of the extension.
-- **Doppels**: `src/doppel.ts` — per-conversation session state, the doppel registry, and session sync planning.
-- **Provider**: `src/provider.ts` — native Provider composition; stream event handling in `src/provider-stream.ts`.
-- **Session store**: `src/session-store.ts` — in-memory SDK SessionStore with writer revision fencing.
-- **Compaction**: `src/compaction.ts` — isolated summary subprocess, file-op carry-forward.
-- **Account probe**: `src/account-probe.ts` — auth/first-party gate.
-- **System prompt**: `src/system-prompt.ts` — all prompt-rewrite behavior stays isolated here.
-- **Description cap**: `src/description-cap.ts` — probes the Claude Code binary for its tool-description cap and orchestrates relocation of oversized descriptions; probe results cache at `description-cap-cache.json` in the agent dir.
-- **Settings**: `src/settings.ts` — `doppelclaude` block in Pi's shared settings, env overrides.
+- **Entrypoint / composition root**: `packages/pi-doppelclaude/src/index.ts` — settings load, owner acquisition, provider registration, event wiring.
+- **Bridge owner**: `packages/pi-doppelclaude/src/bridge-owner.ts` — process-scoped singleton across activations.
+- **Bridge runtime**: `packages/doppelclaude/src/bridge-runtime.ts` — Pi-independent query/session/MCP state machine; the core package owns its native request/response types and SDK stream consumer.
+- **Pi adapter**: `packages/pi-doppelclaude/src/pi-runtime.ts` — Pi history, settings, prompt preparation, and tool definitions into core.
+- **HTTP frontend**: `packages/http-doppelclaude/src/server.ts` — the verified Messages endpoint; `cli.ts` supplies `doppelclaude-serve`.
+- **Doppels**: `packages/doppelclaude/src/doppel.ts` — per-conversation session state, the doppel registry, and session sync planning.
+- **Provider**: `packages/pi-doppelclaude/src/provider.ts` — Pi Provider composition. Core consumes SDK events.
+- **Session store**: `packages/doppelclaude/src/session-store.ts` — in-memory SDK SessionStore with writer revision fencing.
+- **Compaction**: `packages/pi-doppelclaude/src/compaction.ts` — isolated summary subprocess, file-op carry-forward.
+- **Account probe**: `packages/pi-doppelclaude/src/account-probe.ts` — auth/first-party gate.
+- **System prompt**: `packages/pi-doppelclaude/src/system-prompt.ts` — all prompt-rewrite behavior stays isolated here.
+- **Description cap**: `packages/pi-doppelclaude/src/description-cap.ts` — probes the Claude Code binary for its tool-description cap and orchestrates relocation of oversized descriptions.
+- **Settings**: `packages/pi-doppelclaude/src/settings.ts` — `doppelclaude` block in Pi's shared settings, env overrides.
 - **Diagnostics**: `diag/` — one-off measurement scripts and findings.
 
 ## Debugging
@@ -68,5 +71,6 @@ mise run test:usage                                 # on-demand A/B subscription
 - Quick live smoke:
 
 ```bash
-pi -ne -e ./src/index.ts -p --model doppelclaude/claude-haiku-4-5 'Reply with exactly: bridge-ok'
+mise run build
+pi -ne -e ./packages/pi-doppelclaude/dist/index.js -p --model doppelclaude/claude-haiku-4-5 'Reply with exactly: bridge-ok'
 ```

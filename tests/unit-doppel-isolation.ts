@@ -17,9 +17,9 @@ import type {
   Message as PiMessage,
   SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
-import { createBridgeRuntime } from "../src/bridge-runtime.js";
-import { projectCatalogModels } from "../src/models.js";
-import { PushQueue } from "../src/query-state.js";
+import { PushQueue } from "doppelclaude/query-state";
+import { projectCatalogModels } from "pi-doppelclaude/models";
+import { createPiBridgeRuntime as createBridgeRuntime } from "pi-doppelclaude/pi-runtime";
 import { record } from "./lib/turns.js";
 
 const [fakeModel] = projectCatalogModels(
@@ -100,7 +100,7 @@ function stream(
   messages: unknown[],
   options: SimpleStreamOptions = { sessionId: HOST_SESSION },
 ) {
-  return runtime.test.streamClaudeAgentSdk(
+  return runtime.stream(
     fakeModel,
     {
       systemPrompt: "",

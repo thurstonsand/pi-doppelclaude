@@ -6,9 +6,9 @@ import {
   type SessionStore,
   type SessionStoreEntry,
 } from "@anthropic-ai/claude-agent-sdk";
-import { SESSION_STORE_LOAD_TIMEOUT_MS } from "../src/bridge-runtime.js";
-import { PushQueue } from "../src/query-state.js";
-import { BridgeSessionStore, MalformedSessionTranscriptError } from "../src/session-store.js";
+import { SESSION_STORE_LOAD_TIMEOUT_MS } from "doppelclaude/bridge-runtime";
+import { PushQueue } from "doppelclaude/query-state";
+import { BridgeSessionStore, MalformedSessionTranscriptError } from "doppelclaude/session-store";
 
 const key = (sessionId: string, subpath?: string) => ({
   projectKey: "ignored-project-scope",

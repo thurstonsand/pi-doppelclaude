@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Query } from "@anthropic-ai/claude-agent-sdk";
-import { type Api, createAssistantMessageEventStream, type Model } from "@earendil-works/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
-import { createBridgeRuntime } from "../src/bridge-runtime.js";
-import { Doppel } from "../src/doppel.js";
+import { Doppel } from "doppelclaude/doppel";
+import { createPiBridgeRuntime as createBridgeRuntime } from "pi-doppelclaude/pi-runtime";
+import { beginProjectedCommand } from "./lib/native-response.js";
 
 const fakeModel = {
   api: "doppelclaude",
@@ -72,8 +73,7 @@ function startedRuntime(warnings: string[], entries: unknown[] = []) {
   const queryCtx = new Doppel("test-doppel", "guest").context;
   // The persistent (root) query is the only one that mutates session/model state.
   queryCtx.persistent = true;
-  queryCtx.currentPiStream = createAssistantMessageEventStream();
-  queryCtx.beginCommand(fakeModel);
+  beginProjectedCommand(queryCtx, fakeModel);
   return { runtime, queryCtx, observed };
 }
 
@@ -96,7 +96,7 @@ describe("provider served-model reporting", () => {
         warningsWhileStreaming = [...warnings];
       }),
       new Map(),
-      fakeModel,
+      fakeModel.id,
       queryCtx,
       {
         onResult() {},
@@ -106,15 +106,14 @@ describe("provider served-model reporting", () => {
 
     assert.deepEqual(warningsWhileStreaming, [DETECTED]);
     assert.deepEqual(warnings, [DETECTED, RECAP]);
-    assert.equal(queryCtx.turnOutput?.responseModel, "claude-opus-4-8");
+    assert.equal(queryCtx.turnOutput?.message.model, "claude-opus-4-8");
 
     // The API keeps the conversation on the fallback model; saying so every turn is noise.
-    queryCtx.beginCommand(fakeModel);
-    queryCtx.currentPiStream = createAssistantMessageEventStream();
+    beginProjectedCommand(queryCtx, fakeModel);
     await runtime.test.consumeQuery(
       demotedTurn(result, () => {}),
       new Map(),
-      fakeModel,
+      fakeModel.id,
       queryCtx,
       {
         onResult() {},
@@ -122,16 +121,15 @@ describe("provider served-model reporting", () => {
       },
     );
     assert.deepEqual(warnings, [DETECTED, RECAP]);
-    assert.equal(queryCtx.turnOutput?.responseModel, "claude-opus-4-8");
+    assert.equal(queryCtx.turnOutput?.message.model, "claude-opus-4-8");
 
     // Picking a different model is a new routing question, so the answer is reported again.
     const otherModel = { ...fakeModel, id: "claude-fable-5" } as Model<Api>;
-    queryCtx.beginCommand(otherModel);
-    queryCtx.currentPiStream = createAssistantMessageEventStream();
+    beginProjectedCommand(queryCtx, otherModel);
     await runtime.test.consumeQuery(
       demotedTurn(result, () => {}),
       new Map(),
-      otherModel,
+      otherModel.id,
       queryCtx,
       {
         onResult() {},
@@ -149,7 +147,7 @@ describe("provider served-model reporting", () => {
     await runtime.test.consumeQuery(
       demotedTurn(undefined, () => {}),
       new Map(),
-      fakeModel,
+      fakeModel.id,
       queryCtx,
       {
         onResult() {},
@@ -168,7 +166,7 @@ describe("provider served-model reporting", () => {
     await runtime.test.consumeQuery(
       demotedTurn(undefined, () => {}),
       new Map(),
-      fakeModel,
+      fakeModel.id,
       queryCtx,
       {
         onResult() {},
@@ -192,12 +190,18 @@ describe("provider served-model reporting", () => {
       };
     })();
 
-    await runtime.test.consumeQuery(sdkQuery as unknown as Query, new Map(), fakeModel, queryCtx, {
-      onResult() {},
-      onSessionId() {},
-    });
+    await runtime.test.consumeQuery(
+      sdkQuery as unknown as Query,
+      new Map(),
+      fakeModel.id,
+      queryCtx,
+      {
+        onResult() {},
+        onSessionId() {},
+      },
+    );
 
     assert.deepEqual(warnings, []);
-    assert.equal(queryCtx.turnOutput?.responseModel, undefined);
+    assert.equal(queryCtx.turnOutput?.message.model, fakeModel.id);
   });
 });

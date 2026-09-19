@@ -1,0 +1,13 @@
+.git
+.github
+.amp
+.agents
+.mise
+node_modules
+packages/*/dist
+diag
+docs
+tests
+assets
+*.jsonl
+.env*

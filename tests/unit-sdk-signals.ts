@@ -13,7 +13,7 @@ import {
   classifyResult,
   formatRateLimitMessage,
   reconcileMcpServers,
-} from "../src/sdk-signals.js";
+} from "doppelclaude/sdk-signals";
 
 function queryWithSetMcpServers(
   results: McpSetServersResult[],

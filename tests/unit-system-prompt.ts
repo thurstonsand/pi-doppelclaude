@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { buildClaudeSystemPrompt, rewritePiSystemPrompt } from "../src/system-prompt.js";
+import { buildClaudeSystemPrompt, rewritePiSystemPrompt } from "pi-doppelclaude/system-prompt";
 
 const PI_IDENTITY =
   "You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.";

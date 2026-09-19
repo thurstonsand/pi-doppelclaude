@@ -3,7 +3,7 @@
 // shipping fails the fixture instead of silently becoming undefined.
 
 import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
-import { type BridgeModel, projectCatalogModels } from "../../src/models.js";
+import { type BridgeModel, projectCatalogModels } from "pi-doppelclaude/models";
 
 export function bridgeModel(id: string): BridgeModel {
   const [model] = projectCatalogModels(getBuiltinModels("anthropic"), new Set([id]));

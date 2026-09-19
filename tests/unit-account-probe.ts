@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { AccountInfo, ModelInfo, Options } from "@anthropic-ai/claude-agent-sdk";
-import { createAccountProbe } from "../src/account-probe.js";
+import { createAccountProbe } from "doppelclaude/account-probe";
 
 const supportedModels: ModelInfo[] = [
   {
@@ -18,10 +18,7 @@ function probeFor(
   captureOptions = (_options: Options | undefined) => {},
 ) {
   return createAccountProbe({
-    providerSettings: {
-      systemPromptMode: "claude-code",
-      pathToClaudeCodeExecutable: "/configured/claude",
-    },
+    pathToClaudeCodeExecutable: "/configured/claude",
     queryFactory(request) {
       captureOptions(request.options);
       return {
@@ -58,6 +55,41 @@ describe("Claude Code account probe", () => {
     assert.deepEqual(options?.skills, []);
     assert.equal(options?.persistSession, false);
     assert.equal(options?.pathToClaudeCodeExecutable, "/configured/claude");
+  });
+
+  it("passes a subscription OAuth token through the neutral child environment", async () => {
+    const previous = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = "test-subscription-token";
+    let options: Options | undefined;
+    try {
+      await probeFor({ apiProvider: "firstParty", tokenSource: "oauth" }, undefined, (value) => {
+        options = value;
+      })();
+      assert.equal(options?.env?.CLAUDE_CODE_OAUTH_TOKEN, "test-subscription-token");
+    } finally {
+      if (previous === undefined) delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+      else process.env.CLAUDE_CODE_OAUTH_TOKEN = previous;
+    }
+  });
+
+  it("accepts OAuth when the SDK reports apiKeySource none", async () => {
+    assert.equal(
+      (
+        await probeFor({
+          apiProvider: "firstParty",
+          tokenSource: "oauth",
+          apiKeySource: "none",
+        })()
+      ).available,
+      true,
+    );
+  });
+
+  it("rejects an active API key even when the provider is first-party", async () => {
+    await assert.rejects(
+      probeFor({ apiProvider: "firstParty", apiKeySource: "environment" })(),
+      /API key instead of a subscription.*claude auth login/u,
+    );
   });
 
   it("treats the explicit no-token account state as logged out", async () => {
@@ -107,7 +139,6 @@ describe("Claude Code account probe", () => {
     let closes = 0;
     let options: Options | undefined;
     const probe = createAccountProbe({
-      providerSettings: { systemPromptMode: "claude-code" },
       queryFactory(request) {
         options = request.options;
         return {
@@ -123,6 +154,26 @@ describe("Claude Code account probe", () => {
     });
     await assert.rejects(probe(), /control channel failed.*claude auth login/);
     assert.equal(closes, 1);
+    assert.equal(options?.abortController?.signal.aborted, true);
+  });
+
+  it("propagates caller cancellation to the SDK and settles promptly", async () => {
+    let options: Options | undefined;
+    const probe = createAccountProbe({
+      queryFactory(request) {
+        options = request.options;
+        return {
+          accountInfo: () => new Promise<AccountInfo>(() => {}),
+          supportedModels: () => new Promise<ModelInfo[]>(() => {}),
+          close() {},
+        };
+      },
+    });
+    const controller = new AbortController();
+    const result = probe(controller.signal);
+    controller.abort(new Error("stopping"));
+
+    await assert.rejects(result, /stopping/u);
     assert.equal(options?.abortController?.signal.aborted, true);
   });
 });

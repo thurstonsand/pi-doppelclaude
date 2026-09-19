@@ -11,10 +11,13 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Query } from "@anthropic-ai/claude-agent-sdk";
-import type { Api, Model, Message as PiMessage } from "@earendil-works/pi-ai";
-import { createBridgeRuntime } from "../src/bridge-runtime.js";
-import { Doppel } from "../src/doppel.js";
-import { extractAllToolResults as _extractAllToolResults } from "../src/extract-tool-results.js";
+import type { Message as PiMessage } from "@earendil-works/pi-ai";
+import type { CoreResponseEvent } from "doppelclaude/core-response";
+import { Doppel } from "doppelclaude/doppel";
+import { extractAllToolResults as _extractAllToolResults } from "doppelclaude/extract-tool-results";
+import { PushQueue } from "doppelclaude/query-state";
+import { createPiBridgeRuntime as createBridgeRuntime } from "pi-doppelclaude/pi-runtime";
+import { bridgeModel } from "./lib/models.js";
 
 // Loose pi-message fixtures fed to the extractor: role plus the optional fields
 // the walk inspects. Extra per-block fields ride along as unknown content.
@@ -149,22 +152,18 @@ describe("production MCP handlers", () => {
       closeCount++;
     };
     queryCtx.activeQuery = activeQuery;
-    queryCtx.resetTurnState({
-      api: "doppelclaude",
-      provider: "doppelclaude",
-      id: "test",
-    } as Model<Api>);
+    queryCtx.resetTurnState("test", new PushQueue<CoreResponseEvent>());
     const handler = runtime.test.createMcpToolHandler("read", queryCtx);
 
     void handler({}, {});
 
     assert.equal(closeCount, 1);
-    assert.equal(queryCtx.currentPiStream, null);
+    assert.equal(queryCtx.currentResponse, null);
     assert.match(queryCtx.fatalError, /no longer sends claudecode\/toolUseId/);
 
     queryCtx.activeQuery = null;
-    const stream = runtime.test.streamClaudeAgentSdk(
-      { api: "doppelclaude", provider: "doppelclaude", id: "test" } as Model<Api>,
+    const stream = runtime.stream(
+      bridgeModel("claude-haiku-4-5"),
       {
         systemPrompt: "",
         messages: [
@@ -181,7 +180,7 @@ describe("production MCP handlers", () => {
     );
     const events = [];
     for await (const event of stream) events.push(event);
-    assert.equal(queryCtx.currentPiStream, null);
+    assert.equal(queryCtx.currentResponse, null);
     const last = events.at(-1);
     assert.equal(last.type, "error");
     if (last.type !== "error") throw new Error("expected a trailing error event");

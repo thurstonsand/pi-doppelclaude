@@ -33,8 +33,13 @@ Then configure the system prompt. **This step is not optional** — see below.
 For local development from a clone:
 
 ```bash
-pi -e ./src/index.ts
+mise run build
+pi -e ./packages/pi-doppelclaude/dist/index.js
 ```
+
+## HTTP frontend for Amp
+
+[`http-doppelclaude`](packages/http-doppelclaude/README.md) serves an authenticated Anthropic Messages endpoint for Amp Custom URL connections. It shares the same core as the Pi provider, keeps conversations isolated by Amp thread ID, and lets Amp execute its own tools. The repository publishes a daemon-only image at `ghcr.io/thurstonsand/http-doppelclaude`; deployment automation supplies secrets, networking, and service supervision. See the package README for image defaults, configuration, and lifecycle limits.
 
 ## Read this part
 

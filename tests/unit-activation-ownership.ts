@@ -28,7 +28,7 @@ const OWNER_KEY = Symbol.for("doppelclaude:owner");
 // The owner lives on globalThis under a symbol key; view it as a symbol-keyed
 // record so reads/clears are typed instead of indexing typeof globalThis.
 const ownerRegistry = globalThis as Record<symbol, unknown>;
-const { default: activate } = await import("../src/index.js");
+const { default: activate } = await import("pi-doppelclaude/index");
 
 const MUTATING_EVENTS = [
   "session_start",
