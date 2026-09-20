@@ -155,6 +155,7 @@ interface ThreadState {
   expectedHistory: MessageParam[];
   requestSignature?: string;
   configurationFingerprint?: string;
+  configurationFields?: Record<string, string>;
   forceRebuild: boolean;
   lastActivity: number;
 }
@@ -793,14 +794,26 @@ export function createHttpServer(options: HttpServerOptions): Server {
         toolNameToSdk.set(tool.name, sdk);
         toolNameToClient.set(sdk, tool.name);
       }
-      const signature = JSON.stringify({
+      const configuration = {
         prompt: prepared.systemPrompt,
         tools,
         toolChoice: body.tool_choice,
         effort: body.output_config?.effort,
         thinking: body.thinking,
         maxTokens: body.max_tokens,
-      });
+      };
+      const signature = JSON.stringify(configuration);
+      const configurationFields = Object.fromEntries(
+        Object.entries({ model, ...configuration }).map(([field, value]) => [
+          field,
+          fingerprint(JSON.stringify({ value })),
+        ]),
+      );
+      const changedConfigurationFields = state.configurationFields
+        ? Object.keys(configurationFields).filter(
+            (field) => configurationFields[field] !== state.configurationFields?.[field],
+          )
+        : null;
       const configurationFingerprint = fingerprint(`${model}\n${signature}`);
       const previousConfigurationFingerprint = state.configurationFingerprint ?? null;
       const expectedPrior = body.messages.slice(0, -1) as MessageParam[];
@@ -830,6 +843,8 @@ export function createHttpServer(options: HttpServerOptions): Server {
       Object.assign(diagnostic, {
         configurationFingerprint,
         previousConfigurationFingerprint,
+        configurationFields,
+        changedConfigurationFields,
         historyFingerprint: fingerprint(canonicalHistory(normalized.messages)),
         historyDiverged,
         signatureChanged,
@@ -973,6 +988,7 @@ export function createHttpServer(options: HttpServerOptions): Server {
       ];
       state.requestSignature = signature;
       state.configurationFingerprint = configurationFingerprint;
+      state.configurationFields = configurationFields;
       state.lastActivity = now();
       const observedUsage = final.observedUsage;
       log({

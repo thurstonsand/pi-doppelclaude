@@ -858,6 +858,40 @@ describe("native HTTP frontend", () => {
     }
   });
 
+  it("identifies changed configuration fields without logging their values", async () => {
+    const cases: Array<{ field: string; update: Record<string, unknown> }> = [
+      { field: "model", update: { model: "claude-opus-5" } },
+      { field: "prompt", update: { system: `${body(A).system}\nprivate-prompt-change` } },
+      {
+        field: "tools",
+        update: { tools: [{ ...body(A).tools[0], description: "private-tool-change" }] },
+      },
+      { field: "toolChoice", update: { tool_choice: { type: "auto" } } },
+      { field: "effort", update: { output_config: { effort: "high" } } },
+      { field: "thinking", update: { thinking: { type: "enabled", budget_tokens: 4000 } } },
+      { field: "maxTokens", update: { max_tokens: 101 } },
+    ];
+    for (const { field, update } of cases) {
+      const app = await harness();
+      try {
+        for (const request of [body(A), { ...body(A), ...update }, { ...body(A), ...update }]) {
+          const response = await app.post(request);
+          assert.equal(response.status, 200);
+          await response.text();
+        }
+        assert.equal(app.logs[0].changedConfigurationFields, null);
+        assert.deepEqual(app.logs[1].changedConfigurationFields, [field]);
+        assert.deepEqual(app.logs[2].changedConfigurationFields, []);
+        const hashes = app.logs[1].configurationFields as Record<string, string>;
+        assert.equal(Object.keys(hashes).length, 7);
+        assert.ok(Object.values(hashes).every((hash) => /^[a-f0-9]{16}$/u.test(hash)));
+        assert.doesNotMatch(JSON.stringify(app.logs), /private-prompt-change|private-tool-change/);
+      } finally {
+        await app.close();
+      }
+    }
+  });
+
   it("logs warm reuse and main/Oracle/main displacement without conflating cache reads", async () => {
     const logs: Array<Record<string, unknown>> = [];
     let spawns = 0;
