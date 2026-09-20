@@ -650,6 +650,30 @@ describe("native HTTP frontend", () => {
     }
   });
 
+  it("passes image payloads larger than 2 MiB intact to the runtime", async () => {
+    const app = await harness();
+    const image = {
+      type: "image",
+      source: {
+        type: "base64",
+        media_type: "image/jpeg",
+        data: Buffer.alloc(2 * 1024 * 1024, 173).toString("base64"),
+      },
+    };
+    const messages = [
+      { role: "user", content: [{ type: "text", text: "Describe this image" }, image] },
+    ];
+    try {
+      const response = await app.post(body(A, messages));
+      assert.equal(response.status, 200);
+      await response.text();
+      assert.deepEqual(app.requests.get(A)?.[0].messages, messages);
+      assert.doesNotMatch(JSON.stringify(app.logs), /ra2tra2t/);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("enforces body and runtime capacity limits", async () => {
     const server = createHttpServer({
       apiKey: KEY,
@@ -672,8 +696,14 @@ describe("native HTTP frontend", () => {
       assert.equal((await post({ padding: "x".repeat(3_000) })).status, 413);
       // Invalid requests do not consume runtime capacity.
       assert.equal((await post({ ...body(A), stream: false })).status, 400);
-      const first = await post(body(A));
+      const empty = body(A, [{ role: "user", content: "" }]);
+      const content = "x".repeat(2_000 - Buffer.byteLength(JSON.stringify(empty)));
+      const exact = body(A, [{ role: "user", content }]);
+      assert.equal(Buffer.byteLength(JSON.stringify(exact)), 2_000);
+      const first = await post(exact);
+      assert.equal(first.status, 200);
       await first.text();
+      assert.equal((await post(body(A, [{ role: "user", content: `${content}x` }]))).status, 413);
       // Capacity pressure evicts the least-recently-used idle runtime.
       assert.equal((await post(body(B))).status, 200);
     } finally {

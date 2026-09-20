@@ -22,7 +22,7 @@ import { Value } from "typebox/value";
 
 const THREAD_LINE =
   /^Amp Thread URL: https:\/\/ampcode\.com\/threads\/(T-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\r?$/gm;
-const DEFAULT_BODY_LIMIT = 2 * 1024 * 1024;
+const DEFAULT_BODY_LIMIT = 32_000_000;
 const DEFAULT_RUNTIME_LIMIT = 32;
 const DEFAULT_IDLE_TTL = 3_600_000;
 const DEFAULT_REQUEST_TIMEOUT = 600_000;
@@ -1197,7 +1197,7 @@ export async function httpConfigFromEnvironment(
     stateDir,
     maxRuntimes: integerOption(env, "DOPPELCLAUDE_MAX_RUNTIMES", 32),
     idleTtlMs: integerOption(env, "DOPPELCLAUDE_IDLE_TTL_MS", 3_600_000),
-    maxBodyBytes: integerOption(env, "DOPPELCLAUDE_MAX_BODY_BYTES", 2_097_152),
+    maxBodyBytes: integerOption(env, "DOPPELCLAUDE_MAX_BODY_BYTES", DEFAULT_BODY_LIMIT),
     requestTimeoutMs: integerOption(env, "DOPPELCLAUDE_REQUEST_TIMEOUT_MS", 600_000),
     shutdownTimeoutMs: integerOption(env, "DOPPELCLAUDE_SHUTDOWN_TIMEOUT_MS", 15_000),
     retryAttempts: integerOption(env, "DOPPELCLAUDE_RETRY_ATTEMPTS", 2, 0, 10),

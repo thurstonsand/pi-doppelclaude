@@ -15,8 +15,10 @@ default `127.0.0.1`) and `PORT` (default `3456`). Configure exactly one of
 Startup creates the state directory with mode `0700`, verifies first-party subscription authentication, and discovers the installed Claude Code tool-description limit and model catalog before opening the socket. Use `claude auth login` or supply `CLAUDE_CODE_OAUTH_TOKEN` through your service's secret manager. API-key authentication to Anthropic is rejected. Startup has a 30-second deadline. The requester chooses the model on every call; the discovered catalog supports client discovery but is not a request allowlist. The `opus` and `fable` aliases are snapshotted at startup. An exact SDK alias row with a stable `resolvedModel` takes precedence; otherwise the catalog must identify exactly one distinct stable concrete model in that family. Restart the daemon after an SDK or container-image refresh to pick up changed alias resolutions. An absent or ambiguous family makes only requests for that alias return 400.
 
 Resource controls are `DOPPELCLAUDE_MAX_RUNTIMES` (32), `DOPPELCLAUDE_IDLE_TTL_MS` (3600000),
-`DOPPELCLAUDE_MAX_BODY_BYTES` (2097152), `DOPPELCLAUDE_REQUEST_TIMEOUT_MS` (600000),
+`DOPPELCLAUDE_MAX_BODY_BYTES` (32000000, 32 MB), `DOPPELCLAUDE_REQUEST_TIMEOUT_MS` (600000),
 `DOPPELCLAUDE_SHUTDOWN_TIMEOUT_MS` (15000), and `DOPPELCLAUDE_RETRY_ATTEMPTS` (2).
+
+The body limit covers the entire JSON request, including base64 images and conversation history. Requests above it return 413 before invoking Claude Code. Model-specific image size and dimension limits still apply.
 
 Clients call `GET /v1/models` or streaming-only `POST /v1/messages`, authenticating with either
 `x-api-key` or `Authorization: Bearer …`. A conversation is keyed by the single Amp Thread URL in

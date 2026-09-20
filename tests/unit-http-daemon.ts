@@ -146,6 +146,15 @@ describe("HTTP daemon lifecycle", () => {
 describe("HTTP daemon configuration", () => {
   const base = { DOPPELCLAUDE_HTTP_API_KEY: key };
 
+  it("defaults to a 32 MB request cap and honors explicit overrides", async () => {
+    assert.equal((await httpConfigFromEnvironment(base)).maxBodyBytes, 32_000_000);
+    assert.equal(
+      (await httpConfigFromEnvironment({ ...base, DOPPELCLAUDE_MAX_BODY_BYTES: "3145728" }))
+        .maxBodyBytes,
+      3_145_728,
+    );
+  });
+
   it("accepts zero retries", async () => {
     const parsed = await httpConfigFromEnvironment({
       ...base,
