@@ -604,8 +604,14 @@ export function createHttpServer(options: HttpServerOptions): Server {
     try {
       const value = await readBody(request, options.maxBodyBytes ?? DEFAULT_BODY_LIMIT);
       if (shuttingDown) throw new RequestError("server is shutting down", 503);
-      if (!Value.Check(RequestSchema, value))
-        throw new RequestError(Value.Errors(RequestSchema, value)[0]?.message ?? "invalid request");
+      if (!Value.Check(RequestSchema, value)) {
+        const error = Value.Errors(RequestSchema, value)[0];
+        throw new RequestError(
+          error
+            ? `schema validation failed at ${error.instancePath || "/"}: ${error.message}; params=${JSON.stringify(error.params)}`
+            : "invalid request",
+        );
+      }
       const body = value as ApiRequest;
       validateMessages(body.messages);
       if (body.stream !== true) throw new RequestError("only stream: true is supported");

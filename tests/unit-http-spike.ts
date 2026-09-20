@@ -230,6 +230,34 @@ describe("native HTTP frontend", () => {
     }
   });
 
+  it("reports schema paths and unsupported fields without echoing request values", async () => {
+    const app = await harness();
+    try {
+      const privateValue = "private-value-that-must-not-be-echoed";
+      const rootResponse = await app.post({ ...body(A), unsupported_root: privateValue });
+      assert.equal(rootResponse.status, 400);
+      const rootError = await rootResponse.text();
+      assert.match(
+        rootError,
+        /schema validation failed at \/: must not have additional properties/,
+      );
+      assert.match(rootError, /additionalProperties.*unsupported_root/);
+      assert.doesNotMatch(rootError, new RegExp(privateValue));
+
+      const thinkingResponse = await app.post({
+        ...body(A),
+        thinking: { type: "adaptive", budget_tokens: privateValue },
+      });
+      assert.equal(thinkingResponse.status, 400);
+      const thinkingError = await thinkingResponse.text();
+      assert.match(thinkingError, /schema validation failed at \/thinking:/);
+      assert.match(thinkingError, /additionalProperties.*budget_tokens/);
+      assert.doesNotMatch(thinkingError, new RegExp(privateValue));
+    } finally {
+      await app.close();
+    }
+  });
+
   it("sends native requests, parameters, schemas, maps, and raw SSE", async () => {
     const app = await harness();
     try {
