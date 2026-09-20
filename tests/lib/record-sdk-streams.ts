@@ -122,7 +122,8 @@ for (const name of chosen) {
     // A delta can split the home path so no string replacement sees it whole.
     // Refuse to write rather than commit a fixture carrying the username.
     const user = homedir().split("/").filter(Boolean).pop();
-    if (user && body.includes(user))
+    // The orb's home already equals the scrubbed placeholder; "user" is also an SDK role.
+    if (homedir() !== "/home/user" && user && body.includes(user))
       throw new Error(`${name}: "${user}" survived scrubbing — inspect ${raw} and re-run`);
     writeFileSync(target, body);
     console.log(`${name}: ${messages.length} messages recorded — ${text.trim().slice(0, 60)}`);

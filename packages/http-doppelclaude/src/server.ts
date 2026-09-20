@@ -182,12 +182,54 @@ export interface HttpModel {
 }
 
 const STABLE_CLAUDE_MODEL = /^claude-[a-z][a-z0-9]*-\d+(?:-\d+)*$/u;
+const REQUEST_MODEL_ALIASES = ["opus", "fable"];
 
-function requestModelId(model: string): string | undefined {
+function snapshotModelAliases(models: readonly ModelInfo[]): Map<string, string> {
+  const aliases = new Map<string, string>();
+  for (const alias of REQUEST_MODEL_ALIASES) {
+    const exact = models.find(
+      (model) =>
+        model.value === alias &&
+        model.resolvedModel !== undefined &&
+        STABLE_CLAUDE_MODEL.test(model.resolvedModel),
+    )?.resolvedModel;
+    if (exact) {
+      aliases.set(alias, exact);
+      continue;
+    }
+
+    const familyPrefix = `claude-${alias}-`;
+    const candidates = new Set<string>();
+    for (const row of models) {
+      const concrete = row.resolvedModel ?? row.value;
+      if (STABLE_CLAUDE_MODEL.test(concrete) && concrete.startsWith(familyPrefix)) {
+        candidates.add(concrete);
+      }
+    }
+    if (candidates.size === 1) aliases.set(alias, candidates.values().next().value as string);
+  }
+  return aliases;
+}
+
+function requestModelId(model: string, aliases: ReadonlyMap<string, string>): string | undefined {
   const parts = model.split("/");
-  if (parts.length === 1 && STABLE_CLAUDE_MODEL.test(parts[0])) return parts[0];
-  if (parts.length === 2 && parts[0].length > 0 && STABLE_CLAUDE_MODEL.test(parts[1]))
-    return parts[1];
+  const bare =
+    parts.length === 1
+      ? parts[0]
+      : parts.length === 2 && parts[0].length > 0
+        ? parts[1]
+        : undefined;
+  if (!bare) return undefined;
+  if (STABLE_CLAUDE_MODEL.test(bare)) return bare;
+  if (REQUEST_MODEL_ALIASES.includes(bare)) {
+    const resolved = aliases.get(bare);
+    if (!resolved) {
+      throw new RequestError(
+        `model alias ${bare} is unavailable: startup model catalog did not identify exactly one stable Claude model ID`,
+      );
+    }
+    return resolved;
+  }
   return undefined;
 }
 
@@ -463,6 +505,7 @@ async function readBody(request: IncomingMessage, limit: number): Promise<unknow
 export function createHttpServer(options: HttpServerOptions): Server {
   if (!options.apiKey.trim()) throw new Error("HTTP spike API key must not be blank");
   const catalog = projectHttpModels(options.supportedModels);
+  const modelAliases = snapshotModelAliases(options.supportedModels);
   const stateDir = options.stateDir ?? join(homedir(), ".local/state/doppelclaude");
   if (!stateDir.trim()) throw new Error("state directory must not be blank");
   const states = new Map<string, ThreadState>();
@@ -567,7 +610,7 @@ export function createHttpServer(options: HttpServerOptions): Server {
       validateMessages(body.messages);
       if (body.stream !== true) throw new RequestError("only stream: true is supported");
       if (body.temperature !== undefined) throw new RequestError("temperature is unsupported");
-      const model = requestModelId(body.model);
+      const model = requestModelId(body.model, modelAliases);
       if (!model)
         throw new RequestError("model must be a stable Claude model ID or <provider>/<model>");
       const { threadId, prompt } = extractThread(body.system);

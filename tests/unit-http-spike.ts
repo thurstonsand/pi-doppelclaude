@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import { request as httpRequest } from "node:http";
 import { describe, it } from "node:test";
-import type { Query, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { ModelInfo, Query, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { Message, MessageParam } from "@anthropic-ai/sdk/resources/messages/messages";
 import type { CoreResponseEvent } from "doppelclaude/core-response";
 import type { RuntimeRequest } from "doppelclaude/runtime-request";
@@ -11,6 +11,7 @@ import { createHttpServer, projectHttpModels } from "http-doppelclaude";
 const KEY = "test-key";
 const A = "T-11111111-1111-4111-8111-111111111111";
 const B = "T-22222222-2222-4222-8222-222222222222";
+const SERVED_MODEL = "claude-served-9-20990101";
 
 function deferred() {
   let resolve!: () => void;
@@ -47,8 +48,9 @@ function message(content: Message["content"], stop: Message["stop_reason"] = "en
 async function* native(
   content: Message["content"],
   stop: Message["stop_reason"] = "end_turn",
+  modelId = SERVED_MODEL,
 ): AsyncIterable<CoreResponseEvent> {
-  const value = message(content, stop);
+  const value = { ...message(content, stop), model: modelId };
   yield { type: "message_start", message: { ...value, content: [] } };
   for (const [index, block] of content.entries()) {
     yield { type: "content_block_start", index, content_block: block };
@@ -93,10 +95,13 @@ function fakeRuntime(requests: RuntimeRequest[], rebuilds: string[] = []) {
     },
     replay(request: RuntimeRequest) {
       requests.push(request);
-      return native([
-        { type: "thinking", thinking: "why", signature: "signed" },
-        { type: "text", text: "done" },
-      ] as Message["content"]);
+      return native(
+        [
+          { type: "thinking", thinking: "why", signature: "signed" },
+          { type: "text", text: "done" },
+        ] as Message["content"],
+        "end_turn",
+      );
     },
     async clear() {},
     async closePersistent() {},
@@ -124,12 +129,12 @@ function body(thread: string, messages: unknown[] = [{ role: "user", content: "g
     messages,
   };
 }
-async function harness() {
+async function harness(supportedModels: readonly ModelInfo[] = []) {
   const requests = new Map<string, RuntimeRequest[]>();
   const rebuilds = new Map<string, string[]>();
   const server = createHttpServer({
     apiKey: KEY,
-    supportedModels: [],
+    supportedModels,
     createRuntime(id) {
       const seen: RuntimeRequest[] = [];
       const marked: string[] = [];
@@ -471,6 +476,108 @@ describe("native HTTP frontend", () => {
         ["claude-haiku-4-5"],
       );
       assert.ok(app.rebuilds.get(A)?.includes("HTTP history diverged"));
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("snapshots aliases with exact-row precedence, unique families, and duplicate deduplication", async () => {
+    const supportedModels: ModelInfo[] = [
+      {
+        value: "opus",
+        resolvedModel: "claude-opus-4-20250514",
+        displayName: "Opus",
+        description: "",
+      },
+      {
+        value: "claude-opus-5-20260901",
+        displayName: "Newer Opus",
+        description: "",
+      },
+      {
+        value: "claude-opus-6-20270901",
+        displayName: "Newest Opus",
+        description: "",
+      },
+      {
+        value: "claude-fable-5-20260901",
+        displayName: "Fable",
+        description: "",
+      },
+      {
+        value: "fable-preview",
+        resolvedModel: "claude-fable-5-20260901",
+        displayName: "Duplicate Fable",
+        description: "",
+      },
+    ];
+    const app = await harness(supportedModels);
+    supportedModels[0].resolvedModel = "claude-opus-9-20991231";
+    supportedModels[3].value = "claude-fable-9-20991231";
+    try {
+      const opus = await app.post({ ...body(A), model: "opus" });
+      const opusSse = await opus.text();
+      assert.equal(opus.status, 200);
+      assert.match(opusSse, new RegExp(`"model":"${SERVED_MODEL}"`));
+
+      const fable = await app.post({ ...body(B), model: "anthropic/fable" });
+      const fableSse = await fable.text();
+      assert.equal(fable.status, 200);
+      assert.match(fableSse, new RegExp(`"model":"${SERVED_MODEL}"`));
+
+      const explicit = await app.post({ ...body(A), model: "vendor/claude-haiku-9-20991231" });
+      const explicitSse = await explicit.text();
+      assert.equal(explicit.status, 200);
+      assert.match(explicitSse, new RegExp(`"model":"${SERVED_MODEL}"`));
+      assert.deepEqual(
+        app.requests.get(A)?.map((request) => request.model),
+        ["claude-opus-4-20250514", "claude-haiku-9-20991231"],
+      );
+      assert.deepEqual(
+        app.requests.get(B)?.map((request) => request.model),
+        ["claude-fable-5-20260901"],
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects absent and ambiguous aliases without choosing the first candidate", async () => {
+    const app = await harness([
+      {
+        value: "fable",
+        resolvedModel: "fable",
+        displayName: "Invalid Fable",
+        description: "",
+      },
+      {
+        value: "claude-fable-4-20250514",
+        displayName: "Fable 4",
+        description: "",
+      },
+      {
+        value: "fable-preview",
+        resolvedModel: "claude-fable-5-20260901",
+        displayName: "Fable 5",
+        description: "",
+      },
+    ]);
+    try {
+      for (const model of ["opus", "provider/fable"]) {
+        const response = await app.post({ ...body(A), model });
+        assert.equal(response.status, 400);
+        assert.match(
+          await response.text(),
+          new RegExp(`model alias ${model.split("/").at(-1)} is unavailable`),
+        );
+      }
+      const explicit = await app.post({
+        ...body(A),
+        model: "provider/claude-opus-4-20250514",
+      });
+      assert.equal(explicit.status, 200);
+      assert.match(await explicit.text(), new RegExp(`"model":"${SERVED_MODEL}"`));
+      assert.equal(app.requests.get(A)?.[0]?.model, "claude-opus-4-20250514");
     } finally {
       await app.close();
     }

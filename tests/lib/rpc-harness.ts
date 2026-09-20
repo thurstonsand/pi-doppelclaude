@@ -244,7 +244,15 @@ export function createRpcHarness(opts: RpcHarnessOptions) {
     // failing runs. RPC log is still append so cross-run comparisons work.
     writeFileSync(DEBUG_LOG, "");
     rpcLog = createWriteStream(RPC_LOG, { flags: "a" });
-    const spawnArgs = ["--no-session", "-ne", "-e", DIR, "--mode", "rpc", ...args];
+    const spawnArgs = [
+      "--no-session",
+      "-ne",
+      "-e",
+      join(DIR, "packages/pi-doppelclaude"),
+      "--mode",
+      "rpc",
+      ...args,
+    ];
     pi = spawn("pi", spawnArgs, {
       cwd,
       stdio: ["pipe", "pipe", "pipe"],
