@@ -1,12 +1,14 @@
 import type {
   Query,
   SDKAssistantMessage,
+  SDKCompactBoundaryMessage,
   SDKMessage,
   SDKMirrorErrorMessage,
   SDKModelRefusalFallbackMessage,
   SDKModelRefusalNoFallbackMessage,
   SDKPartialAssistantMessage,
   SDKResultMessage,
+  SDKStatusMessage,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import type {
@@ -45,6 +47,7 @@ export interface QueryConsumerHooks {
   onResult(message: SDKResultMessage): void;
   onSessionId(sessionId: string): void;
   onMirrorError?(message: SDKMirrorErrorMessage): void;
+  onCompaction?(message: SDKStatusMessage | SDKCompactBoundaryMessage): void;
 }
 
 function parsePartialJson(
@@ -515,6 +518,8 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
     switch (message.type) {
       case "system":
         if (message.subtype === "init") hooks.onSessionId(message.session_id);
+        else if (message.subtype === "status" || message.subtype === "compact_boundary")
+          hooks.onCompaction?.(message);
         else if (message.subtype === "mirror_error") hooks.onMirrorError?.(message);
         else if (message.subtype === "api_retry") {
           const failure =

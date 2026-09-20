@@ -1050,7 +1050,9 @@ describe("native HTTP frontend", () => {
         (record) => record.executions as Array<{ event: string; queryId: string }>,
       );
       assert.deepEqual(
-        executions.map((events) => events.map((event) => event.event)),
+        executions.map((events) =>
+          events.filter((event) => event.event !== "sdk_result").map((event) => event.event),
+        ),
         [["query_created"], ["query_reused"], ["query_created"], ["query_created"]],
       );
       assert.equal(executions[0][0].queryId, executions[1][0].queryId);

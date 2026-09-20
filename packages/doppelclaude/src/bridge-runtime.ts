@@ -4,13 +4,16 @@
 // MCP pending-result routing, the persistent input queue, and the full query
 // lifecycle. Session state itself lives on the doppel a turn addresses (src/doppel.ts).
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   type McpServerConfig,
   type Options,
   type Query,
   query,
+  type SDKResultMessage,
+  type SDKStatus,
   type SDKUserMessage,
+  type TerminalReason,
 } from "@anthropic-ai/claude-agent-sdk";
 import type { ContentBlockParam, MessageParam } from "@anthropic-ai/sdk/resources";
 // Server's @deprecated tag steers high-level users toward McpServer, whose
@@ -69,7 +72,59 @@ export type BridgeExecutionObservation =
       syncReason: SyncPlan["reason"]["kind"];
     }
   | { event: "query_reused"; queryId: string | null }
-  | { event: "tool_result_continuation"; queryId: string | null; resultCount: number };
+  | { event: "tool_result_continuation"; queryId: string | null; resultCount: number }
+  | {
+      event: "sdk_status";
+      queryId: string;
+      status: SDKStatus;
+      compactResult: "success" | "failed" | null;
+      error: FailureDiagnostic | null;
+    }
+  | {
+      event: "sdk_compact_boundary";
+      queryId: string;
+      trigger: "manual" | "auto";
+      preTokens: number;
+      postTokens: number | null;
+    }
+  | {
+      event: "sdk_result";
+      queryId: string;
+      subtype: SDKResultMessage["subtype"];
+      isError: boolean;
+      terminalReason: TerminalReason | null;
+      apiStatus: number | null;
+      error: FailureDiagnostic | null;
+      limits: Array<{ contextWindow: number; maxOutputTokens: number }>;
+    };
+
+interface FailureDiagnostic {
+  fingerprint: string;
+  characters: number;
+  signals: string[];
+}
+
+function failureDiagnostic(message: string | undefined): FailureDiagnostic | null {
+  if (!message) return null;
+  return {
+    fingerprint: createHash("sha256").update(message).digest("hex").slice(0, 16),
+    characters: message.length,
+    signals: [
+      "compaction",
+      "compact",
+      "context",
+      "too long",
+      "image",
+      "base64",
+      "token",
+      "limit",
+      "authentication",
+      "unauthorized",
+      "rate",
+      "overloaded",
+    ].filter((signal) => message.toLowerCase().includes(signal)),
+  };
+}
 
 /** The spawn-shaped half of a turn: what a fresh subprocess is given, derived from the
  *  request alone, plus the MCP server bound to the context that will run it. */
@@ -633,9 +688,43 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies = {}
       attachAbort();
 
       const completion = consumeQuery(sdkQuery, customToolNameToPi, model, queryCtx, {
+        onCompaction(message) {
+          if (message.subtype === "status") {
+            dependencies.observeExecution?.({
+              event: "sdk_status",
+              queryId,
+              status: message.status,
+              compactResult: message.compact_result ?? null,
+              error: failureDiagnostic(message.compact_error),
+            });
+          } else {
+            dependencies.observeExecution?.({
+              event: "sdk_compact_boundary",
+              queryId,
+              trigger: message.compact_metadata.trigger,
+              preTokens: message.compact_metadata.pre_tokens,
+              postTokens: message.compact_metadata.post_tokens ?? null,
+            });
+          }
+        },
         onResult(result) {
           if (queryCtx.closing) return;
           const verdict = queryCtx.turnResultVerdict;
+          dependencies.observeExecution?.({
+            event: "sdk_result",
+            queryId,
+            subtype: result.subtype,
+            isError: result.is_error,
+            terminalReason: result.terminal_reason ?? null,
+            apiStatus: result.subtype === "success" ? (result.api_error_status ?? null) : null,
+            error: failureDiagnostic(
+              verdict && verdict.type !== "reusable" ? verdict.message : undefined,
+            ),
+            limits: Object.values(result.modelUsage).map((usage) => ({
+              contextWindow: usage.contextWindow,
+              maxOutputTokens: usage.maxOutputTokens,
+            })),
+          });
           // Claude Code can report a dead-query failure as a result instead of a rejection —
           // notably a revoked token, which it answers rather than throws.
           if (verdict?.type === "terminal" && retryDeadQuery(queryCtx, verdict.message, "rebuild"))

@@ -3,7 +3,10 @@ import { describe, it } from "node:test";
 import type { Query, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { Api, AssistantMessageEventStream, Model } from "@earendil-works/pi-ai";
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
-import { createBridgeRuntime as createCoreBridgeRuntime } from "doppelclaude/bridge-runtime";
+import {
+  type BridgeExecutionObservation,
+  createBridgeRuntime as createCoreBridgeRuntime,
+} from "doppelclaude/bridge-runtime";
 import type { CoreResponseEvent } from "doppelclaude/core-response";
 import { Doppel } from "doppelclaude/doppel";
 import { PushQueue } from "doppelclaude/query-state";
@@ -29,6 +32,73 @@ async function collect(stream: AssistantMessageEventStream) {
 }
 
 describe("provider SDK result errors", () => {
+  it("observes compaction and terminal metadata without exposing error contents", async () => {
+    const observations: BridgeExecutionObservation[] = [];
+    const failure = "Compaction failed: context too long. PRIVATE_SENTINEL";
+    const messages = [
+      { type: "system", subtype: "status", status: "compacting" },
+      {
+        type: "system",
+        subtype: "compact_boundary",
+        compact_metadata: { trigger: "auto", pre_tokens: 160000, post_tokens: 120000 },
+      },
+      {
+        type: "system",
+        subtype: "status",
+        status: null,
+        compact_result: "failed",
+        compact_error: failure,
+      },
+      {
+        type: "result",
+        subtype: "error_during_execution",
+        is_error: true,
+        terminal_reason: "prompt_too_long",
+        errors: [failure],
+        modelUsage: {},
+      },
+    ] as unknown as SDKMessage[];
+    const core = createCoreBridgeRuntime({
+      observeExecution: (event) => observations.push(event),
+      queryFactory: () =>
+        ({
+          async *[Symbol.asyncIterator]() {
+            yield* messages;
+          },
+          initializationResult: async () => ({}),
+          interrupt: async () => ({}),
+          close() {},
+        }) as unknown as Query,
+    });
+    try {
+      const events: CoreResponseEvent[] = [];
+      for await (const event of core.turn({
+        model: "claude-opus-5",
+        messages: [{ role: "user", content: "test" }],
+        cwd: process.cwd(),
+      }))
+        events.push(event);
+      assert.ok(events.some((event) => event.type === "terminal_error"));
+      assert.deepEqual(
+        observations.map((event) => event.event),
+        ["query_created", "sdk_status", "sdk_compact_boundary", "sdk_status", "sdk_result"],
+      );
+      const status = observations.find(
+        (event) => event.event === "sdk_status" && event.compactResult === "failed",
+      );
+      assert.ok(status?.event === "sdk_status");
+      assert.deepEqual(status.error?.signals, ["compaction", "compact", "context", "too long"]);
+      assert.equal(status.error?.characters, failure.length);
+      const result = observations.find((event) => event.event === "sdk_result");
+      assert.ok(result?.event === "sdk_result");
+      assert.equal(result.terminalReason, "prompt_too_long");
+      assert.equal(result.error?.fingerprint, status.error?.fingerprint);
+      assert.doesNotMatch(JSON.stringify(observations), /PRIVATE_SENTINEL/);
+    } finally {
+      await core.clear("test complete");
+    }
+  });
+
   it("ends with a pi error event and preserves the SDK message verbatim", async () => {
     const message = "prompt is too long: 213462 tokens > 200000 maximum";
     const sdkQuery = (async function* () {
