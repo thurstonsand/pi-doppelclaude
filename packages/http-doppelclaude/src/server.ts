@@ -102,13 +102,23 @@ const RequestSchema = Type.Object(
       ]),
     ),
     thinking: Type.Optional(
-      Type.Object(
-        {
-          type: Type.Literal("adaptive"),
-          display: Type.Optional(Type.Literal("summarized")),
-        },
-        { additionalProperties: false },
-      ),
+      Type.Union([
+        Type.Object(
+          {
+            type: Type.Literal("adaptive"),
+            display: Type.Optional(Type.Literal("summarized")),
+          },
+          { additionalProperties: false },
+        ),
+        Type.Object(
+          {
+            type: Type.Literal("enabled"),
+            budget_tokens: Type.Integer({ minimum: 1024 }),
+            display: Type.Optional(Type.Literal("summarized")),
+          },
+          { additionalProperties: false },
+        ),
+      ]),
     ),
     output_config: Type.Optional(
       Type.Object(
@@ -790,7 +800,12 @@ export function createHttpServer(options: HttpServerOptions): Server {
         options: {
           tools: [],
           settingSources: [],
-          thinking: body.thinking ? { type: "adaptive" } : undefined,
+          thinking:
+            body.thinking?.type === "enabled"
+              ? { type: "enabled", budgetTokens: body.thinking.budget_tokens }
+              : body.thinking
+                ? { type: "adaptive" }
+                : undefined,
           extraArgs: body.thinking?.display
             ? { "thinking-display": body.thinking.display }
             : undefined,

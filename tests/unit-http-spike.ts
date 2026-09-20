@@ -258,6 +258,35 @@ describe("native HTTP frontend", () => {
     }
   });
 
+  it("forwards enabled thinking budgets exactly and rejects invalid budgets", async () => {
+    const app = await harness();
+    try {
+      const response = await app.post({
+        ...body(A),
+        max_tokens: 2049,
+        thinking: { type: "enabled", budget_tokens: 8193, display: "summarized" },
+      });
+      assert.equal(response.status, 200);
+      await response.text();
+      const request = app.requests.get(A)?.[0];
+      assert.ok(request);
+      assert.deepEqual(request.options?.thinking, { type: "enabled", budgetTokens: 8193 });
+      assert.deepEqual(request.options?.extraArgs, { "thinking-display": "summarized" });
+
+      for (const thinking of [
+        { type: "enabled" },
+        { type: "enabled", budget_tokens: 2048.5 },
+        { type: "enabled", budget_tokens: 1023 },
+      ]) {
+        const invalid = await app.post({ ...body(B), thinking });
+        assert.equal(invalid.status, 400);
+        assert.match(await invalid.text(), /schema validation failed at \/thinking/);
+      }
+    } finally {
+      await app.close();
+    }
+  });
+
   it("sends native requests, parameters, schemas, maps, and raw SSE", async () => {
     const app = await harness();
     try {
