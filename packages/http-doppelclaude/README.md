@@ -44,6 +44,16 @@ History edits, shortened histories, and changed spawn settings rebuild within th
 
 SSE headers flush immediately and comment heartbeats run every 15 seconds. Disconnects and request deadlines abort the query. Only structured upstream 429/529 failures retry, at most the configured count, before any assistant output. Refusals, ordinary errors, and failures after output are never replayed. SIGINT/SIGTERM stop admission, abort active work, and bound cleanup by the shutdown deadline; allow at least 20 seconds in the service supervisor for the default configuration.
 
+## Request diagnostics
+
+Normal stderr includes JSON `request_complete` records for authenticated Messages requests admitted to validation. `requestId`, `runtimeId`, `threadId`, timestamps, and duration correlate requests with the retained runtime. `requestedModel` is the validated model name without its provider prefix; `resolvedModel` is the concrete request model; `servedModel` is the SDK-observed model, or `null` when unavailable. Configuration and canonical-history fingerprints expose changes without logging their contents.
+
+HTTP `sync` is `first`, `compatible`, or `rebuild`. It is a history/settings decision, not proof of a warm query or a provider cache hit. `reason`, `historyDiverged`, `signatureChanged`, and `forcedRebuild` explain it. `executions` records `query_created` (an SDK query object, not a PID), `query_reused` (input pushed into the same query ID), or `tool_result_continuation` (results accepted for that query). Creation includes the core sync path and reason category. A compatible HTTP request can still create a new query. Runtime expiry, eviction, and shutdown emit `runtime_close` records.
+
+Successful records include per-response SDK `usage`: `input`, `cache_read`, `cache_creation`, and `output`. Unreported metrics are `null`; reported zeroes remain `0`. These are response metrics, not aggregate command totals or a subscription-quota estimate. A rebuild can still read provider cache. Failures include the stage, safe error category, retryable status, and actual HTTP status (which can be 200 for an SSE error). Marker validation failures include the count, including zero or multiple markers. Logs omit prompts, history, tool arguments, credentials, and raw error text.
+
+To investigate displacement, run two main turns, one Oracle call, then another main turn in the same Amp thread. Correlate the invocation times with `threadId`, models, configuration fingerprints, query IDs, and cache reads/creation. A main → Oracle → main configuration sequence with new query IDs exposes replacement; cache metrics separately show the observed cache cost. Do not infer the caller's role from its model alone.
+
 ## Container image
 
 The repository builds and publishes the daemon-only Linux/amd64 image

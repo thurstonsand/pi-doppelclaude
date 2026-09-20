@@ -36,6 +36,8 @@ export interface CoreResponseRecord {
   readonly id: string;
   readonly requestedModel: string;
   message: Message;
+  observedUsage?: Partial<Usage>;
+  observedModel?: string;
   lifecycle: "open" | "closed" | "failed";
   error: { reason: "aborted" | "error"; message: string } | null;
   rawStopReason?: string;
@@ -103,9 +105,13 @@ export interface CoreResponseHandle {
   pendingStart?: RawMessageStreamEvent;
 }
 
-export function applySdkUsage(message: Message, usage: Partial<Usage> | null | undefined): void {
+export function applySdkUsage(
+  response: CoreResponseRecord,
+  usage: Partial<Usage> | null | undefined,
+): void {
   if (!usage) return;
-  const target = message.usage as Usage & Record<string, unknown>;
+  response.observedUsage = { ...response.observedUsage, ...structuredClone(usage) };
+  const target = response.message.usage as Usage & Record<string, unknown>;
   for (const [key, value] of Object.entries(usage)) {
     if (typeof value === "number") target[key] = value;
     else if (value !== undefined && value !== null) target[key] = value;

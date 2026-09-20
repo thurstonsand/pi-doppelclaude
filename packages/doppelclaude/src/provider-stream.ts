@@ -193,6 +193,7 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
     if (!advertised || !c.turnOutput) return;
     const served = canonicalClaudeModelId(advertised);
     c.turnOutput.message.model = served;
+    c.turnOutput.observedModel = served;
     if (served === requested) return;
     observeServedModel?.(served);
     c.servedModelAnnouncement = { requested, served };
@@ -277,7 +278,7 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
     const output = c.turnOutput.message;
     if (event.type === "message_start") {
       noteServedModel(event.message.model, requestedModel, c);
-      applySdkUsage(output, event.message.usage);
+      applySdkUsage(c.turnOutput, event.message.usage);
       c.currentResponse.pendingStart = {
         ...structuredClone(event),
         message: structuredClone(output),
@@ -357,7 +358,7 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
           };
           break;
       }
-      applySdkUsage(output, event.usage);
+      applySdkUsage(c.turnOutput, event.usage);
       c.terminalMessageDelta = structuredClone(event);
       return;
     }
@@ -442,7 +443,7 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
         );
       pushNativeEvent({ type: "content_block_stop", index }, c);
     }
-    if (message.message.usage) applySdkUsage(c.turnOutput.message, message.message.usage);
+    if (message.message.usage) applySdkUsage(c.turnOutput, message.message.usage);
     if (c.turnSawToolCall) {
       c.turnOutput.message.stop_reason = "tool_use";
       closeResponse(c);

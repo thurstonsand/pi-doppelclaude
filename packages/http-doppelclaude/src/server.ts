@@ -1,3 +1,4 @@
+import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { isIP } from "node:net";
@@ -6,7 +7,11 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { type ModelInfo, query } from "@anthropic-ai/claude-agent-sdk";
 import type { MessageParam, Tool } from "@anthropic-ai/sdk/resources/messages/messages";
-import { type BridgeRuntimeDependencies, createBridgeRuntime } from "doppelclaude/bridge-runtime";
+import {
+  type BridgeExecutionObservation,
+  type BridgeRuntimeDependencies,
+  createBridgeRuntime,
+} from "doppelclaude/bridge-runtime";
 import type { CoreResponseEvent, CoreResponseRecord } from "doppelclaude/core-response";
 import { canonicalClaudeModelId } from "doppelclaude/model-id";
 import type { RuntimeRequest } from "doppelclaude/runtime-request";
@@ -140,11 +145,16 @@ type ApiRequest = Static<typeof RequestSchema>;
 type Runtime = ReturnType<typeof createBridgeRuntime>;
 interface ThreadState {
   runtime: Runtime;
+  runtimeId: string;
+  observationState: {
+    observations: BridgeExecutionObservation[] | null;
+  };
   busy: boolean;
   calls: Map<string, CallRecord>;
   pendingTool: boolean;
   expectedHistory: MessageParam[];
   requestSignature?: string;
+  configurationFingerprint?: string;
   forceRebuild: boolean;
   lastActivity: number;
 }
@@ -169,6 +179,7 @@ export interface HttpServerOptions {
   toolDescriptionCap?: number | false;
   queryFactory?: BridgeRuntimeDependencies["queryFactory"];
   createRuntime?: (threadId: string) => Runtime;
+  log?: (record: Record<string, unknown>) => void;
 }
 
 export interface HttpEnvironmentConfig {
@@ -265,6 +276,7 @@ class RequestError extends Error {
   constructor(
     message: string,
     readonly status = 400,
+    readonly markerCount: number | null = null,
   ) {
     super(message);
   }
@@ -284,12 +296,25 @@ function errorResponse(response: ServerResponse, status: number, message: string
     JSON.stringify({ type: "error", error: { type: "invalid_request_error", message } }),
   );
 }
-function extractThread(system: ApiRequest["system"]): { threadId: string; prompt: string } {
+function extractThread(system: ApiRequest["system"]): {
+  threadId: string;
+  prompt: string;
+  markerCount: number;
+} {
   const texts = typeof system === "string" ? [system] : (system ?? []).map((block) => block.text);
   const matches = texts.flatMap((text) => [...text.matchAll(THREAD_LINE)].map((match) => match[1]));
-  if (matches.length !== 1)
-    throw new RequestError("system must contain exactly one Amp Thread URL line");
-  return { threadId: matches[0], prompt: texts.join("\n") };
+  if (matches.length !== 1) {
+    throw new RequestError(
+      "system must contain exactly one Amp Thread URL line",
+      400,
+      matches.length,
+    );
+  }
+  return { threadId: matches[0], prompt: texts.join("\n"), markerCount: matches.length };
+}
+
+function fingerprint(value: string): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, 16);
 }
 function stripBlockCaches(messages: ApiRequest["messages"]): MessageParam[] {
   const copy = structuredClone(messages) as Array<Record<string, unknown>>;
@@ -523,6 +548,9 @@ export function createHttpServer(options: HttpServerOptions): Server {
   const pending = new Set<string>();
   const aborts = new Set<AbortController>();
   const now = options.now ?? Date.now;
+  const log =
+    options.log ??
+    ((record: Record<string, unknown>) => process.stderr.write(`${JSON.stringify(record)}\n`));
   let shuttingDown = false;
   let shutdown: Promise<Error | undefined> | undefined;
   let registryTail = Promise.resolve();
@@ -540,9 +568,22 @@ export function createHttpServer(options: HttpServerOptions): Server {
     }
   };
   const beginClose = (key: string, state: ThreadState, reason: string): Promise<void> => {
+    log({
+      event: "runtime_close",
+      timestamp: new Date().toISOString(),
+      threadId: key,
+      runtimeId: state.runtimeId,
+      reason,
+    });
     const promise = Promise.resolve(state.runtime.clear(reason))
-      .catch((error) => {
-        process.stderr.write(`[http-doppelclaude] runtime close failed: ${String(error)}\n`);
+      .catch(() => {
+        log({
+          event: "runtime_close_failed",
+          timestamp: new Date().toISOString(),
+          threadId: key,
+          runtimeId: state.runtimeId,
+          reason,
+        });
       })
       .then(() => {
         if (closing.get(key) === promise) closing.delete(key);
@@ -551,11 +592,21 @@ export function createHttpServer(options: HttpServerOptions): Server {
     return promise;
   };
   const makeRuntime = (threadId: string) => {
+    const observationState = {
+      observations: null as BridgeExecutionObservation[] | null,
+    };
     const runtime =
       options.createRuntime?.(threadId) ??
-      createBridgeRuntime({ queryFactory: options.queryFactory ?? query });
+      createBridgeRuntime({
+        queryFactory: options.queryFactory ?? query,
+        observeExecution: (observation) => observationState.observations?.push(observation),
+      });
     void runtime.designateHost(threadId);
-    return runtime;
+    return {
+      runtime,
+      runtimeId: randomUUID(),
+      observationState,
+    };
   };
   const waitForClose = async (promise: Promise<void>): Promise<void> => {
     let timer: NodeJS.Timeout | undefined;
@@ -575,6 +626,12 @@ export function createHttpServer(options: HttpServerOptions): Server {
     }
   };
   const server = createServer(async (request, response) => {
+    const requestId = randomUUID();
+    const startedAt = now();
+    let markerCount: number | null = null;
+    let safeThreadId: string | null = null;
+    const diagnostic: Record<string, unknown> = {};
+    let stage = "validation";
     const auth = request.headers.authorization;
     const bearer = auth?.startsWith("Bearer ") ? auth.slice(7) : undefined;
     const supplied =
@@ -629,8 +686,14 @@ export function createHttpServer(options: HttpServerOptions): Server {
       const model = requestModelId(body.model, modelAliases);
       if (!model)
         throw new RequestError("model must be a stable Claude model ID or <provider>/<model>");
-      const { threadId, prompt } = extractThread(body.system);
+      diagnostic.requestedModel = body.model.split("/").at(-1);
+      diagnostic.resolvedModel = model;
+      const extracted = extractThread(body.system);
+      const { threadId, prompt } = extracted;
+      markerCount = extracted.markerCount;
+      safeThreadId = threadId;
       reservationKey = threadId;
+      stage = "acquire_runtime";
       // Validate history references before reserving scarce process capacity. Tool names are mapped
       // again below once request tools have been prepared.
       normalizeMessages(body.messages, new Map(), new Map());
@@ -665,7 +728,7 @@ export function createHttpServer(options: HttpServerOptions): Server {
         if (eviction) return undefined;
         try {
           const created: ThreadState = {
-            runtime: makeRuntime(threadId),
+            ...makeRuntime(threadId),
             busy: true,
             calls: new Map(),
             pendingTool: false,
@@ -695,7 +758,7 @@ export function createHttpServer(options: HttpServerOptions): Server {
             )
               throw new RequestError("runtime capacity reached", 503);
             const created: ThreadState = {
-              runtime: makeRuntime(threadId),
+              ...makeRuntime(threadId),
               busy: true,
               calls: new Map(),
               pendingTool: false,
@@ -713,6 +776,8 @@ export function createHttpServer(options: HttpServerOptions): Server {
       }
       if (!state) throw new RequestError("runtime capacity reached", 503);
       locked = true;
+      state.observationState.observations = [];
+      stage = "prepare_request";
       const toolNameToSdk = new Map<string, string>();
       const toolNameToClient = new Map<string, string>();
       const rawTools =
@@ -736,17 +801,42 @@ export function createHttpServer(options: HttpServerOptions): Server {
         thinking: body.thinking,
         maxTokens: body.max_tokens,
       });
+      const configurationFingerprint = fingerprint(`${model}\n${signature}`);
+      const previousConfigurationFingerprint = state.configurationFingerprint ?? null;
       const expectedPrior = body.messages.slice(0, -1) as MessageParam[];
       const historyDiverged =
         canonicalHistory(expectedPrior) !== canonicalHistory(state.expectedHistory);
       const signatureChanged =
         state.requestSignature !== undefined && state.requestSignature !== signature;
       const rebuild = state.forceRebuild || historyDiverged || signatureChanged;
+      const forcedRebuild = state.forceRebuild;
+      const firstRequest = state.requestSignature === undefined;
+      const rebuildReason = forcedRebuild
+        ? "previous_request_failed"
+        : signatureChanged
+          ? "configuration_changed"
+          : historyDiverged
+            ? firstRequest
+              ? "new_context"
+              : "history_diverged"
+            : firstRequest
+              ? "first_request"
+              : "compatible";
       const normalized = normalizeMessages(
         body.messages,
         rebuild ? new Map() : state.calls,
         toolNameToSdk,
       );
+      Object.assign(diagnostic, {
+        configurationFingerprint,
+        previousConfigurationFingerprint,
+        historyFingerprint: fingerprint(canonicalHistory(normalized.messages)),
+        historyDiverged,
+        signatureChanged,
+        forcedRebuild,
+        sync: firstRequest ? "first" : rebuild ? "rebuild" : "compatible",
+        reason: rebuildReason,
+      });
       if (rebuild) {
         await state.runtime.markRebuild(
           state.forceRebuild
@@ -827,6 +917,9 @@ export function createHttpServer(options: HttpServerOptions): Server {
         (message) => message.role === "assistant",
       ).length;
       state.calls = normalized.calls;
+      stage = "execution";
+      diagnostic.coldReplay = coldReplay;
+      diagnostic.retries = 0;
       let final: CoreResponseRecord;
       try {
         const attempts = options.retryAttempts ?? 2;
@@ -853,6 +946,7 @@ export function createHttpServer(options: HttpServerOptions): Server {
             )
               throw error;
             attempt++;
+            diagnostic.retries = attempt;
             abort.signal.throwIfAborted();
             await state.runtime.markRebuild(`HTTP transient ${retryable} retry`);
             abort.signal.throwIfAborted();
@@ -870,7 +964,7 @@ export function createHttpServer(options: HttpServerOptions): Server {
       }
       if (disconnected || response.destroyed) {
         state.forceRebuild = true;
-        return;
+        throw new Error("client disconnected");
       }
       state.pendingTool = final.message.stop_reason === "tool_use";
       state.expectedHistory = [
@@ -878,12 +972,35 @@ export function createHttpServer(options: HttpServerOptions): Server {
         { role: "assistant", content: structuredClone(final.message.content) },
       ];
       state.requestSignature = signature;
+      state.configurationFingerprint = configurationFingerprint;
       state.lastActivity = now();
-      process.stderr.write(
-        `[http-doppelclaude] thread=${threadId} sync=${rebuild ? "rebuild" : "reuse"} input=${final.message.usage.input_tokens} cache_read=${final.message.usage.cache_read_input_tokens ?? 0} output=${final.message.usage.output_tokens}\n`,
-      );
+      const observedUsage = final.observedUsage;
+      log({
+        ...diagnostic,
+        event: "request_complete",
+        timestamp: new Date().toISOString(),
+        durationMs: now() - startedAt,
+        requestId,
+        runtimeId: state.runtimeId,
+        threadId,
+        markerCount,
+        commandId: final.commandId,
+        servedModel:
+          final.observedModel && STABLE_CLAUDE_MODEL.test(final.observedModel)
+            ? final.observedModel
+            : null,
+        executions: state.observationState.observations,
+        usage: {
+          input: observedUsage?.input_tokens ?? null,
+          cache_read: observedUsage?.cache_read_input_tokens ?? null,
+          cache_creation: observedUsage?.cache_creation_input_tokens ?? null,
+          output: observedUsage?.output_tokens ?? null,
+        },
+        outcome: "success",
+      });
       response.end();
     } catch (error) {
+      if (markerCount === null && error instanceof RequestError) markerCount = error.markerCount;
       if (ownsReservation && reservationKey) pending.delete(reservationKey);
       if (state && locked && !(error instanceof RequestError)) state.forceRebuild = true;
       const detail = (error instanceof Error ? error.message : String(error))
@@ -909,11 +1026,36 @@ export function createHttpServer(options: HttpServerOptions): Server {
           // The client disconnected while the error event was under backpressure.
         }
       }
+      log({
+        ...diagnostic,
+        event: "request_complete",
+        timestamp: new Date().toISOString(),
+        durationMs: now() - startedAt,
+        requestId,
+        runtimeId: state?.runtimeId ?? null,
+        threadId: safeThreadId,
+        markerCount,
+        stage,
+        executions: locked ? state?.observationState.observations : null,
+        outcome: disconnected ? "disconnect" : "error",
+        httpStatus: response.headersSent ? response.statusCode : null,
+        errorCategory: disconnected
+          ? "client_disconnect"
+          : abort?.signal.aborted
+            ? "aborted"
+            : error instanceof RequestError
+              ? "invalid_request"
+              : error instanceof StreamError
+                ? "sdk_stream"
+                : "bridge_failure",
+        retryableStatus: error instanceof StreamError ? (error.retryableStatus ?? null) : null,
+      });
     } finally {
       if (abort) aborts.delete(abort);
       request.off("aborted", markDisconnected);
       response.off("close", responseClosed);
       if (state && locked) {
+        state.observationState.observations = null;
         state.busy = false;
         if (!shuttingDown) state.lastActivity = now();
       }

@@ -58,7 +58,18 @@ export interface BridgeRuntimeDependencies {
   refusal?(customType: string, data: RefusalEntryData): void;
   observeServedModel?(id: string): void | Promise<void>;
   observeCommandUsage?(observation: CommandUsageObservation): void;
+  observeExecution?(observation: BridgeExecutionObservation): void;
 }
+
+export type BridgeExecutionObservation =
+  | {
+      event: "query_created";
+      queryId: string;
+      syncPath: SyncPlan["path"];
+      syncReason: SyncPlan["reason"]["kind"];
+    }
+  | { event: "query_reused"; queryId: string | null }
+  | { event: "tool_result_continuation"; queryId: string | null; resultCount: number };
 
 /** The spawn-shaped half of a turn: what a fresh subprocess is given, derived from the
  *  request alone, plus the MCP server bound to the context that will run it. */
@@ -104,6 +115,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies = {}
   const doppels = createDoppelRegistry();
   const sessionStore = dependencies.sessionStore ?? new BridgeSessionStore(debug);
   const activeQueryContexts = new Set<QueryContext>();
+  const queryIds = new WeakMap<Query, string>();
 
   const {
     claimCurrentResponse,
@@ -608,6 +620,14 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies = {}
         prompt: inputQueue,
         options: queryOptions,
       });
+      const queryId = randomUUID();
+      queryIds.set(sdkQuery, queryId);
+      dependencies.observeExecution?.({
+        event: "query_created",
+        queryId,
+        syncPath: syncPlan.path,
+        syncReason: syncPlan.reason.kind,
+      });
       queryCtx.activeQuery = sdkQuery;
       activeQueryContexts.add(queryCtx);
       attachAbort();
@@ -977,6 +997,11 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies = {}
         return stream;
       }
       if (resultCtx.doppel.session) resultCtx.doppel.session.cursor = nativeCursor;
+      dependencies.observeExecution?.({
+        event: "tool_result_continuation",
+        queryId: resultCtx.activeQuery ? (queryIds.get(resultCtx.activeQuery) ?? null) : null,
+        resultCount: allResults.length,
+      });
       return stream;
     }
 
@@ -1103,6 +1128,10 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies = {}
               queryCtx.cliModel = freshTurn.cliModel;
             }
             inputQueue.push(promptMessage);
+            dependencies.observeExecution?.({
+              event: "query_reused",
+              queryId: queryIds.get(activeQuery) ?? null,
+            });
             debug(
               `Case 3: pushed turn into persistent session ${doppel.session?.sessionId.slice(0, 8) ?? "unknown"} (doppel=${doppel.label})`,
             );

@@ -75,6 +75,8 @@ async function* native(
       id: "r",
       requestedModel: value.model,
       message: value,
+      observedUsage: value.usage,
+      observedModel: value.model,
       lifecycle: "closed",
       error: null,
     },
@@ -132,9 +134,11 @@ function body(thread: string, messages: unknown[] = [{ role: "user", content: "g
 async function harness(supportedModels: readonly ModelInfo[] = []) {
   const requests = new Map<string, RuntimeRequest[]>();
   const rebuilds = new Map<string, string[]>();
+  const logs: Array<Record<string, unknown>> = [];
   const server = createHttpServer({
     apiKey: KEY,
     supportedModels,
+    log: (record) => logs.push(record),
     createRuntime(id) {
       const seen: RuntimeRequest[] = [];
       const marked: string[] = [];
@@ -151,6 +155,7 @@ async function harness(supportedModels: readonly ModelInfo[] = []) {
   return {
     requests,
     rebuilds,
+    logs,
     post: (value: unknown, key = KEY) =>
       fetch(`${url}/v1/messages`, {
         method: "POST",
@@ -225,6 +230,11 @@ describe("native HTTP frontend", () => {
         ).status,
         400,
       );
+      assert.deepEqual(
+        app.logs.map((record) => record.markerCount),
+        [0, 0, 2],
+      );
+      assert.ok(app.logs.every((record) => record.outcome === "error"));
     } finally {
       await app.close();
     }
@@ -760,9 +770,11 @@ describe("native HTTP frontend", () => {
   });
 
   it("does not emit a successful terminal stop after a native stream error", async () => {
+    const logs: Array<Record<string, unknown>> = [];
     const server = createHttpServer({
       apiKey: KEY,
       supportedModels: [],
+      log: (record) => logs.push(record),
       createRuntime: () =>
         ({
           ...fakeRuntime([]),
@@ -803,6 +815,12 @@ describe("native HTTP frontend", () => {
       assert.match(text, /event: error/);
       assert.match(text, /native boom/);
       assert.doesNotMatch(text, /event: message_stop/);
+      assert.equal(logs.length, 1);
+      assert.equal(logs[0].outcome, "error");
+      assert.equal(logs[0].stage, "execution");
+      assert.equal(logs[0].httpStatus, 200);
+      assert.equal(logs[0].errorCategory, "sdk_stream");
+      assert.doesNotMatch(JSON.stringify(logs), /native boom|test-key/);
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
@@ -840,11 +858,174 @@ describe("native HTTP frontend", () => {
     }
   });
 
+  it("logs warm reuse and main/Oracle/main displacement without conflating cache reads", async () => {
+    const logs: Array<Record<string, unknown>> = [];
+    let spawns = 0;
+    const server = createHttpServer({
+      apiKey: KEY,
+      supportedModels: [
+        { value: "opus", resolvedModel: "claude-opus-5", displayName: "Opus", description: "" },
+      ],
+      log: (record) => logs.push(record),
+      queryFactory: ({ prompt, options }) => {
+        spawns++;
+        return {
+          async *[Symbol.asyncIterator]() {
+            for await (const _ of prompt) {
+              yield* [
+                { type: "system", subtype: "init", session_id: options?.resume ?? "cc-test" },
+                {
+                  type: "stream_event",
+                  event: {
+                    type: "message_start",
+                    message: {
+                      model: options?.model,
+                      usage: {
+                        input_tokens: 2,
+                        cache_read_input_tokens: 17000,
+                        cache_creation_input_tokens: 0,
+                      },
+                    },
+                  },
+                },
+                {
+                  type: "stream_event",
+                  event: {
+                    type: "content_block_start",
+                    index: 0,
+                    content_block: { type: "text", text: "" },
+                  },
+                },
+                {
+                  type: "stream_event",
+                  event: {
+                    type: "content_block_delta",
+                    index: 0,
+                    delta: { type: "text_delta", text: "ok" },
+                  },
+                },
+                { type: "stream_event", event: { type: "content_block_stop", index: 0 } },
+                {
+                  type: "stream_event",
+                  event: {
+                    type: "message_delta",
+                    delta: { stop_reason: "end_turn" },
+                    usage: { output_tokens: 9 },
+                  },
+                },
+                { type: "stream_event", event: { type: "message_stop" } },
+                {
+                  type: "result",
+                  subtype: "success",
+                  result: "ok",
+                  is_error: false,
+                  modelUsage: {},
+                },
+              ] as unknown as SDKMessage[];
+            }
+          },
+          initializationResult: async () => ({}),
+          setMcpServers: async () => ({
+            added: [] as string[],
+            removed: [] as string[],
+            errors: {},
+          }),
+          setModel: async () => {},
+          interrupt: async () => ({}),
+          close: () => {},
+        } as unknown as Query;
+      },
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    const main = { ...body(A), model: "doppelclaude/opus" };
+    const history = [
+      ...main.messages,
+      { role: "assistant", content: [{ type: "text", text: "ok" }] },
+      { role: "user", content: "private-main-followup" },
+    ];
+    try {
+      for (const request of [
+        main,
+        { ...main, messages: history },
+        {
+          ...main,
+          model: "claude-fable-5-1",
+          system: `${main.system}\nprivate-oracle-instructions`,
+          messages: [{ role: "user", content: "private-oracle-question" }],
+        },
+        {
+          ...main,
+          messages: [
+            ...history,
+            { role: "assistant", content: [{ type: "text", text: "ok" }] },
+            { role: "user", content: "private-return" },
+          ],
+        },
+      ]) {
+        const response: Response = await fetch(`http://127.0.0.1:${address.port}/v1/messages`, {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-api-key": KEY },
+          body: JSON.stringify(request),
+        });
+        assert.equal(response.status, 200);
+        assert.match(await response.text(), /ok/);
+      }
+      const completed = logs.filter((record) => record.event === "request_complete");
+      assert.equal(completed.length, 4);
+      assert.equal(spawns, 3);
+      assert.deepEqual(
+        completed.map((record) => record.reason),
+        ["first_request", "compatible", "configuration_changed", "configuration_changed"],
+      );
+      assert.equal(new Set(completed.map((record) => record.runtimeId)).size, 1);
+      assert.equal(new Set(completed.map((record) => record.requestId)).size, 4);
+      const executions = completed.map(
+        (record) => record.executions as Array<{ event: string; queryId: string }>,
+      );
+      assert.deepEqual(
+        executions.map((events) => events.map((event) => event.event)),
+        [["query_created"], ["query_reused"], ["query_created"], ["query_created"]],
+      );
+      assert.equal(executions[0][0].queryId, executions[1][0].queryId);
+      assert.notEqual(executions[1][0].queryId, executions[2][0].queryId);
+      assert.notEqual(executions[2][0].queryId, executions[3][0].queryId);
+      assert.equal(completed[0].configurationFingerprint, completed[3].configurationFingerprint);
+      assert.equal(
+        completed[3].previousConfigurationFingerprint,
+        completed[2].configurationFingerprint,
+      );
+      assert.equal(completed[0].requestedModel, "opus");
+      assert.equal(completed[0].resolvedModel, "claude-opus-5");
+      assert.equal(completed[2].servedModel, "claude-fable-5-1");
+      for (const record of completed) {
+        assert.deepEqual(record.usage, {
+          input: 2,
+          cache_read: 17000,
+          cache_creation: 0,
+          output: 9,
+        });
+      }
+      assert.doesNotMatch(JSON.stringify(logs), /private-|test-key|\bgo\b/);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+    assert.ok(
+      logs.some(
+        (record) => record.event === "runtime_close" && record.reason === "HTTP server shutdown",
+      ),
+    );
+  });
+
   it("passes normalized models through the real core and switches a warm thread", async () => {
     const sdkModels: Array<string | undefined> = [];
+    const logs: Array<Record<string, unknown>> = [];
     const server = createHttpServer({
       apiKey: KEY,
       supportedModels: [],
+      log: (record) => logs.push(record),
       queryFactory: ({ options }) => {
         sdkModels.push(options?.model);
         const stream = [
@@ -921,6 +1102,20 @@ describe("native HTTP frontend", () => {
       });
       assert.match(await second.text(), /replayed/);
       assert.deepEqual(sdkModels, ["claude-haiku-4-5-20251001", "claude-opus-5"]);
+      const completed = logs.filter((record) => record.event === "request_complete");
+      assert.equal(completed[0]?.sync, "first");
+      assert.equal(completed[0]?.reason, "first_request");
+      assert.equal(completed[1]?.reason, "compatible");
+      assert.notEqual(
+        completed[0]?.configurationFingerprint,
+        completed[1]?.configurationFingerprint,
+      );
+      const firstUsage = completed[0]?.usage as Record<string, unknown> | undefined;
+      assert.equal(firstUsage?.cache_read, null);
+      assert.equal(firstUsage?.cache_creation, null);
+      assert.equal(completed[0]?.servedModel, null);
+      assert.match(JSON.stringify(completed), /query_created/);
+      assert.doesNotMatch(JSON.stringify(completed), /\bgo\b|test-key/);
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
