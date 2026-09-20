@@ -14,6 +14,12 @@ run=(
 "${run[@]}" "$image" --version | grep -E '^http-doppelclaude [0-9]+\.[0-9]+\.[0-9]+$' >/dev/null
 "${run[@]}" --entrypoint sh "$image" -c \
   'test ! -e node_modules/@earendil-works && test ! -e node_modules/pi-doppelclaude'
+"${run[@]}" --entrypoint node "$image" --input-type=module --eval '
+  import sharp from "sharp";
+  const image = await sharp({ create: { width: 2, height: 1, channels: 4, background: "red" } }).webp().toBuffer();
+  const metadata = await sharp(image).metadata();
+  if (metadata.format !== "webp" || metadata.width !== 2 || metadata.height !== 1) throw new Error("image codec unavailable");
+'
 
 output=$(mktemp)
 suffix="$$-$RANDOM"

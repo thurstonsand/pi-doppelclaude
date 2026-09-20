@@ -17,6 +17,7 @@ import { canonicalClaudeModelId } from "doppelclaude/model-id";
 import type { RuntimeRequest } from "doppelclaude/runtime-request";
 import { sdkChildEnv } from "doppelclaude/sdk-child-env";
 import { prepareToolDescriptions } from "doppelclaude/tool-description-relocation";
+import sharp from "sharp";
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
 
@@ -317,6 +318,38 @@ function extractThread(system: ApiRequest["system"]): {
 function fingerprint(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, 16);
 }
+
+async function prepareImages(messages: ApiRequest["messages"]): Promise<number> {
+  // Claude Code checks encoded length, not the decoded-byte limit used by clients.
+  const maxBase64Size = 5 * 1024 * 1024;
+  let resized = 0;
+  for (const message of messages) {
+    if (!Array.isArray(message.content)) continue;
+    const blocks = message.content.flatMap((block) =>
+      block.type === "tool_result" && Array.isArray(block.content) ? block.content : [block],
+    );
+    for (const block of blocks) {
+      if (block.type !== "image" || block.source.data.length <= maxBase64Size) continue;
+      const input = Buffer.from(block.source.data, "base64");
+      for (let dimension = 2000; dimension >= 1; dimension = Math.floor(dimension / 2)) {
+        const output = await sharp(input)
+          .rotate()
+          .resize(dimension, dimension, { fit: "inside", withoutEnlargement: true })
+          .webp({ quality: 90 })
+          .toBuffer();
+        const data = output.toString("base64");
+        if (data.length > maxBase64Size) continue;
+        block.source = { type: "base64", media_type: "image/webp", data };
+        resized++;
+        break;
+      }
+      if (block.source.data.length > maxBase64Size)
+        throw new RequestError("image could not be resized to Claude Code's base64 size limit");
+    }
+  }
+  return resized;
+}
+
 function stripBlockCaches(messages: ApiRequest["messages"]): MessageParam[] {
   const copy = structuredClone(messages) as Array<Record<string, unknown>>;
   for (const message of copy) {
@@ -779,6 +812,7 @@ export function createHttpServer(options: HttpServerOptions): Server {
       locked = true;
       state.observationState.observations = [];
       stage = "prepare_request";
+      diagnostic.resizedImages = await prepareImages(body.messages);
       const toolNameToSdk = new Map<string, string>();
       const toolNameToClient = new Map<string, string>();
       const rawTools =

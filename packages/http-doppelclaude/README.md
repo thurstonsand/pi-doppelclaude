@@ -18,7 +18,7 @@ Resource controls are `DOPPELCLAUDE_MAX_RUNTIMES` (32), `DOPPELCLAUDE_IDLE_TTL_M
 `DOPPELCLAUDE_MAX_BODY_BYTES` (32000000, 32 MB), `DOPPELCLAUDE_REQUEST_TIMEOUT_MS` (600000),
 `DOPPELCLAUDE_SHUTDOWN_TIMEOUT_MS` (15000), and `DOPPELCLAUDE_RETRY_ATTEMPTS` (2).
 
-The body limit covers the entire JSON request, including base64 images and conversation history. Requests above it return 413 before invoking Claude Code. Model-specific image size and dimension limits still apply.
+The body limit covers the entire JSON request, including base64 images and conversation history. Requests above it return 413 before invoking Claude Code. Claude Code also limits each image to 5 MiB of base64, not decoded bytes. Oversized attachments and tool-result images are re-encoded as WebP at quality 90, fitting within 2000 × 2000 pixels without enlargement, then reduced further only if necessary to meet that encoded-size limit. Smaller images pass through unchanged. This transforms the bridge's request copy, not the client's original attachment or history. Model-specific limits still apply.
 
 Clients call `GET /v1/models` or streaming-only `POST /v1/messages`, authenticating with either
 `x-api-key` or `Authorization: Bearer …`. A conversation is keyed by the single Amp Thread URL in
@@ -56,7 +56,7 @@ HTTP `sync` is `first`, `compatible`, or `rebuild`. It is a history/settings dec
 
 Successful records include per-response SDK `usage`: `input`, `cache_read`, `cache_creation`, and `output`. Unreported metrics are `null`; reported zeroes remain `0`. These are response metrics, not aggregate command totals or a subscription-quota estimate. A rebuild can still read provider cache. Failures include the stage, safe error category, retryable status, and actual HTTP status (which can be 200 for an SSE error). Marker validation failures include the count, including zero or multiple markers. Logs omit prompts, history, tool arguments, credentials, and raw error text.
 
-SDK `sdk_status`, `sdk_compact_boundary`, and `sdk_result` execution observations distinguish compaction attempts, completed boundaries, terminal reasons, API status, and advertised context/output limits. Failure text is represented only by a hash, character count, and fixed diagnostic keywords; keyword matches are clues, not error classifications. Request records also include message counts, prompt/tool/history character counts, and requested output/thinking budgets. History character counts include encoded image data and are not token estimates.
+SDK `sdk_status`, `sdk_compact_boundary`, and `sdk_result` execution observations distinguish compaction attempts, completed boundaries, terminal reasons, API status, and advertised context/output limits. Failure text is represented only by a hash, character count, and fixed diagnostic keywords; keyword matches are clues, not error classifications. Request records also include message counts, prompt/tool/history character counts, requested output/thinking budgets, and `resizedImages`. History character counts describe the prepared request, include encoded image data, and are not token estimates.
 
 To investigate displacement, run two main turns, one Oracle call, then another main turn in the same Amp thread. Correlate the invocation times with `threadId`, models, configuration fingerprints, query IDs, and cache reads/creation. A main → Oracle → main configuration sequence with new query IDs exposes replacement; cache metrics separately show the observed cache cost. Do not infer the caller's role from its model alone.
 

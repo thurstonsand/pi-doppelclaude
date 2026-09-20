@@ -7,6 +7,7 @@ import type { Message, MessageParam } from "@anthropic-ai/sdk/resources/messages
 import type { CoreResponseEvent } from "doppelclaude/core-response";
 import type { RuntimeRequest } from "doppelclaude/runtime-request";
 import { createHttpServer, projectHttpModels } from "http-doppelclaude";
+import sharp from "sharp";
 
 const KEY = "test-key";
 const A = "T-11111111-1111-4111-8111-111111111111";
@@ -669,6 +670,91 @@ describe("native HTTP frontend", () => {
       await response.text();
       assert.deepEqual(app.requests.get(A)?.[0].messages, messages);
       assert.doesNotMatch(JSON.stringify(app.logs), /ra2tra2t/);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("resizes oversized attachment and tool-result images without breaking history reuse", async () => {
+    const pixels = Buffer.alloc(2400 * 700 * 3);
+    for (let y = 0; y < 700; y++)
+      for (let x = 0; x < 2400; x++) pixels[(y * 2400 + x) * 3 + (x < 800 ? 0 : 2)] = 255;
+    const png = await sharp(pixels, { raw: { width: 2400, height: 700, channels: 3 } })
+      .png({ compressionLevel: 0 })
+      .toBuffer();
+    const image = {
+      type: "image",
+      source: { type: "base64", media_type: "image/png", data: png.toString("base64") },
+    };
+    assert.ok(png.length < 5 * 1024 * 1024);
+    assert.ok(image.source.data.length > 5 * 1024 * 1024);
+    const boundary = {
+      type: "image",
+      source: { type: "base64", media_type: "image/png", data: "A".repeat(5 * 1024 * 1024) },
+    };
+    const history = [
+      { role: "user", content: [image] },
+      {
+        role: "assistant",
+        content: [{ type: "tool_use", id: "client", name: "lookup", input: {} }],
+      },
+      {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: "client", content: [image, boundary] }],
+      },
+    ];
+    const app = await harness();
+    try {
+      const response = await app.post(body(A, history));
+      assert.equal(response.status, 200);
+      await response.text();
+      const sent = app.requests.get(A)?.[0].messages;
+      assert.ok(sent && Array.isArray(sent[0].content));
+      const prepared = sent[0].content[0];
+      assert.ok(prepared.type === "image" && prepared.source.type === "base64");
+      assert.equal(prepared.source.media_type, "image/webp");
+      assert.ok(prepared.source.data.length <= 5 * 1024 * 1024);
+      const decoded = sharp(Buffer.from(prepared.source.data, "base64"));
+      const metadata = await decoded.metadata();
+      assert.equal(metadata.width, 2000);
+      assert.equal(metadata.height, 583);
+      const red = await decoded
+        .clone()
+        .extract({ left: 100, top: 100, width: 1, height: 1 })
+        .raw()
+        .toBuffer();
+      const blue = await decoded
+        .clone()
+        .extract({ left: 1800, top: 100, width: 1, height: 1 })
+        .raw()
+        .toBuffer();
+      assert.ok(red[0] > 240 && red[2] < 15);
+      assert.ok(blue[2] > 240 && blue[0] < 15);
+      assert.ok(Array.isArray(sent[2].content));
+      const result = sent[2].content[0];
+      assert.ok(result.type === "tool_result" && Array.isArray(result.content));
+      assert.deepEqual(result.content, [prepared, boundary]);
+      assert.ok(image.source.data.length > 5 * 1024 * 1024);
+      const continued = await app.post(
+        body(A, [
+          ...history,
+          {
+            role: "assistant",
+            content: [
+              { type: "thinking", thinking: "why", signature: "signed" },
+              { type: "text", text: "done" },
+            ],
+          },
+          { role: "user", content: "continue" },
+        ]),
+      );
+      assert.equal(continued.status, 200);
+      await continued.text();
+      assert.equal(app.logs[0].resizedImages, 2);
+      assert.equal(app.logs[1].resizedImages, 2);
+      assert.equal(app.logs[1].historyDiverged, false);
+      assert.equal(app.logs[1].sync, "compatible");
+      assert.deepEqual(app.requests.get(A)?.[1].messages.slice(0, 3), sent);
     } finally {
       await app.close();
     }
