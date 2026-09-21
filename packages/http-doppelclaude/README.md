@@ -28,13 +28,15 @@ the system prompt. Run `doppelclaude-serve --help` for a no-network configuratio
 
 Expose the listener only through authenticated infrastructure. Configure an Anthropic Messages Custom URL connection in Amp with that public base URL and the daemon API key. Keep subscription credentials on the daemon host; never put them in Amp's connection settings or at the edge.
 
-Every message request must include exactly one complete system-text line:
+Conversation requests must include exactly one complete system-text line, except for the bounded one-shot path below:
 
 ```text
 Amp Thread URL: https://ampcode.com/threads/T-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 ```
 
-The ID must be a UUID. Missing or duplicate markers return 400; shared history never determines identity. Amp currently provides this line automatically. It is an observed client contract, not a guaranteed protocol field.
+The ID must be a UUID. Duplicate markers, or a malformed `Amp Thread URL:` label, return 400; shared history never determines identity. Amp currently provides this line automatically. It is an observed client contract, not a guaranteed protocol field.
+
+As a bounded trial exception, a request with no marker is accepted only when it has exactly one user message with nonempty text-only content (a string or text blocks), omits tools or supplies an empty tool list, requests at most 4096 output tokens, and `JSON.stringify({system, messages})` is at most 16384 UTF-8 bytes. Missing `system` is valid. The limits reject the request rather than clamping output or changing thinking. Markerless multi-turn, image, tool, malformed-marker, and oversized requests return 400 before Claude Code is invoked. This exception supports small one-shot work such as title generation; it does not identify or persist a conversation.
 
 Supported parameters are `system`, `messages`, `tools`, `max_tokens`, adaptive `thinking` or enabled `thinking` with a `budget_tokens` integer of at least 1024 (both optionally with summarized display), `output_config.effort`, and `tool_choice: auto|none`. Each request must select a stable Claude model ID or the `opus` or `fable` alias, either bare or provider-qualified. The optional provider prefix is removed at the HTTP boundary. Explicit stable IDs, including unadvertised IDs and any date suffix, are forwarded unchanged and are not catalog-allowlisted. Aliases are replaced with their startup-snapshotted concrete IDs before reaching the core. SSE response metadata reports the model served by the SDK, which may be canonicalized or differ from the requested ID. `GET /v1/models` continues to advertise concrete discovered models, not aliases. Temperature, forced tool choice, non-streaming requests, and unsupported content types are rejected. Cache-control metadata is ignored; Claude Code manages caching. Signed thinking and renamed tool IDs survive round trips.
 
@@ -42,13 +44,15 @@ Supported parameters are `system`, `messages`, `tools`, `max_tokens`, adaptive `
 
 Each thread has one warm runtime and at most one active request. Overlap returns 409. Idle runtimes expire after the configured TTL; capacity pressure evicts the least-recently-used idle runtime, never an active one. If all slots are active or closing, admission returns 503. Pending tools count as idle after their response finishes. A later request imports the client history and resumes from its tool results.
 
+Each accepted markerless request receives a unique internal runtime which counts against capacity through execution and cleanup, never evicts a keyed warm runtime, does not retry bridge failures, and is closed after success, error, or disconnect. Markerless requests return 503 when capacity is unavailable. Shutdown also aborts and closes these runtimes. They have no background persistence or reuse.
+
 History edits, shortened histories, and changed spawn settings rebuild within the same thread. Different thread IDs remain isolated even with identical history. Conversation state is in memory: restart recovery depends on Amp sending its authoritative history. The state directory holds probe caches and diagnostics, not a durable conversation index.
 
 SSE headers flush immediately and comment heartbeats run every 15 seconds. Disconnects and request deadlines abort the query. Only structured upstream 429/529 failures retry, at most the configured count, before any assistant output. Refusals, ordinary errors, and failures after output are never replayed. SIGINT/SIGTERM stop admission, abort active work, and bound cleanup by the shutdown deadline; allow at least 20 seconds in the service supervisor for the default configuration.
 
 ## Request diagnostics
 
-Normal stderr includes JSON `request_complete` records for authenticated Messages requests admitted to validation. `requestId`, `runtimeId`, `threadId`, timestamps, and duration correlate requests with the retained runtime. `requestedModel` is the validated model name without its provider prefix; `resolvedModel` is the concrete request model; `servedModel` is the SDK-observed model, or `null` when unavailable. Configuration and canonical-history fingerprints expose changes without logging their contents.
+Normal stderr includes JSON `request_complete` records for authenticated Messages requests admitted to validation. `requestId`, `runtimeId`, `threadId`, timestamps, and duration correlate requests with the retained runtime. Markerless records use a null `threadId`; `requestKind`, anonymous eligibility, context byte size, and declared output limit diagnose admission without logging request contents. `requestedModel` is the validated model name without its provider prefix; `resolvedModel` is the concrete request model; `servedModel` is the SDK-observed model, or `null` when unavailable. Configuration and canonical-history fingerprints expose changes without logging their contents.
 
 `configurationFields` fingerprints the resolved model, prepared prompt, prepared tools, tool choice, effort, thinking, and maximum output tokens separately. `changedConfigurationFields` names differences from the last successful request on that runtime; it is `null` on the first request and `[]` when unchanged. Only field names and hashes are logged, never their values.
 

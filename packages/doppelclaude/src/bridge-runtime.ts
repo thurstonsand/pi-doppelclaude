@@ -1003,33 +1003,36 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies = {}
       // results included — into a fresh session, and let the same pi stream take the reply.
       // Armed after resetTurnState, which clears it, so exactly one replay per turn.
       let replayed = false;
-      resultCtx.turnRetry = () => {
-        replayed = true;
-        const queryCtx = resultCtx;
-        const doppel = queryCtx.doppel;
-        const persistent = doppel.kind === "host" && queryCtx === doppel.context;
-        // A trailing user message is steering pi has not handed to Claude Code yet, so it
-        // is the replay's prompt; otherwise the history ends at the results and the replay
-        // only asks the fresh subprocess to carry on.
-        const steering = lastHasUserInput;
-        debug(
-          `provider: replaying the tool-result continuation on a fresh subprocess (doppel=${doppel.label}, ${allResults.length} result(s) already in pi's history, prompt=${steering ? "steering" : "replay"}, persistent=${persistent})`,
-        );
-        queryCtx.activeModel = model;
-        queryCtx.restartTurnState(model, native);
-        claimCurrentResponse(queryCtx.currentResponse, "tool-result-replay", queryCtx);
-        queryCtx.fatalError = null;
-        spawnTurn({
-          queryCtx,
-          freshTurn: planFreshTurn(queryCtx, persistent),
-          syncPlan: steering
-            ? planSessionSync(nativeMessages, doppel.session)
-            : planReplaySync(nativeMessages, doppel.session),
-          promptMessage: steering ? sdkUserMessage(nativeMessages) : sdkPrompt(REPLAY_PROMPT),
-          persistent,
-          drainExisting: false,
-        });
-      };
+      resultCtx.turnRetry =
+        request.retryDeadQuery === false
+          ? null
+          : () => {
+              replayed = true;
+              const queryCtx = resultCtx;
+              const doppel = queryCtx.doppel;
+              const persistent = doppel.kind === "host" && queryCtx === doppel.context;
+              // A trailing user message is steering pi has not handed to Claude Code yet, so it
+              // is the replay's prompt; otherwise the history ends at the results and the replay
+              // only asks the fresh subprocess to carry on.
+              const steering = lastHasUserInput;
+              debug(
+                `provider: replaying the tool-result continuation on a fresh subprocess (doppel=${doppel.label}, ${allResults.length} result(s) already in pi's history, prompt=${steering ? "steering" : "replay"}, persistent=${persistent})`,
+              );
+              queryCtx.activeModel = model;
+              queryCtx.restartTurnState(model, native);
+              claimCurrentResponse(queryCtx.currentResponse, "tool-result-replay", queryCtx);
+              queryCtx.fatalError = null;
+              spawnTurn({
+                queryCtx,
+                freshTurn: planFreshTurn(queryCtx, persistent),
+                syncPlan: steering
+                  ? planSessionSync(nativeMessages, doppel.session)
+                  : planReplaySync(nativeMessages, doppel.session),
+                promptMessage: steering ? sdkUserMessage(nativeMessages) : sdkPrompt(REPLAY_PROMPT),
+                persistent,
+                drainExisting: false,
+              });
+            };
 
       if (lastHasUserInput) {
         if (resultCtx.persistent && resultCtx.inputQueue) {
@@ -1177,7 +1180,8 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies = {}
       queryCtx.observeCommandUsage = dependencies.observeCommandUsage;
       // Installed after beginCommand, which clears it. Exactly one replay per turn: the
       // second attempt arms nothing, so a retry that dies the same way is reported.
-      queryCtx.turnRetry = attempt === 0 ? () => beginTurn(attempt + 1) : null;
+      queryCtx.turnRetry =
+        attempt === 0 && request.retryDeadQuery !== false ? () => beginTurn(attempt + 1) : null;
       queryCtx.latestCursor = nativeCursor;
       queryCtx.fatalError = null;
 

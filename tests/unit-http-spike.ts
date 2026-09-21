@@ -241,6 +241,318 @@ describe("native HTTP frontend", () => {
     }
   });
 
+  it("serves only bounded text-only requests without an Amp thread marker", async () => {
+    const app = await harness();
+    const anonymous = (content: string | unknown[], maxTokens = 4_096) => ({
+      model: "claude-haiku-4-5",
+      max_tokens: maxTokens,
+      stream: true,
+      messages: [{ role: "user", content }],
+    });
+    try {
+      const exactOverhead = Buffer.byteLength(
+        JSON.stringify({ messages: [{ role: "user", content: "" }] }),
+      );
+      const exact = "x".repeat(16_384 - exactOverhead);
+      const accepted = await app.post(anonymous(exact));
+      assert.equal(accepted.status, 200);
+      assert.match(await accepted.text(), /event: message_stop/);
+      const callsAfterAccepted = [...app.requests.values()].flat().length;
+
+      const violations = [
+        anonymous(`${exact}x`),
+        anonymous("go", 4_097),
+        { ...anonymous("go"), tools: [body(A).tools[0]] },
+        {
+          ...anonymous("go"),
+          messages: [
+            { role: "user", content: "one" },
+            { role: "user", content: "two" },
+          ],
+        },
+        anonymous([
+          { type: "image", source: { type: "base64", media_type: "image/png", data: "eA==" } },
+        ]),
+        { ...anonymous("go"), system: "Amp Thread URL: malformed" },
+        { ...anonymous("go"), system: "  Amp Thread URL: malformed" },
+        {
+          ...anonymous("go"),
+          system: `Amp Thread URL: https://ampcode.com/threads/${A}\nAmp Thread URL: malformed`,
+        },
+        {
+          ...anonymous("go"),
+          system: `Amp Thread URL: https://ampcode.com/threads/${A}\nAmp Thread URL: https://ampcode.com/threads/${A}`,
+        },
+      ];
+      for (const violation of violations) {
+        const response = await app.post(violation);
+        assert.equal(response.status, 400);
+        assert.match(await response.text(), /invalid_request_error/);
+      }
+      assert.equal([...app.requests.values()].flat().length, callsAfterAccepted);
+
+      const records = app.logs.filter((record) => record.event === "request_complete");
+      assert.equal(records[0].requestKind, "anonymous");
+      assert.equal(records[0].threadId, null);
+      assert.equal(records[0].anonymousContextBytes, 16_384);
+      assert.equal(records[0].declaredMaxTokens, 4_096);
+      assert.equal(records[1].anonymousEligible, false);
+      assert.equal(records.at(-3)?.markerCount, 0);
+      assert.equal(records.at(-2)?.markerCount, 1);
+      assert.equal(records.at(-1)?.markerCount, 2);
+      assert.ok(
+        app.logs
+          .filter((record) => record.event === "runtime_close")
+          .every((record) => record.threadId === null),
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("isolates anonymous runtimes, cleans them, and never evicts a keyed warm runtime", async () => {
+    const entered = [deferred(), deferred()];
+    const disconnectEntered = deferred();
+    const release = deferred();
+    const disconnected = deferred();
+    const disconnectedCleared = deferred();
+    const runtimeKeys: string[] = [];
+    const cleared: string[] = [];
+    const server = createHttpServer({
+      apiKey: KEY,
+      supportedModels: [],
+      maxRuntimes: 3,
+      createRuntime(id) {
+        runtimeKeys.push(id);
+        const anonymousOrdinal = runtimeKeys.filter((key) => key.startsWith("anonymous:")).length;
+        return {
+          ...fakeRuntime([]),
+          turn: (request: RuntimeRequest) =>
+            (async function* () {
+              if (id.startsWith("anonymous:")) {
+                if (anonymousOrdinal <= 2) {
+                  entered[anonymousOrdinal - 1].resolve();
+                  await release.promise;
+                } else if (anonymousOrdinal === 3) {
+                  throw new Error("anonymous failure");
+                } else if (anonymousOrdinal === 4) {
+                  disconnectEntered.resolve();
+                  await new Promise<void>((resolve) =>
+                    request.signal?.addEventListener("abort", () => {
+                      disconnected.resolve();
+                      resolve();
+                    }),
+                  );
+                  throw new Error("disconnected");
+                }
+              }
+              yield* native([{ type: "text", text: id, citations: null }]);
+            })(),
+          async clear() {
+            cleared.push(id);
+            if (anonymousOrdinal === 4) disconnectedCleared.resolve();
+          },
+        } as never;
+      },
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    const post = (value: unknown) =>
+      fetch(`http://127.0.0.1:${address.port}/v1/messages`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-api-key": KEY },
+        body: JSON.stringify(value),
+      });
+    const anonymous = {
+      model: "claude-haiku-4-5",
+      max_tokens: 100,
+      stream: true,
+      messages: [{ role: "user", content: "title" }],
+    };
+    try {
+      const keyed = await post(body(A));
+      assert.equal(keyed.status, 200);
+      await keyed.text();
+      const first = post(anonymous);
+      await entered[0].promise;
+      const second = post(anonymous);
+      await entered[1].promise;
+      const full = await post(anonymous);
+      assert.equal(full.status, 503);
+      assert.match(await full.text(), /runtime capacity reached/);
+      assert.equal((await post(body(B))).status, 503);
+      const retainedWhileActive = await post(body(A));
+      assert.equal(retainedWhileActive.status, 200);
+      await retainedWhileActive.text();
+      release.resolve();
+      assert.equal((await first).status, 200);
+      await (await first).text();
+      assert.equal((await second).status, 200);
+      await (await second).text();
+
+      const failed = await post(anonymous);
+      assert.equal(failed.status, 200);
+      assert.match(await failed.text(), /event: error/);
+
+      const disconnectResponse = new Promise<import("node:http").IncomingMessage>(
+        (resolve, reject) => {
+          const outgoing = httpRequest(
+            `http://127.0.0.1:${address.port}/v1/messages`,
+            {
+              method: "POST",
+              headers: { "content-type": "application/json", "x-api-key": KEY },
+            },
+            resolve,
+          );
+          outgoing.on("error", reject);
+          outgoing.end(JSON.stringify(anonymous));
+        },
+      );
+      await disconnectEntered.promise;
+      const streaming = await disconnectResponse;
+      const socketClosed = once(streaming.socket, "close");
+      streaming.socket.destroy();
+      await socketClosed;
+      await disconnected.promise;
+      await disconnectedCleared.promise;
+
+      const afterDisconnect = await post(anonymous);
+      assert.equal(afterDisconnect.status, 200);
+      await afterDisconnect.text();
+      const anonymousKeys = runtimeKeys.filter((key) => key.startsWith("anonymous:"));
+      assert.equal(new Set(anonymousKeys).size, 5);
+      assert.ok(anonymousKeys.every((key) => cleared.includes(key)));
+
+      const followUp = await post(body(A));
+      assert.equal(followUp.status, 200);
+      await followUp.text();
+      assert.equal(runtimeKeys.filter((key) => key === A).length, 1);
+    } finally {
+      release.resolve();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("keeps anonymous cleanup charged without evicting an idle keyed runtime", async () => {
+    const entered = deferred();
+    const releaseTurn = deferred();
+    const closeEntered = deferred();
+    const releaseClose = deferred();
+    const runtimeKeys: string[] = [];
+    const server = createHttpServer({
+      apiKey: KEY,
+      supportedModels: [],
+      maxRuntimes: 2,
+      createRuntime(id) {
+        runtimeKeys.push(id);
+        return {
+          ...fakeRuntime([]),
+          turn: () =>
+            (async function* () {
+              if (id.startsWith("anonymous:")) {
+                entered.resolve();
+                await releaseTurn.promise;
+              }
+              yield* native([{ type: "text", text: "ok", citations: null }]);
+            })(),
+          async clear() {
+            if (id.startsWith("anonymous:")) {
+              closeEntered.resolve();
+              await releaseClose.promise;
+            }
+          },
+        } as never;
+      },
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    const post = (value: unknown) =>
+      fetch(`http://127.0.0.1:${address.port}/v1/messages`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-api-key": KEY },
+        body: JSON.stringify(value),
+      });
+    const anonymous = {
+      model: "claude-haiku-4-5",
+      max_tokens: 100,
+      stream: true,
+      messages: [{ role: "user", content: "title" }],
+    };
+    try {
+      await (await post(body(A))).text();
+      const running = post(anonymous);
+      await entered.promise;
+      assert.equal((await post(body(B))).status, 503);
+      releaseTurn.resolve();
+      assert.equal((await running).status, 200);
+      await closeEntered.promise;
+      assert.equal((await post(body(B))).status, 503);
+      const retained = await post(body(A));
+      assert.equal(retained.status, 200);
+      await retained.text();
+      assert.equal(runtimeKeys.filter((key) => key === A).length, 1);
+    } finally {
+      releaseTurn.resolve();
+      releaseClose.resolve();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("aborts and clears an active anonymous runtime during shutdown", async () => {
+    const entered = deferred();
+    const aborted = deferred();
+    const cleared = deferred();
+    const server = createHttpServer({
+      apiKey: KEY,
+      supportedModels: [],
+      createRuntime: () =>
+        ({
+          ...fakeRuntime([]),
+          turn: (request: RuntimeRequest) =>
+            (async function* () {
+              entered.resolve();
+              await new Promise<void>((resolve) =>
+                request.signal?.addEventListener(
+                  "abort",
+                  () => {
+                    aborted.resolve();
+                    resolve();
+                  },
+                  { once: true },
+                ),
+              );
+              throw new Error("aborted");
+            })(),
+          async clear() {
+            cleared.resolve();
+          },
+        }) as never,
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    const request = fetch(`http://127.0.0.1:${address.port}/v1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-api-key": KEY },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5",
+        max_tokens: 100,
+        stream: true,
+        messages: [{ role: "user", content: "title" }],
+      }),
+    });
+    await entered.promise;
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await aborted.promise;
+    await cleared.promise;
+    await request;
+  });
+
   it("reports schema paths and unsupported fields without echoing request values", async () => {
     const app = await harness();
     try {
@@ -1268,6 +1580,56 @@ describe("native HTTP frontend", () => {
       assert.equal(completed[0]?.servedModel, null);
       assert.match(JSON.stringify(completed), /query_created/);
       assert.doesNotMatch(JSON.stringify(completed), /\bgo\b|test-key/);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("does not replay a dead core query for an anonymous request", async () => {
+    let spawns = 0;
+    const server = createHttpServer({
+      apiKey: KEY,
+      supportedModels: [],
+      queryFactory: () => {
+        spawns += 1;
+        return {
+          [Symbol.asyncIterator]() {
+            return {
+              next: async () => {
+                throw new Error("Query closed before response received");
+              },
+            };
+          },
+          initializationResult: async () => ({}),
+          setMcpServers: async () => ({
+            added: [] as string[],
+            removed: [] as string[],
+            errors: {},
+          }),
+          setModel: async () => {},
+          interrupt: async () => ({}),
+          close: () => {},
+        } as unknown as Query;
+      },
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    try {
+      const response = await fetch(`http://127.0.0.1:${address.port}/v1/messages`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-api-key": KEY },
+        body: JSON.stringify({
+          model: "claude-haiku-4-5",
+          max_tokens: 100,
+          stream: true,
+          messages: [{ role: "user", content: "title" }],
+        }),
+      });
+      assert.equal(response.status, 200);
+      assert.match(await response.text(), /event: error/);
+      assert.equal(spawns, 1);
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }

@@ -21,4 +21,6 @@ export interface RuntimeRequest {
   toolNameToSdk?: Map<string, string>;
   toolNameToClient?: Map<string, string>;
   explicitReplay?: boolean;
+  /** Permit the core's one-shot recovery when an SDK query dies before producing output. */
+  retryDeadQuery?: boolean;
 }

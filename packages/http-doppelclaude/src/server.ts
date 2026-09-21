@@ -28,6 +28,8 @@ const DEFAULT_RUNTIME_LIMIT = 32;
 const DEFAULT_IDLE_TTL = 3_600_000;
 const DEFAULT_REQUEST_TIMEOUT = 600_000;
 const DEFAULT_SHUTDOWN_TIMEOUT = 15_000;
+const ANONYMOUS_MAX_CONTEXT_BYTES = 16_384;
+const ANONYMOUS_MAX_TOKENS = 4_096;
 const CacheControl = Type.Optional(Type.Record(Type.String(), Type.Unknown()));
 const TextBlock = Type.Object({
   type: Type.Literal("text"),
@@ -159,6 +161,7 @@ interface ThreadState {
   configurationFields?: Record<string, string>;
   forceRebuild: boolean;
   lastActivity: number;
+  anonymous: boolean;
 }
 interface CallRecord {
   sdkId: string;
@@ -299,20 +302,48 @@ function errorResponse(response: ServerResponse, status: number, message: string
   );
 }
 function extractThread(system: ApiRequest["system"]): {
-  threadId: string;
+  threadId: string | null;
   prompt: string;
   markerCount: number;
+  malformed: boolean;
 } {
   const texts = typeof system === "string" ? [system] : (system ?? []).map((block) => block.text);
   const matches = texts.flatMap((text) => [...text.matchAll(THREAD_LINE)].map((match) => match[1]));
-  if (matches.length !== 1) {
-    throw new RequestError(
-      "system must contain exactly one Amp Thread URL line",
-      400,
-      matches.length,
-    );
-  }
-  return { threadId: matches[0], prompt: texts.join("\n"), markerCount: matches.length };
+  const labelCount = texts.reduce(
+    (count, text) => count + (text.match(/Amp Thread URL:/g)?.length ?? 0),
+    0,
+  );
+  return {
+    threadId: matches.length === 1 ? matches[0] : null,
+    prompt: texts.join("\n"),
+    markerCount: matches.length,
+    malformed: labelCount !== matches.length,
+  };
+}
+
+function anonymousEligibility(body: ApiRequest): { eligible: boolean; contextBytes: number } {
+  const message = body.messages[0];
+  const textOnly =
+    typeof message?.content === "string"
+      ? message.content.length > 0
+      : Array.isArray(message?.content) &&
+        message.content.length > 0 &&
+        message.content.every((block) => block.type === "text") &&
+        message.content.some((block) => block.type === "text" && block.text.length > 0);
+  const contextBytes = Buffer.byteLength(
+    JSON.stringify({ system: body.system, messages: body.messages }),
+    "utf8",
+  );
+  return {
+    eligible:
+      body.messages.length === 1 &&
+      message?.role === "user" &&
+      textOnly &&
+      (body.tools === undefined || body.tools.length === 0) &&
+      contextBytes <= ANONYMOUS_MAX_CONTEXT_BYTES &&
+      body.max_tokens <= ANONYMOUS_MAX_TOKENS,
+    contextBytes,
+  };
 }
 
 function fingerprint(value: string): string {
@@ -605,7 +636,7 @@ export function createHttpServer(options: HttpServerOptions): Server {
     log({
       event: "runtime_close",
       timestamp: new Date().toISOString(),
-      threadId: key,
+      threadId: state.anonymous ? null : key,
       runtimeId: state.runtimeId,
       reason,
     });
@@ -614,7 +645,7 @@ export function createHttpServer(options: HttpServerOptions): Server {
         log({
           event: "runtime_close_failed",
           timestamp: new Date().toISOString(),
-          threadId: key,
+          threadId: state.anonymous ? null : key,
           runtimeId: state.runtimeId,
           reason,
         });
@@ -625,7 +656,7 @@ export function createHttpServer(options: HttpServerOptions): Server {
     closing.set(key, promise);
     return promise;
   };
-  const makeRuntime = (threadId: string) => {
+  const makeRuntime = (threadId: string, anonymous: boolean) => {
     const observationState = {
       observations: null as BridgeExecutionObservation[] | null,
     };
@@ -635,7 +666,7 @@ export function createHttpServer(options: HttpServerOptions): Server {
         queryFactory: options.queryFactory ?? query,
         observeExecution: (observation) => observationState.observations?.push(observation),
       });
-    void runtime.designateHost(threadId);
+    if (!anonymous) void runtime.designateHost(threadId);
     return {
       runtime,
       runtimeId: randomUUID(),
@@ -723,9 +754,32 @@ export function createHttpServer(options: HttpServerOptions): Server {
       diagnostic.requestedModel = body.model.split("/").at(-1);
       diagnostic.resolvedModel = model;
       const extracted = extractThread(body.system);
-      const { threadId, prompt } = extracted;
+      const { prompt } = extracted;
       markerCount = extracted.markerCount;
-      safeThreadId = threadId;
+      const anonymous = extracted.markerCount === 0;
+      const eligibility = anonymousEligibility(body);
+      Object.assign(diagnostic, {
+        requestKind: extracted.markerCount === 0 ? "anonymous" : "keyed",
+        anonymousEligible: anonymous ? eligibility.eligible && !extracted.malformed : null,
+        anonymousContextBytes: anonymous ? eligibility.contextBytes : null,
+        declaredMaxTokens: body.max_tokens,
+      });
+      if (extracted.markerCount > 1)
+        throw new RequestError(
+          "system must contain exactly one Amp Thread URL line",
+          400,
+          extracted.markerCount,
+        );
+      if (extracted.malformed)
+        throw new RequestError("system contains a malformed Amp Thread URL line", 400, 0);
+      if (anonymous && !eligibility.eligible)
+        throw new RequestError(
+          "unkeyed requests require one nonempty text-only user message, no tools, at most 16384 context bytes, and max_tokens at most 4096",
+          400,
+          0,
+        );
+      const threadId = extracted.threadId ?? `anonymous:${randomUUID()}`;
+      safeThreadId = extracted.threadId;
       reservationKey = threadId;
       stage = "acquire_runtime";
       // Validate history references before reserving scarce process capacity. Tool names are mapped
@@ -749,6 +803,20 @@ export function createHttpServer(options: HttpServerOptions): Server {
           states.size + closing.size + pending.size >
           (options.maxRuntimes ?? DEFAULT_RUNTIME_LIMIT)
         ) {
+          if (anonymous) {
+            pending.delete(threadId);
+            throw new RequestError("runtime capacity reached", 503);
+          }
+          const anonymousOccupancy =
+            [...states.entries()].some(
+              ([key, candidate]) => key.startsWith("anonymous:") || candidate.anonymous,
+            ) ||
+            [...closing.keys()].some((key) => key.startsWith("anonymous:")) ||
+            [...pending].some((key) => key.startsWith("anonymous:"));
+          if (anonymousOccupancy) {
+            pending.delete(threadId);
+            throw new RequestError("runtime capacity reached", 503);
+          }
           const idle = [...states.entries()]
             .filter(([, candidate]) => !candidate.busy)
             .sort((left, right) => left[1].lastActivity - right[1].lastActivity)[0];
@@ -762,13 +830,14 @@ export function createHttpServer(options: HttpServerOptions): Server {
         if (eviction) return undefined;
         try {
           const created: ThreadState = {
-            ...makeRuntime(threadId),
+            ...makeRuntime(threadId, anonymous),
             busy: true,
             calls: new Map(),
             pendingTool: false,
             expectedHistory: [],
             forceRebuild: false,
             lastActivity: now(),
+            anonymous,
           };
           pending.delete(threadId);
           ownsReservation = false;
@@ -792,13 +861,14 @@ export function createHttpServer(options: HttpServerOptions): Server {
             )
               throw new RequestError("runtime capacity reached", 503);
             const created: ThreadState = {
-              ...makeRuntime(threadId),
+              ...makeRuntime(threadId, anonymous),
               busy: true,
               calls: new Map(),
               pendingTool: false,
               expectedHistory: [],
               forceRebuild: false,
               lastActivity: now(),
+              anonymous,
             };
             pending.delete(threadId);
             states.set(threadId, created);
@@ -933,7 +1003,8 @@ export function createHttpServer(options: HttpServerOptions): Server {
       );
       requestTimer.unref();
       const runtimeRequest: RuntimeRequest = {
-        conversationKey: threadId,
+        ...(anonymous ? { ephemeral: true as const } : { conversationKey: threadId }),
+        retryDeadQuery: !anonymous,
         model,
         messages: normalized.messages,
         tools,
@@ -977,7 +1048,7 @@ export function createHttpServer(options: HttpServerOptions): Server {
       diagnostic.retries = 0;
       let final: CoreResponseRecord;
       try {
-        const attempts = options.retryAttempts ?? 2;
+        const attempts = anonymous ? 0 : (options.retryAttempts ?? 2);
         let attempt = 0;
         for (;;) {
           abort.signal.throwIfAborted();
@@ -1038,7 +1109,7 @@ export function createHttpServer(options: HttpServerOptions): Server {
         durationMs: now() - startedAt,
         requestId,
         runtimeId: state.runtimeId,
-        threadId,
+        threadId: safeThreadId,
         markerCount,
         commandId: final.commandId,
         servedModel:
@@ -1114,6 +1185,20 @@ export function createHttpServer(options: HttpServerOptions): Server {
         state.observationState.observations = null;
         state.busy = false;
         if (!shuttingDown) state.lastActivity = now();
+        if (state.anonymous && !shuttingDown) {
+          const anonymousState = state;
+          let closingPromise: Promise<void> | undefined;
+          await registry(() => {
+            if (states.get(reservationKey) !== anonymousState) return;
+            states.delete(reservationKey as string);
+            closingPromise = beginClose(
+              reservationKey as string,
+              anonymousState,
+              "HTTP anonymous request complete",
+            );
+          });
+          await closingPromise;
+        }
       }
     }
   });
