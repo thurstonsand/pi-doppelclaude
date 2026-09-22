@@ -9,6 +9,7 @@ const MIN_TOOL_DESCRIPTION_CAP = 256;
 const MAX_TOOL_DESCRIPTION_CAP = 65_536;
 const SCAN_CHUNK_SIZE = 1024 * 1024;
 const SCAN_OVERLAP = 1024;
+const CACHE_VERSION = 2;
 
 const CACHED_VERSION_SCHEMA = Type.Object({
   path: Type.String(),
@@ -18,7 +19,10 @@ const CACHED_VERSION_SCHEMA = Type.Object({
   fallback: Type.Boolean(),
   warned: Type.Boolean(),
 });
-const CACHE_SCHEMA = Type.Object({ entries: Type.Array(CACHED_VERSION_SCHEMA) });
+const CACHE_SCHEMA = Type.Object({
+  version: Type.Literal(CACHE_VERSION),
+  entries: Type.Array(CACHED_VERSION_SCHEMA),
+});
 
 type CachedVersion = Static<typeof CACHED_VERSION_SCHEMA>;
 
@@ -83,7 +87,7 @@ export async function scanToolDescriptionCap(
 ): Promise<CapResult> {
   const anchors = await scanMatches(
     path,
-    /Server instructions truncated from \$\{[A-Za-z_$][\w$]*\.length\} to \$\{([A-Za-z_$][\w$]*)\} chars/g,
+    /(?:Server instructions|\$\{[A-Za-z_$][\w$]*\}) truncated from \$\{[A-Za-z_$][\w$]*\.length\} to \$\{([A-Za-z_$][\w$]*)\} chars/g,
     signal,
   );
   const identifiers = new Set(anchors.map(({ match }) => match[1]));
@@ -172,7 +176,10 @@ export function createDescriptionCapProbe(
     const temporaryPath = `${cachePath}.${process.pid}.tmp`;
     try {
       await mkdir(dirname(cachePath), { recursive: true });
-      await writeFile(temporaryPath, `${JSON.stringify({ entries: [...cache.values()] })}\n`);
+      await writeFile(
+        temporaryPath,
+        `${JSON.stringify({ version: CACHE_VERSION, entries: [...cache.values()] })}\n`,
+      );
       await rename(temporaryPath, cachePath);
     } catch (error) {
       log(`description-cap: could not write cache ${cachePath}`, error);

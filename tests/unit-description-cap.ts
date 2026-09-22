@@ -21,6 +21,7 @@ async function fixture(contents: string): Promise<string> {
 }
 
 const ANCHOR = "Server instructions truncated from $" + "{e.length} to $" + "{cap} chars";
+const GENERIC_ANCHOR = "$" + "{label} truncated from $" + "{e.length} to $" + "{cap} chars";
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
@@ -126,6 +127,12 @@ describe("scanToolDescriptionCap", () => {
     assert.deepEqual(await scanToolDescriptionCap(path), { cap: 4096, fallback: false });
   });
 
+  it("finds the cap after Claude Code generalized the truncation helper", async () => {
+    const path = await fixture(`minified();cap=4096;other();${GENERIC_ANCHOR};tail()`);
+
+    assert.deepEqual(await scanToolDescriptionCap(path), { cap: 4096, fallback: false });
+  });
+
   it("falls back when the anchor is missing", async () => {
     const path = await fixture("minified();cap=4096;no stable anchor here");
 
@@ -215,6 +222,23 @@ describe("createDescriptionCapProbe", () => {
     assert.equal(cache.entries.length, 1);
     assert.equal(cache.entries[0].path, path);
     assert.equal(cache.entries[0].cap, 4096);
+  });
+
+  it("invalidates caches written by an older probe", async () => {
+    const path = await fixture(`cap=3072;${ANCHOR}`);
+    const cachePath = join(path, "..", "cache.json");
+    await writeFile(cachePath, '{"entries":[]}\n');
+    const probe = createDescriptionCapProbe({
+      cachePath,
+      resolveBinaryPath: () => path,
+      scanBinary: scanToolDescriptionCap,
+      debug() {},
+      warn() {},
+    });
+
+    assert.equal(await probe(), 3072);
+    const cache = JSON.parse(await readFile(cachePath, "utf8")) as { version: number };
+    assert.equal(cache.version, 2);
   });
 
   it("does not persist an unavailable binary as a synthetic version", async () => {
