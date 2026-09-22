@@ -3,6 +3,10 @@
   "version": "0.0.0",
   "description": "Messages-shaped core for bridging clients to the Claude Agent SDK.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thurstonsand/pi-doppelclaude.git"
+  },
   "type": "module",
   "engines": {
     "node": ">=20"

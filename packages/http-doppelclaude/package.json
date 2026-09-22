@@ -3,6 +3,10 @@
   "version": "0.0.0",
   "description": "Anthropic Messages HTTP frontend for doppelclaude.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thurstonsand/pi-doppelclaude.git"
+  },
   "type": "module",
   "engines": {
     "node": ">=24"
