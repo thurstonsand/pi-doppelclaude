@@ -2,7 +2,7 @@
 
 # Changelog
 
-## UNRELEASED
+## 0.12.0 — 2026-09-22
 
 ### Added
 
@@ -11,6 +11,10 @@
 ### Changed
 
 - **Shared core** — split the repository into `doppelclaude`, `pi-doppelclaude`, and `http-doppelclaude` workspaces. Pi's published package name and configuration remain unchanged; packages now ship built JavaScript. Tool-description handling and account probing are shared without a Pi dependency in core.
+
+### Fixed
+
+- **Tool-description cap detection supports Claude Code 2.1.278** — recognize the generalized truncation helper in current native binaries and invalidate cached fallback results when the probe changes.
 
 ## 0.11.0 — 2026-09-11
 
