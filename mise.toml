@@ -5,7 +5,7 @@ enter = "mise bootstrap --yes --quiet"
 
 [tools]
 actionlint = "1.7.12"
-hk = "1.54.0"
+hk = "1.58.1"
 node = "24"
 shellcheck = "0.11.0"
 
