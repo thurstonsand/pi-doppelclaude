@@ -5,6 +5,12 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Stable version to rebuild from its existing vX.Y.Z tag
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -20,6 +26,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', inputs.version) || github.ref }}
       - name: Set up mise
         uses: jdx/mise-action@v4
         with:
@@ -31,19 +39,40 @@ jobs:
         run: mise run check
 
   build-and-smoke:
-    name: Build and smoke test
+    name: Build and smoke test (${{ matrix.platform }})
     needs: check
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            architecture: amd64
+          - platform: linux/arm64
+            architecture: arm64
     steps:
       - name: Checkout repository
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', inputs.version) || github.ref }}
+      - name: Record source revision
+        id: source
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435
       - name: Select package version
         id: version
         shell: bash
         run: |
-          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
+            if [[ ! "${{ inputs.version }}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "version must be X.Y.Z" >&2
+              exit 1
+            fi
+            echo "value=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          elif [[ "$GITHUB_REF_TYPE" == tag ]]; then
             echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
           else
             echo "value=0.0.0" >> "$GITHUB_OUTPUT"
@@ -53,44 +82,55 @@ jobs:
         with:
           context: .
           load: true
-          platforms: linux/amd64
-          tags: ${{ env.LOCAL_IMAGE }}
+          platforms: ${{ matrix.platform }}
+          tags: ${{ env.LOCAL_IMAGE }}-${{ matrix.architecture }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ steps.source.outputs.sha }}
             org.opencontainers.image.version=${{ steps.version.outputs.value }}
           build-args: VERSION=${{ steps.version.outputs.value }}
       - name: Smoke test image
-        run: scripts/smoke-http-image.sh "$LOCAL_IMAGE"
+        run: scripts/smoke-http-image.sh "$LOCAL_IMAGE-${{ matrix.architecture }}"
       - name: Save tested image
-        if: github.event_name == 'push'
-        run: docker save "$LOCAL_IMAGE" | gzip > http-doppelclaude-image.tar.gz
+        if: github.event_name != 'pull_request'
+        run: >-
+          docker save "$LOCAL_IMAGE-${{ matrix.architecture }}" |
+          gzip > "http-doppelclaude-image-${{ matrix.architecture }}.tar.gz"
       - name: Upload tested image
-        if: github.event_name == 'push'
+        if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: tested-http-doppelclaude-image
-          path: http-doppelclaude-image.tar.gz
+          name: tested-http-doppelclaude-image-${{ matrix.architecture }}
+          path: http-doppelclaude-image-${{ matrix.architecture }}.tar.gz
           if-no-files-found: error
           retention-days: 1
 
   publish:
     name: Publish tested image
     if: >-
-      github.event_name == 'push' &&
-      (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' &&
+      (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))
     needs: build-and-smoke
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
     steps:
+      - name: Checkout source revision
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', inputs.version) || github.ref }}
       - name: Download tested image
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
         with:
-          name: tested-http-doppelclaude-image
+          pattern: tested-http-doppelclaude-image-*
+          merge-multiple: true
       - name: Load tested image
-        run: gzip --decompress --stdout http-doppelclaude-image.tar.gz | docker load
+        run: |
+          for archive in http-doppelclaude-image-*.tar.gz; do
+            gzip --decompress --stdout "$archive" | docker load
+          done
       - name: Log in to GHCR
         uses: docker/login-action@184bdaa0721073962dff0199f1fb9940f07167d1
         with:
@@ -100,13 +140,29 @@ jobs:
       - name: Tag and publish
         shell: bash
         run: |
+          source_sha=$(git rev-parse HEAD)
           tags=()
-          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
-            tags+=("$IMAGE:${GITHUB_REF_NAME#v}" "$IMAGE:release-sha-$GITHUB_SHA")
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
+            component_prefix="release-sha-$source_sha"
+            tags+=("$IMAGE:${{ inputs.version }}" "$IMAGE:$component_prefix" "$IMAGE:latest")
+          elif [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            component_prefix="release-sha-$source_sha"
+            tags+=("$IMAGE:${GITHUB_REF_NAME#v}" "$IMAGE:$component_prefix" "$IMAGE:latest")
           else
-            tags+=("$IMAGE:main-sha-$GITHUB_SHA")
+            component_prefix="main-sha-$source_sha"
+            tags+=("$IMAGE:$component_prefix")
           fi
-          for tag in "${tags[@]}"; do
-            docker tag "$LOCAL_IMAGE" "$tag"
-            docker push "$tag"
+
+          components=()
+          for architecture in amd64 arm64; do
+            component="$IMAGE:$component_prefix-$architecture"
+            docker tag "$LOCAL_IMAGE-$architecture" "$component"
+            docker push "$component"
+            components+=("$component")
           done
+
+          manifest_args=()
+          for tag in "${tags[@]}"; do
+            manifest_args+=(--tag "$tag")
+          done
+          docker buildx imagetools create "${manifest_args[@]}" "${components[@]}"
