@@ -159,8 +159,7 @@ type SessionDisposition = "rebuild" | "drop";
  *  result, and the replay's transcript ends with them. The subprocess is told what it
  *  missed, because a bare "continue" reads to the model as a conversation already finished
  *  and gets "there's no work in progress" instead of the answer. */
-const REPLAY_PROMPT =
-  "Your previous reply was interrupted before you could use the tool results above. Continue from them.";
+const REPLAY_PROMPT = "The tool results above are available. Continue the pending task using them.";
 
 export const SESSION_STORE_LOAD_TIMEOUT_MS = 15_000;
 

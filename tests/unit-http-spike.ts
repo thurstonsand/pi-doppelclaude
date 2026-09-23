@@ -4,6 +4,8 @@ import { request as httpRequest } from "node:http";
 import { describe, it } from "node:test";
 import type { ModelInfo, Query, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { Message, MessageParam } from "@anthropic-ai/sdk/resources/messages/messages";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { CoreResponseEvent } from "doppelclaude/core-response";
 import type { RuntimeRequest } from "doppelclaude/runtime-request";
 import { createHttpServer, projectHttpModels } from "http-doppelclaude";
@@ -90,8 +92,29 @@ function fakeRuntime(requests: RuntimeRequest[], rebuilds: string[] = []) {
       requests.push(request);
       return native(
         [
-          { type: "tool_use", id: "sdk-1", name: "lookup", input: { n: 1 } },
-          { type: "tool_use", id: "sdk-2", name: "lookup", input: { n: 2 } },
+          {
+            type: "tool_use",
+            id: "sdk-1",
+            name: "lookup",
+            input: {
+              n: 1,
+              options: {
+                é: 1,
+                "e\u0301": 2,
+                order: ["first", "second"],
+                exact: true,
+                caller: "input-value",
+              },
+            },
+            caller: { type: "direct" },
+          },
+          {
+            type: "tool_use",
+            id: "sdk-2",
+            name: "lookup",
+            input: { n: 2 },
+            caller: { type: "direct" },
+          },
         ] as Message["content"],
         "tool_use",
       );
@@ -860,18 +883,32 @@ describe("native HTTP frontend", () => {
     }
   });
 
-  it("resolves renamed parallel results by assistant call position and result id", async () => {
+  it("continues realistic tool turns across harmless echo normalization", async () => {
     const app = await harness();
     try {
       await (await app.post(body(A))).text();
       const history = [
         { role: "user", content: "go" },
         {
-          role: "assistant",
           content: [
-            { type: "tool_use", id: "renamed-a", name: "lookup", input: { n: 1 } },
+            {
+              input: {
+                options: {
+                  "e\u0301": 2,
+                  é: 1,
+                  caller: "input-value",
+                  exact: true,
+                  order: ["first", "second"],
+                },
+                n: 1,
+              },
+              name: "lookup",
+              id: "renamed-a",
+              type: "tool_use",
+            },
             { type: "tool_use", id: "renamed-b", name: "lookup", input: { n: 2 } },
           ],
+          role: "assistant",
         },
         {
           role: "user",
@@ -882,6 +919,8 @@ describe("native HTTP frontend", () => {
         },
       ];
       await (await app.post(body(A, history))).text();
+      assert.equal(app.logs[1].sync, "compatible", JSON.stringify(app.logs[1]));
+      assert.equal(app.logs[1].coldReplay, false);
       const messages = app.requests.get(A)?.[1]?.messages as MessageParam[];
       const results = messages[2].content as Array<{
         type: string;
@@ -897,6 +936,300 @@ describe("native HTTP frontend", () => {
       );
     } finally {
       await app.close();
+    }
+  });
+
+  it("delivers normalized HTTP tool results to the same live SDK query", async () => {
+    const logs: Array<Record<string, unknown>> = [];
+    const delivered: unknown[] = [];
+    const closed = deferred();
+    let queries = 0;
+    const server = createHttpServer({
+      apiKey: KEY,
+      supportedModels: [],
+      log: (record) => logs.push(record),
+      queryFactory: ({ options }) => {
+        queries++;
+        const config = options?.mcpServers?.["custom-tools"] as {
+          instance: { connect(transport: unknown): Promise<void> };
+        };
+        return {
+          async *[Symbol.asyncIterator]() {
+            const client = new Client({ name: "http-reuse-test", version: "1" });
+            const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+            await Promise.all([
+              config.instance.connect(serverTransport),
+              client.connect(clientTransport),
+            ]);
+            try {
+              for (const n of [1, 2]) {
+                const input = { n, options: { left: "a", right: "b" } };
+                const result = client.callTool({
+                  name: "lookup",
+                  arguments: input,
+                  _meta: { "claudecode/toolUseId": `sdk-${n}` },
+                });
+                yield* [
+                  {
+                    type: "stream_event",
+                    event: { type: "message_start", message: { usage: {} } },
+                  },
+                  {
+                    type: "stream_event",
+                    event: {
+                      type: "content_block_start",
+                      index: 0,
+                      content_block: {
+                        type: "tool_use",
+                        id: `sdk-${n}`,
+                        name: "mcp__custom-tools__lookup",
+                        input: {},
+                        caller: { type: "direct" },
+                      },
+                    },
+                  },
+                  {
+                    type: "stream_event",
+                    event: {
+                      type: "content_block_delta",
+                      index: 0,
+                      delta: { type: "input_json_delta", partial_json: JSON.stringify(input) },
+                    },
+                  },
+                  { type: "stream_event", event: { type: "content_block_stop", index: 0 } },
+                  { type: "stream_event", event: { type: "message_stop" } },
+                ] as unknown as SDKMessage[];
+                delivered.push((await result).content);
+              }
+              yield* [
+                { type: "stream_event", event: { type: "message_start", message: { usage: {} } } },
+                {
+                  type: "stream_event",
+                  event: {
+                    type: "content_block_start",
+                    index: 0,
+                    content_block: { type: "text", text: "Both results received" },
+                  },
+                },
+                { type: "stream_event", event: { type: "content_block_stop", index: 0 } },
+                {
+                  type: "stream_event",
+                  event: { type: "message_delta", delta: { stop_reason: "end_turn" } },
+                },
+                { type: "stream_event", event: { type: "message_stop" } },
+                { type: "result", subtype: "success", is_error: false, modelUsage: {} },
+              ] as unknown as SDKMessage[];
+              await closed.promise;
+            } finally {
+              await client.close();
+            }
+          },
+          initializationResult: async () => ({}),
+          setMcpServers: async () => ({
+            added: [] as string[],
+            removed: [] as string[],
+            errors: {},
+          }),
+          setModel: async () => {},
+          interrupt: async () => ({}),
+          close: () => closed.resolve(),
+        } as unknown as Query;
+      },
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    const history: MessageParam[] = [{ role: "user", content: "go" }];
+    const post = async () => {
+      const response = await fetch(`http://127.0.0.1:${address.port}/v1/messages`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-api-key": KEY },
+        body: JSON.stringify(body(A, history)),
+        signal: AbortSignal.timeout(5000),
+      });
+      assert.equal(response.status, 200);
+      return response.text();
+    };
+    try {
+      assert.match(await post(), /"caller":\{"type":"direct"\}/);
+      for (const n of [1, 2]) {
+        history.push(
+          {
+            content: [
+              {
+                input: { options: { right: "b", left: "a" }, n },
+                name: "lookup",
+                id: `client-${n}`,
+                type: "tool_use",
+              },
+            ],
+            role: "assistant",
+          },
+          {
+            role: "user",
+            content: [{ type: "tool_result", tool_use_id: `client-${n}`, content: `result ${n}` }],
+          },
+        );
+        const output = await post();
+        assert.match(output, n === 1 ? /"id":"sdk-2"/ : /Both results received/);
+      }
+      assert.deepEqual(delivered, [
+        [{ type: "text", text: "result 1" }],
+        [{ type: "text", text: "result 2" }],
+      ]);
+      assert.equal(queries, 1);
+      const requests = logs.filter((record) => record.event === "request_complete");
+      assert.deepEqual(
+        requests.map((record) => record.sync),
+        ["first", "compatible", "compatible"],
+      );
+      assert.deepEqual(
+        requests.map((record) => record.coldReplay),
+        [false, false, false],
+      );
+      const executions = requests.map(
+        (record) => record.executions as Array<{ event: string; queryId: string }>,
+      );
+      const queryId = executions[0].find((event) => event.event === "query_created")?.queryId;
+      assert.ok(queryId);
+      for (const continuation of executions.slice(1)) {
+        assert.equal(
+          continuation.find((event) => event.event === "tool_result_continuation")?.queryId,
+          queryId,
+        );
+      }
+    } finally {
+      closed.resolve();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("rebuilds when semantic history values change", async () => {
+    const variants = [
+      {
+        label: "unchanged control",
+        edit: (_history: Array<Record<string, unknown>>) => {},
+      },
+      {
+        label: "argument value",
+        edit: (history: Array<Record<string, unknown>>) => {
+          const assistant = history[1].content as Array<Record<string, unknown>>;
+          assistant[0].input = {
+            n: 9,
+            options: {
+              é: 1,
+              "e\u0301": 2,
+              order: ["first", "second"],
+              exact: true,
+              caller: "input-value",
+            },
+          };
+        },
+      },
+      {
+        label: "array order",
+        edit: (history: Array<Record<string, unknown>>) => {
+          const assistant = history[1].content as Array<Record<string, unknown>>;
+          assistant[0].input = {
+            n: 1,
+            options: {
+              é: 1,
+              "e\u0301": 2,
+              order: ["second", "first"],
+              exact: true,
+              caller: "input-value",
+            },
+          };
+        },
+      },
+      {
+        label: "input field named caller",
+        edit: (history: Array<Record<string, unknown>>) => {
+          const assistant = history[1].content as Array<Record<string, unknown>>;
+          assistant[0].input = {
+            n: 1,
+            options: {
+              é: 1,
+              "e\u0301": 2,
+              order: ["first", "second"],
+              exact: true,
+              caller: "edited",
+            },
+          };
+        },
+      },
+      {
+        label: "non-direct tool caller",
+        edit: (history: Array<Record<string, unknown>>) => {
+          const assistant = history[1].content as Array<Record<string, unknown>>;
+          assistant[0].caller = { type: "delegate" };
+        },
+      },
+      {
+        label: "direct tool caller with an unknown field",
+        edit: (history: Array<Record<string, unknown>>) => {
+          const assistant = history[1].content as Array<Record<string, unknown>>;
+          assistant[0].caller = { type: "direct", future: true };
+        },
+      },
+      {
+        label: "edited message",
+        edit: (history: Array<Record<string, unknown>>) => {
+          history[0].content = "edited";
+        },
+      },
+    ];
+
+    for (const [index, variant] of variants.entries()) {
+      const thread = `T-${String(index + 3).repeat(8)}-1111-4111-8111-111111111111`;
+      const app = await harness();
+      try {
+        await (await app.post(body(thread))).text();
+        const history: Array<Record<string, unknown>> = [
+          { role: "user", content: "go" },
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "tool_use",
+                id: "client-a",
+                name: "lookup",
+                input: {
+                  n: 1,
+                  options: {
+                    é: 1,
+                    "e\u0301": 2,
+                    order: ["first", "second"],
+                    exact: true,
+                    caller: "input-value",
+                  },
+                },
+              },
+              { type: "tool_use", id: "client-b", name: "lookup", input: { n: 2 } },
+            ],
+          },
+          {
+            role: "user",
+            content: [
+              { type: "tool_result", tool_use_id: "client-a", content: "one" },
+              { type: "tool_result", tool_use_id: "client-b", content: "two" },
+            ],
+          },
+        ];
+        variant.edit(history);
+        await (await app.post(body(thread, history))).text();
+        const unchanged = variant.label === "unchanged control";
+        assert.equal(app.logs[1].sync, unchanged ? "compatible" : "rebuild", variant.label);
+        assert.equal(
+          app.logs[1].reason,
+          unchanged ? "compatible" : "history_diverged",
+          variant.label,
+        );
+        assert.equal(app.logs[1].outcome, "success", variant.label);
+      } finally {
+        await app.close();
+      }
     }
   });
 

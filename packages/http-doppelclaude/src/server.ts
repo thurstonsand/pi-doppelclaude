@@ -448,6 +448,18 @@ function stripBlockCaches(messages: ApiRequest["messages"]): MessageParam[] {
   }
   return copy as unknown as MessageParam[];
 }
+
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(value, (_key, nested) => {
+    if (nested === null || typeof nested !== "object" || Array.isArray(nested)) return nested;
+    return Object.fromEntries(
+      Object.entries(nested as Record<string, unknown>).sort(([left], [right]) =>
+        left < right ? -1 : left > right ? 1 : 0,
+      ),
+    );
+  });
+}
+
 function canonicalHistory(messages: MessageParam[]): string {
   const copy = structuredClone(messages) as Array<{ role: string; content: unknown }>;
   const ids = new Map<string, string>();
@@ -469,6 +481,14 @@ function canonicalHistory(messages: MessageParam[]): string {
           const canonical = `call:${assistant}:${call++}`;
           ids.set(String(block.id), canonical);
           block.id = canonical;
+          if (
+            block.caller !== null &&
+            typeof block.caller === "object" &&
+            !Array.isArray(block.caller) &&
+            Object.keys(block.caller).length === 1 &&
+            (block.caller as Record<string, unknown>).type === "direct"
+          )
+            delete block.caller;
         }
       }
       if (message.role === "user") {
@@ -492,7 +512,7 @@ function canonicalHistory(messages: MessageParam[]): string {
     }
     if (message.role === "assistant") assistant++;
   }
-  return JSON.stringify(copy);
+  return canonicalJson(copy);
 }
 function validateMessages(messages: ApiRequest["messages"]): void {
   if (messages.length === 0) throw new RequestError("messages must not be empty");
@@ -534,7 +554,7 @@ function normalizeMessages(
         const prior = priorCalls.get(position);
         if (
           prior &&
-          (prior.name !== block.name || JSON.stringify(prior.input) !== JSON.stringify(block.input))
+          (prior.name !== block.name || canonicalJson(prior.input) !== canonicalJson(block.input))
         )
           throw new RequestError(`tool_use changed at assistant position ${position}`);
         const sdkId = prior?.sdkId ?? block.id;
