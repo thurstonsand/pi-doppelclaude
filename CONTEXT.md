@@ -42,6 +42,10 @@
 - **Account probe**: A one-shot CC query for `accountInfo`/`supportedModels`.
 - **First-party account**: Claude Code authentication whose Agent SDK account reports subscription auth, not an API key.
 
+## System prompt
+
+- **Prompt sections**: pi's system message as named parts (`preamble`, `tools`, `docs`, …). Replacements patch the section that owns the text, then pi renders the whole.
+
 ## Tool bridge
 
 - **MCP bridge**: Pi's tools exposed to Claude Code as an in-process MCP server named `custom-tools`, so every tool call flows back through Pi. CC-native tools are disabled (`tools: []`).

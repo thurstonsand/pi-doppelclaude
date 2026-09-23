@@ -3,6 +3,7 @@ import {
   type AssistantMessage,
   type AssistantMessageEventStream,
   createAssistantMessageEventStream,
+  type JsonObject,
   type Model,
   type StopReason,
   type ToolCall,
@@ -145,7 +146,7 @@ export function createPiResponseRuntime() {
               type: "toolCall",
               id: block.id,
               name: block.name,
-              arguments: (block.input as Record<string, unknown>) ?? {},
+              arguments: (block.input as JsonObject) ?? {},
             });
             stream.push({ type: "toolcall_start", contentIndex: index, partial: output });
           }
@@ -177,7 +178,7 @@ export function createPiResponseRuntime() {
             try {
               const parsed = parsePartialJsonText(json);
               if (typeof parsed === "object" && parsed !== null)
-                block.arguments = parsed as Record<string, unknown>;
+                block.arguments = parsed as JsonObject;
             } catch {}
             stream.push({
               type: "toolcall_delta",
@@ -235,7 +236,7 @@ export function createPiResponseRuntime() {
               target.thinkingSignature = source.signature;
             } else if (source?.type === "tool_use" && target?.type === "toolCall") {
               target.name = source.name;
-              target.arguments = source.input as Record<string, unknown>;
+              target.arguments = source.input as JsonObject;
             }
           }
           applySdkUsage(output, event.response.message.usage, model);

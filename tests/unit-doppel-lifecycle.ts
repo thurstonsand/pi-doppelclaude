@@ -10,13 +10,13 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Options, Query, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import type {
-  Api,
-  AssistantMessageEvent,
-  Context,
-  Model,
-  Message as PiMessage,
-  SimpleStreamOptions,
+import {
+  type Api,
+  type AssistantMessageEvent,
+  type Model,
+  normalizeContext,
+  type Message as PiMessage,
+  type SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
 import { PushQueue } from "doppelclaude/query-state";
 import { projectCatalogModels } from "pi-doppelclaude/models";
@@ -109,11 +109,11 @@ function stream(
 ) {
   return runtime.stream(
     fakeModel,
-    {
+    normalizeContext({
       systemPrompt: "",
       messages: messages as PiMessage[],
       tools: [],
-    } as unknown as Context,
+    }),
     options,
   );
 }

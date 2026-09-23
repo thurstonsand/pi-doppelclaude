@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Tool as AnthropicTool } from "@anthropic-ai/sdk/resources/messages/messages";
-import type { Context, Tool } from "@earendil-works/pi-ai";
+import type { Tool } from "@earendil-works/pi-ai";
 import { MCP_TOOL_PREFIX } from "doppelclaude/skills";
 import { prepareToolDescriptions } from "doppelclaude/tool-description-relocation";
 import { buildClaudeSystemPrompt } from "pi-doppelclaude/system-prompt";
 import { mcpSignature, planTurn, resolveMcpTools } from "pi-doppelclaude/turn-plan";
 import { Type } from "typebox";
 import { bridgeModel } from "./lib/models.js";
+import { piSystemMessage } from "./lib/pi-prompt.js";
 
 const REPLACEMENTS = {
   identity: "Bridge identity.",
@@ -18,17 +19,7 @@ const REPLACEMENTS = {
   },
 };
 
-const PI_IDENTITY =
-  "You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.";
-
-const PI_PROMPT = `${PI_IDENTITY}
-
-Available tools:
-- inspect
-
-In addition to the tools above, you may have access to other custom tools depending on the project.
-
-Guidelines:`;
+const PI_MESSAGE = piSystemMessage("- inspect");
 
 function tool(description: string): Tool {
   return {
@@ -38,20 +29,11 @@ function tool(description: string): Tool {
   };
 }
 
-function context(description: string): Context {
-  return {
-    systemPrompt: PI_PROMPT,
-    messages: [],
-    tools: [tool(description)],
-  };
-}
-
 function planned(description: string, cap: number) {
-  const turnContext = context(description);
-  const tools = resolveMcpTools(turnContext, cap, undefined);
+  const tools = resolveMcpTools([tool(description)], cap, undefined);
   const plan = planTurn({
     model: bridgeModel("claude-haiku-4-5"),
-    context: turnContext,
+    piSystemMessage: PI_MESSAGE,
     options: undefined,
     providerSettings: {
       systemPromptMode: "pi",
@@ -94,7 +76,7 @@ describe("tool description relocation", () => {
 
   it("advertises an empty description and renders the full description for an oversized tool", () => {
     const description = "x".repeat(21);
-    const { mcpTools, relocations } = resolveMcpTools(context(description), 20, undefined);
+    const { mcpTools, relocations } = resolveMcpTools([tool(description)], 20, undefined);
 
     assert.equal(mcpTools[0].description, "");
     assert.equal(mcpTools[0].name, "inspect");
@@ -106,11 +88,11 @@ describe("tool description relocation", () => {
       },
     ]);
 
-    const prompt = buildClaudeSystemPrompt(PI_PROMPT, "pi", REPLACEMENTS, relocations);
+    const prompt = buildClaudeSystemPrompt(PI_MESSAGE, "pi", REPLACEMENTS, relocations);
     assert(typeof prompt === "string");
     assert.match(
       prompt,
-      /^ Bridge identity\.\n\nTool names are bridged\.\n\nAvailable tools:\n- inspect\n\n<extended_function_descriptions>\n/,
+      /^ Bridge identity\.\n\nTool names are bridged\.\n\n<tools>\n- inspect\n\n<extended_function_descriptions>\n/,
     );
     assert.doesNotMatch(prompt, /elided|Full definitions|"parameters"/);
     assert.match(
@@ -127,9 +109,8 @@ describe("tool description relocation", () => {
 
   it("passes tools at or under the cap through byte-identically", () => {
     for (const length of [19, 20]) {
-      const turnContext = context("x".repeat(length));
-      const original = turnContext.tools?.[0];
-      const resolved = resolveMcpTools(turnContext, 20, undefined);
+      const original = tool("x".repeat(length));
+      const resolved = resolveMcpTools([original], 20, undefined);
       assert.strictEqual(resolved.mcpTools[0], original);
       assert.strictEqual(resolved.originalMcpTools[0], original);
       assert.deepEqual(resolved.relocations, []);
@@ -137,9 +118,13 @@ describe("tool description relocation", () => {
   });
 
   it("prepends the block when the custom-tools anchor is absent", () => {
-    const { relocations } = resolveMcpTools(context("oversized"), 4, undefined);
+    const { relocations } = resolveMcpTools([tool("oversized")], 4, undefined);
     const prompt = buildClaudeSystemPrompt(
-      "A future prompt without the custom-tools note.",
+      {
+        role: "system",
+        content: "A future prompt without the custom-tools note.",
+        timestamp: 0,
+      },
       "pi",
       REPLACEMENTS,
       relocations,
@@ -154,10 +139,10 @@ describe("tool description relocation", () => {
   });
 
   it("carries relocations in pi, append, and claude-code prompt modes", () => {
-    const { relocations } = resolveMcpTools(context("oversized"), 4, undefined);
-    const piPrompt = buildClaudeSystemPrompt(PI_PROMPT, "pi", REPLACEMENTS, relocations);
-    const appendPrompt = buildClaudeSystemPrompt(PI_PROMPT, "append", REPLACEMENTS, relocations);
-    const claudePrompt = buildClaudeSystemPrompt(PI_PROMPT, "claude-code", undefined, relocations);
+    const { relocations } = resolveMcpTools([tool("oversized")], 4, undefined);
+    const piPrompt = buildClaudeSystemPrompt(PI_MESSAGE, "pi", REPLACEMENTS, relocations);
+    const appendPrompt = buildClaudeSystemPrompt(PI_MESSAGE, "append", REPLACEMENTS, relocations);
+    const claudePrompt = buildClaudeSystemPrompt(PI_MESSAGE, "claude-code", undefined, relocations);
 
     assert(typeof piPrompt === "string");
     assert(typeof appendPrompt !== "string");
@@ -168,7 +153,7 @@ describe("tool description relocation", () => {
       assert.ok(prompt.startsWith(" Bridge identity."));
       assert.match(
         prompt,
-        /Available tools:\n- inspect\n\n<extended_function_descriptions>[\s\S]*<\/extended_function_descriptions>\n\nIn addition to the tools above/,
+        /<tools>\n- inspect\n\n<extended_function_descriptions>[\s\S]*<\/extended_function_descriptions>\n\nIn addition to the tools above/,
       );
     }
     assert.ok(claudePrompt.append.startsWith(" <extended_function_descriptions>"));
@@ -179,7 +164,7 @@ describe("tool description relocation", () => {
   });
 
   it("wraps multiple relocated descriptions in one block", () => {
-    const prompt = buildClaudeSystemPrompt(PI_PROMPT, "pi", REPLACEMENTS, [
+    const prompt = buildClaudeSystemPrompt(PI_MESSAGE, "pi", REPLACEMENTS, [
       { name: `${MCP_TOOL_PREFIX}first`, description: "First description." },
       { name: `${MCP_TOOL_PREFIX}second`, description: "Second description." },
     ]);
@@ -217,11 +202,11 @@ describe("tool description relocation", () => {
   });
 
   it("disables relocation without changing today's plan output", () => {
-    const turnContext = context("x".repeat(30));
-    const disabled = resolveMcpTools(turnContext, false, undefined);
+    const oversized = tool("x".repeat(30));
+    const disabled = resolveMcpTools([oversized], false, undefined);
     const baseline = planTurn({
       model: bridgeModel("claude-haiku-4-5"),
-      context: turnContext,
+      piSystemMessage: PI_MESSAGE,
       options: undefined,
       providerSettings: {
         systemPromptMode: "pi",
@@ -232,7 +217,7 @@ describe("tool description relocation", () => {
     });
     const withDisabledRelocation = planTurn({
       model: bridgeModel("claude-haiku-4-5"),
-      context: turnContext,
+      piSystemMessage: PI_MESSAGE,
       options: undefined,
       providerSettings: {
         systemPromptMode: "pi",
@@ -243,7 +228,7 @@ describe("tool description relocation", () => {
       relocations: disabled.relocations,
     });
 
-    assert.strictEqual(disabled.mcpTools[0], turnContext.tools?.[0]);
+    assert.strictEqual(disabled.mcpTools[0], oversized);
     assert.deepEqual(disabled.relocations, []);
     assert.deepEqual(withDisabledRelocation, baseline);
   });

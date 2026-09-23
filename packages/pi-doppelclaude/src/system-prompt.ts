@@ -1,4 +1,5 @@
 import type { SettingSource } from "@anthropic-ai/claude-agent-sdk";
+import { getSystemMessageText, type SystemMessage } from "@earendil-works/pi-ai";
 import {
   formatRelocatedToolDescriptions,
   insertRelocatedToolDescriptions,
@@ -16,37 +17,67 @@ export function settingSourcesFor(systemPromptMode: string): SettingSource[] | u
 
 const PI_IDENTITY_PROMPT = `You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.`;
 
-const PI_DOCUMENTATION_BLOCK_REGEX =
-  /\n\nPi documentation \(read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI\):\n[\s\S]*?\n- Always read pi \.md files completely and follow links to related docs \(e\.g\., tui\.md for TUI API details\)/;
+const PI_DOCS_HEADING = `Pi documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):`;
 
-function rewritePiDocumentationBlock(
-  systemPrompt: string,
-  documentation: SystemPromptReplacements["documentation"],
-): string {
-  const match = PI_DOCUMENTATION_BLOCK_REGEX.exec(systemPrompt);
-  if (!match) return systemPrompt;
+// The docs section's paths are discovered from the running install, so they are kept as-is
+// while the prose around them is replaced.
+const PI_DOCS_PATH_PREFIXES = ["- Main documentation:", "- Additional docs:", "- Examples:"];
 
-  const pathLines = match[0]
-    .split("\n")
-    .filter(
-      (line) =>
-        line.startsWith("- Main documentation:") ||
-        line.startsWith("- Additional docs:") ||
-        line.startsWith("- Examples:"),
+/** Pi builds `tools` and `docs` in the same branch that emits its own preamble, so once the
+ *  prompt is recognised as pi's, a missing section means this pi version restructured the prompt — never
+ *  that the section was optional. Dropping the tool-name note would be silent, and leaving
+ *  docs unpatched would leak, so drift fails here instead. */
+function requireSection(sections: Record<string, string | null>, name: string): string {
+  const section = sections[name];
+  if (!section) {
+    throw new Error(
+      `doppelclaude: pi built its default system prompt without a "${name}" section, so this pi version restructured the prompt the rewrite replaces; update system-prompt.ts to match`,
     );
+  }
+  return section;
+}
 
-  return systemPrompt.replace(
-    PI_DOCUMENTATION_BLOCK_REGEX,
-    [`\n\n${documentation.heading}`, ...pathLines, ...documentation.instructions].join("\n"),
+function survivingPiWordingError(wording: string): Error {
+  return new Error(
+    `doppelclaude: pi's system prompt still contains "${wording.slice(0, 60)}…" after the rewrite, so sending it would leak the wording the rewrite exists to replace. Either this session was recorded before pi 0.87, whose stored flat system prompt pi replays ahead of the sections it builds now — start a new session to use that conversation with this pi version — or an extension forced a system prompt built from \`event.systemPrompt\`, which is pi's own prompt already rendered; have it add its wording through \`systemPromptOptions.sections\` or \`appendSystemPrompt\` instead, which the rewrite can reach`,
   );
 }
 
-function rewriteIdentityPrompt(systemPrompt: string, replacement: string): string {
-  return systemPrompt.replace(PI_IDENTITY_PROMPT, replacement);
+function rewriteDocsSection(
+  section: string,
+  documentation: SystemPromptReplacements["documentation"],
+): string {
+  // An extension can replace pi's docs section by name; its own docs carry no pi wording.
+  if (!section.includes(PI_DOCS_HEADING)) return section;
+  const pathLines = section
+    .split("\n")
+    .filter((line) => PI_DOCS_PATH_PREFIXES.some((prefix) => line.startsWith(prefix)));
+  // Pi writes all three paths unconditionally, so a missing one means it relabelled them and
+  // the replacement docs would ship without the paths they are written to introduce.
+  if (pathLines.length !== PI_DOCS_PATH_PREFIXES.length) {
+    throw new Error(
+      `doppelclaude: pi's docs section listed ${pathLines.length} of the ${PI_DOCS_PATH_PREFIXES.length} expected documentation paths, so this pi version relabelled them; update PI_DOCS_PATH_PREFIXES in system-prompt.ts to match`,
+    );
+  }
+  return [
+    "<docs>",
+    documentation.heading,
+    ...pathLines,
+    ...documentation.instructions,
+    "</docs>",
+  ].join("\n");
 }
 
-function insertToolNameNote(systemPrompt: string, replacement: string): string {
-  return systemPrompt.replace("\n\nAvailable tools:", `\n\n${replacement}\n\nAvailable tools:`);
+function replacePiSections(
+  sections: Record<string, string | null>,
+  replacements: SystemPromptReplacements,
+): Record<string, string | null> {
+  return {
+    ...sections,
+    preamble: replacements.identity,
+    tools: `${replacements.toolNameNote}\n\n${requireSection(sections, "tools")}`,
+    docs: rewriteDocsSection(requireSection(sections, "docs"), replacements.documentation),
+  };
 }
 
 export type ClaudeSystemPrompt =
@@ -57,25 +88,47 @@ export type ClaudeSystemPrompt =
       append?: string;
     };
 
-// Calls that never went through pi's agent loop — e.g. streamSimple
-// — carry a system prompt with none of pi's blocks in it.
+/** Replace the wording that identifies pi, rendering the result as prompt text.
+ *
+ *  Pi builds its prompt as named sections — an untagged `preamble` plus one `<name>…</name>`
+ *  section each — and the transcript carries them structurally, so each replacement patches
+ *  the section that owns it instead of matching the rendered text. */
 export function rewritePiSystemPrompt(
-  systemPrompt: string,
+  message: SystemMessage,
   replacements: SystemPromptReplacements,
 ): string {
-  if (!systemPrompt.includes(PI_IDENTITY_PROMPT)) return systemPrompt;
+  // Pi builds `tools`, `rules`, and `docs` only alongside its own preamble, so a prompt without
+  // them — a preamble set in settings, a forced prompt, or a call that never went through pi's
+  // agent loop, like streamSimple — has no section of pi's to replace. Recognising pi's prompt
+  // by those sections as well as by its preamble text keeps a reworded preamble from slipping
+  // past both the rewrite and the wording check below.
+  const sections = message.sections;
+  const piBuilt =
+    !!sections &&
+    (sections.preamble === PI_IDENTITY_PROMPT ||
+      ("tools" in sections && "rules" in sections && "docs" in sections));
+  if (piBuilt && sections.preamble !== PI_IDENTITY_PROMPT) {
+    throw new Error(
+      `doppelclaude: pi built its default system prompt with a preamble the rewrite does not recognise, so this pi version reworded it; update PI_IDENTITY_PROMPT in system-prompt.ts to match`,
+    );
+  }
+  const rewritten = piBuilt
+    ? getSystemMessageText({ ...message, sections: replacePiSections(sections, replacements) })
+    : getSystemMessageText(message);
 
-  return rewritePiDocumentationBlock(
-    insertToolNameNote(
-      rewriteIdentityPrompt(systemPrompt, replacements.identity),
-      replacements.toolNameNote,
-    ),
-    replacements.documentation,
-  );
+  // Sections are not the only place pi's wording can ride in. `content` carries the whole flat
+  // prompt of a session recorded before pi 0.87, and an extension that forces a prompt built
+  // from `event.systemPrompt` forces pi's own prompt already rendered — neither is reachable by
+  // replacing sections. Leaking pi's wording is the failure this rewrite exists to prevent, so
+  // every prompt is checked on the way out rather than trusted for having the expected shape.
+  for (const wording of [PI_IDENTITY_PROMPT, PI_DOCS_HEADING]) {
+    if (rewritten.includes(wording)) throw survivingPiWordingError(wording);
+  }
+  return rewritten;
 }
 
 export function buildClaudeSystemPrompt(
-  piSystemPrompt: string,
+  piSystemMessage: SystemMessage | undefined,
   mode: "claude-code" | "pi" | "append",
   replacements: SystemPromptReplacements | undefined,
   relocations: ToolDescriptionRelocation[] = [],
@@ -92,7 +145,9 @@ export function buildClaudeSystemPrompt(
     throw new Error("doppelclaude: system prompt replacements are required");
   }
 
-  const rewrittenPiPrompt = rewritePiSystemPrompt(piSystemPrompt, replacements);
+  const rewrittenPiPrompt = piSystemMessage
+    ? rewritePiSystemPrompt(piSystemMessage, replacements)
+    : "";
   const promptWithRelocations = relocationBlock
     ? insertRelocatedToolDescriptions(rewrittenPiPrompt, relocationBlock)
     : rewrittenPiPrompt;

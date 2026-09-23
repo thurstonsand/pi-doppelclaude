@@ -11,7 +11,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Query } from "@anthropic-ai/claude-agent-sdk";
-import type { Message as PiMessage } from "@earendil-works/pi-ai";
+import { normalizeContext, type Message as PiMessage } from "@earendil-works/pi-ai";
 import type { CoreResponseEvent } from "doppelclaude/core-response";
 import { Doppel } from "doppelclaude/doppel";
 import { extractAllToolResults as _extractAllToolResults } from "doppelclaude/extract-tool-results";
@@ -164,7 +164,7 @@ describe("production MCP handlers", () => {
     queryCtx.activeQuery = null;
     const stream = runtime.stream(
       bridgeModel("claude-haiku-4-5"),
-      {
+      normalizeContext({
         systemPrompt: "",
         messages: [
           {
@@ -175,7 +175,7 @@ describe("production MCP handlers", () => {
           },
         ] as unknown as PiMessage[],
         tools: [],
-      },
+      }),
       { sessionId: "host-session-id" },
     );
     const events = [];

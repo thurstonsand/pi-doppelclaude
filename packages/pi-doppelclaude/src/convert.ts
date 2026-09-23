@@ -1,10 +1,38 @@
 // Pure pi→Anthropic message conversion helpers.
 // Extracted so they can be tested without pulling in the full extension runtime.
 
-import type { Message as PiMessage } from "@earendil-works/pi-ai";
+import {
+  collapseSystemMessages,
+  getCurrentTools,
+  getInitialSystemMessage,
+  type Message as PiMessage,
+  type SystemMessage,
+  type Tool,
+  type TranscriptContext,
+  withoutInitialSystemMessage,
+} from "@earendil-works/pi-ai";
 import type { ContentBlock, Message as SessionMessage } from "cc-session-io";
 import { mapPiToolNameToSdk, sanitizeToolId } from "doppelclaude/tool-names";
 import { PROVIDER_API, PROVIDER_ID } from "./models.js";
+
+export interface PiTranscript {
+  systemMessage: SystemMessage | undefined;
+  tools: Tool[];
+  messages: PiMessage[];
+}
+
+/** Pi carries the system prompt and tool declarations inside the transcript, as a leading
+ *  system message plus any mid-conversation updates. Claude Code takes both as spawn
+ *  options and has no system role of its own, so every entry point replays them into their
+ *  current state here and converts a transcript with no system messages left in it. */
+export function readPiTranscript(context: TranscriptContext): PiTranscript {
+  const { messages } = collapseSystemMessages(context);
+  return {
+    systemMessage: getInitialSystemMessage(messages),
+    tools: getCurrentTools(messages),
+    messages: withoutInitialSystemMessage(messages),
+  };
+}
 
 // Tool results are flattened to text, which is how Claude Code stores most of
 // them. Images are the exception: they have no text form, so a result carrying

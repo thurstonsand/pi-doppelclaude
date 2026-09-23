@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Options, Query, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { Tool } from "@anthropic-ai/sdk/resources/messages/messages";
-import type { Api, Context, Model, Tool as PiTool } from "@earendil-works/pi-ai";
+import { type Api, type Model, normalizeContext } from "@earendil-works/pi-ai";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Doppel } from "doppelclaude/doppel";
@@ -84,17 +84,11 @@ describe("MCP tool dispatch", () => {
     void runtime.designateHost(sessionId);
     runtime.stream(
       fakeModel,
-      {
+      normalizeContext({
         systemPrompt: "",
-        messages: [{ role: "user", content: "read it" }],
-        tools: [
-          {
-            name: "Read",
-            description: "read a file",
-            parameters,
-          } as unknown as PiTool,
-        ],
-      } as unknown as Context,
+        messages: [{ role: "user", content: "read it", timestamp: 1 }],
+        tools: [{ name: "Read", description: "read a file", parameters }],
+      }),
       { sessionId },
     );
     await until(() => spawnedOptions !== undefined, "the Pi adapter to spawn its SDK query");

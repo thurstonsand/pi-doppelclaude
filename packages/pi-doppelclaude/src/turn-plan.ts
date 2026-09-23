@@ -6,9 +6,9 @@
 import type { Options } from "@anthropic-ai/claude-agent-sdk";
 import type {
   Api,
-  Context,
   Model,
   SimpleStreamOptions,
+  SystemMessage,
   Tool,
   ToolChoice,
 } from "@earendil-works/pi-ai";
@@ -37,7 +37,7 @@ export interface TurnTools {
  *  That makes this the single place where `toolChoice: "none"` has to be honored: every SDK
  *  request, spawned or reconciled, takes its tool set from here. */
 export function resolveMcpTools(
-  context: Context,
+  tools: Tool[],
   toolDescriptionCap: number | false,
   toolChoice: ToolChoice | undefined,
 ): TurnTools {
@@ -47,7 +47,7 @@ export function resolveMcpTools(
   const customToolNameToSdk = new Map<string, string>();
   const customToolNameToPi = new Map<string, string>();
 
-  if (toolChoice === "none" || !context.tools)
+  if (toolChoice === "none")
     return {
       mcpTools,
       originalMcpTools,
@@ -56,7 +56,7 @@ export function resolveMcpTools(
       customToolNameToPi,
     };
 
-  for (const tool of context.tools) {
+  for (const tool of tools) {
     const sdkName = `${MCP_TOOL_PREFIX}${tool.name}`;
     originalMcpTools.push(tool);
     if (descriptionExceedsCap(tool.description, toolDescriptionCap)) {
@@ -100,18 +100,18 @@ export interface TurnPlan {
 
 export function planTurn(input: {
   model: Model<Api>;
-  context: Context;
+  piSystemMessage: SystemMessage | undefined;
   options: SimpleStreamOptions | undefined;
   providerSettings: ProviderSettings;
   /** Only the host's own query outlives its turn; its CLI log is the root one. */
   oneShot: boolean;
   relocations: ToolDescriptionRelocation[];
 }): TurnPlan {
-  const { model, context, options, providerSettings, oneShot, relocations } = input;
+  const { model, piSystemMessage, options, providerSettings, oneShot, relocations } = input;
   const cwd = (options as { cwd?: string } | undefined)?.cwd ?? process.cwd();
   const systemPromptMode = providerSettings.systemPromptMode;
   const systemPrompt = buildClaudeSystemPrompt(
-    context.systemPrompt,
+    piSystemMessage,
     systemPromptMode,
     providerSettings.systemPromptReplacements,
     relocations,

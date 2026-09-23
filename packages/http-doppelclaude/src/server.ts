@@ -808,7 +808,10 @@ export function createHttpServer(options: HttpServerOptions): Server {
       const value = await readBody(request, options.maxBodyBytes ?? DEFAULT_BODY_LIMIT);
       if (shuttingDown) throw new RequestError("server is shutting down", 503);
       if (!Value.Check(RequestSchema, value)) {
-        const error = Value.Errors(RequestSchema, value)[0];
+        const errors = Value.Errors(RequestSchema, value);
+        // An unknown property is reported twice: against the `false` subschema it landed on,
+        // which names nothing, and against the parent object, which names the key.
+        const error = errors.find((candidate) => candidate.keyword !== "boolean") ?? errors[0];
         throw new RequestError(
           error
             ? `schema validation failed at ${error.instancePath || "/"}: ${error.message}; params=${JSON.stringify(error.params)}`

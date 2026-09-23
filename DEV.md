@@ -38,6 +38,7 @@ mise run test:usage                                 # on-demand A/B subscription
 - `tests/int-rejection-smoke.ts` depends on the model misbehaving on request.
 - Do not change production types to make tests easier; mock the real type instead.
 - Shell tests share helpers in `tests/lib/`.
+- Manual live verification of pi and the HTTP frontend lives in SMOKE.md.
 
 ## Code style
 

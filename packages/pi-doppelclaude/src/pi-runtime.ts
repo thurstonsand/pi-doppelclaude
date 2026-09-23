@@ -2,15 +2,15 @@ import type { Options, Query, SDKUserMessage } from "@anthropic-ai/claude-agent-
 import type {
   Api,
   AssistantMessageEventStream,
-  Context,
   Model,
   SimpleStreamOptions,
+  TranscriptContext,
 } from "@earendil-works/pi-ai";
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { createBridgeRuntime } from "doppelclaude/bridge-runtime";
 import type { RefusalEntryData } from "doppelclaude/refusal-data";
 import type { BridgeSessionStore } from "doppelclaude/session-store";
-import { convertPiMessages } from "./convert.js";
+import { convertPiMessages, readPiTranscript } from "./convert.js";
 import type { BridgeModelCatalog } from "./model-catalog.js";
 import { createPiResponseRuntime } from "./pi-response.js";
 import type { ProviderSettings } from "./settings.js";
@@ -48,19 +48,20 @@ export function createPiBridgeRuntime(dependencies: PiBridgeRuntimeDependencies)
 
   function stream(
     model: Model<Api>,
-    context: Context,
+    context: TranscriptContext,
     options?: SimpleStreamOptions,
     explicitReplay = false,
   ): AssistantMessageEventStream {
     models.set(model.id, model);
+    const transcript = readPiTranscript(context);
     const toolCap = dependencies.getToolDescriptionCap?.() ?? false;
-    const turnTools = resolveMcpTools(context, toolCap, options?.toolChoice);
-    const nativeMessages = convertPiMessages(context.messages, turnTools.customToolNameToSdk)
+    const turnTools = resolveMcpTools(transcript.tools, toolCap, options?.toolChoice);
+    const nativeMessages = convertPiMessages(transcript.messages, turnTools.customToolNameToSdk)
       .anthropicMessages as import("@anthropic-ai/sdk/resources/messages/messages").MessageParam[];
     const persistent = Boolean(options?.sessionId);
     const plan = planTurn({
       model,
-      context,
+      piSystemMessage: transcript.systemMessage,
       options,
       providerSettings: dependencies.providerSettings,
       oneShot: !persistent,
@@ -103,9 +104,9 @@ export function createPiBridgeRuntime(dependencies: PiBridgeRuntimeDependencies)
   }
 
   return {
-    stream: (model: Model<Api>, context: Context, options?: SimpleStreamOptions) =>
+    stream: (model: Model<Api>, context: TranscriptContext, options?: SimpleStreamOptions) =>
       stream(model, context, options),
-    replay: (model: Model<Api>, context: Context, options?: SimpleStreamOptions) =>
+    replay: (model: Model<Api>, context: TranscriptContext, options?: SimpleStreamOptions) =>
       stream(model, context, options, true),
     setHost(next: BridgeHost | null) {
       host = next;

@@ -8,14 +8,14 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { McpServerConfig, Options, Query, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import type {
-  Api,
-  AssistantMessageEvent,
-  Context,
-  Model,
-  Message as PiMessage,
-  SimpleStreamOptions,
-  Tool,
+import {
+  type Api,
+  type AssistantMessageEvent,
+  type Model,
+  normalizeContext,
+  type Message as PiMessage,
+  type SimpleStreamOptions,
+  type Tool,
 } from "@earendil-works/pi-ai";
 import { PushQueue } from "doppelclaude/query-state";
 import { MCP_SERVER_NAME } from "doppelclaude/skills";
@@ -100,11 +100,11 @@ function stream(
 ) {
   return runtime.stream(
     fakeModel,
-    {
+    normalizeContext({
       systemPrompt: "",
       messages: messages as PiMessage[],
       tools: [piTool],
-    } as unknown as Context,
+    }),
     options,
   );
 }

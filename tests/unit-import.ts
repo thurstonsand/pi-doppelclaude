@@ -5,12 +5,19 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Query, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import type { Api, Context, Model, Message as PiMessage } from "@earendil-works/pi-ai";
+import {
+  type Api,
+  type Context,
+  type Model,
+  normalizeContext,
+  type Message as PiMessage,
+} from "@earendil-works/pi-ai";
 import type { ContentBlock, Message as SessionMessage } from "cc-session-io";
 import { mapPiToolNameToSdk, mapSdkToolNameToPi } from "doppelclaude/tool-names";
 import { convertPiMessages } from "pi-doppelclaude/convert";
 import { projectCatalogModels } from "pi-doppelclaude/models";
 import { createPiBridgeRuntime as createBridgeRuntime } from "pi-doppelclaude/pi-runtime";
+import { Type } from "typebox";
 import { record } from "./lib/turns.js";
 
 // Narrow a converted message's content to its block array. The converter returns
@@ -172,28 +179,47 @@ describe("runtime rebuild tool names", () => {
       },
     });
     void runtime.designateHost("host");
-    const context = {
+    const context: Context = {
       systemPrompt: "",
       tools: [
         {
           name: "LookUp",
           description: "Look something up",
-          parameters: { type: "object", properties: {} },
-          execute: async () => ({ content: [] as Array<{ type: "text"; text: string }> }),
+          parameters: Type.Object({}),
         },
       ],
       messages: [
-        { role: "user", content: "use it" },
+        { role: "user", content: "use it", timestamp: 1 },
         {
           role: "assistant",
           content: [{ type: "toolCall", id: "call.1", name: piName, arguments: {} }],
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: "toolUse",
+          timestamp: 2,
         },
-        { role: "toolResult", toolCallId: "call.1", toolName: piName, content: "done" },
-        { role: "user", content: "continue" },
+        {
+          role: "toolResult",
+          toolCallId: "call.1",
+          toolName: piName,
+          content: [{ type: "text", text: "done" }],
+          isError: false,
+          timestamp: 3,
+        },
+        { role: "user", content: "continue", timestamp: 4 },
       ],
-    } as unknown as Context;
+    };
 
-    await record(runtime.stream(model, context, { sessionId: "guest" })).done;
+    await record(runtime.stream(model, normalizeContext(context), { sessionId: "guest" })).done;
     assert.ok(loaded, "query did not load the rebuilt transcript");
     const entries = (await loaded) as Array<{ message?: { content?: ContentBlock[] } }>;
     const toolUse = entries

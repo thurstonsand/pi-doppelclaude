@@ -7,13 +7,13 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Query, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import type {
-  Api,
-  AssistantMessageEvent,
-  Context,
-  Model,
-  Message as PiMessage,
-  Tool,
+import {
+  type Api,
+  type AssistantMessageEvent,
+  type Model,
+  normalizeContext,
+  type Message as PiMessage,
+  type Tool,
 } from "@earendil-works/pi-ai";
 import { PushQueue } from "doppelclaude/query-state";
 import { projectCatalogModels } from "pi-doppelclaude/models";
@@ -89,11 +89,11 @@ function makeHarness() {
 function stream(runtime: ReturnType<typeof makeHarness>["runtime"], messages: unknown[]) {
   return runtime.stream(
     fakeModel,
-    {
+    normalizeContext({
       systemPrompt: "",
       messages: messages as PiMessage[],
       tools: [bashTool],
-    } as Context,
+    }),
     { sessionId: HOST_SESSION },
   );
 }
@@ -385,11 +385,11 @@ describe("Claude Code-rejected tool calls", () => {
     const aborted = record(
       runtime.stream(
         fakeModel,
-        {
+        normalizeContext({
           systemPrompt: "",
           messages: prompt as PiMessage[],
           tools: [bashTool],
-        } as Context,
+        }),
         { sessionId: HOST_SESSION, signal: abort.signal },
       ),
     );

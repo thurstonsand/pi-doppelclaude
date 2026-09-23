@@ -10,11 +10,12 @@ import {
   type Api,
   type AssistantMessage,
   type AssistantMessageEventStream,
-  type Context,
   createAssistantMessageEventStream,
   type Model,
+  type Message as PiMessage,
   type RetryPolicy,
   type SimpleStreamOptions,
+  type TranscriptContext,
 } from "@earendil-works/pi-ai";
 import {
   type CompactionEntry,
@@ -27,7 +28,7 @@ import { errorMessage } from "doppelclaude/errors";
 import { sdkChildEnv } from "doppelclaude/sdk-child-env";
 import { logServedContextWindow, resultErrorText } from "doppelclaude/sdk-result";
 import type { SdkUsage } from "doppelclaude/sdk-usage";
-import { messageContentToText } from "./convert.js";
+import { messageContentToText, readPiTranscript } from "./convert.js";
 import { claudeCodeModelId } from "./models.js";
 import { applySdkUsage, debugSdkUsage } from "./pi-usage.js";
 import type { ProviderSettings } from "./settings.js";
@@ -70,7 +71,7 @@ function newAssistantOutput(
   };
 }
 
-function extractIsolatedSummaryPrompt(messages: Context["messages"]): string {
+function extractIsolatedSummaryPrompt(messages: PiMessage[]): string {
   if (messages.length !== 1 || messages[0].role !== "user") {
     throw new Error(
       `isolatedStreamFn: expected exactly 1 user message, got ${messages.length} ` +
@@ -115,7 +116,7 @@ export function createCompaction(dependencies: CompactionDependencies) {
 
   async function runIsolatedSummary(
     model: Model<Api>,
-    context: Context,
+    context: TranscriptContext,
     options: SimpleStreamOptions | undefined,
     stream: AssistantMessageEventStream,
     cwd: string,
@@ -131,7 +132,8 @@ export function createCompaction(dependencies: CompactionDependencies) {
     };
 
     try {
-      const promptText = extractIsolatedSummaryPrompt(context.messages);
+      const transcript = readPiTranscript(context);
+      const promptText = extractIsolatedSummaryPrompt(transcript.messages);
       const compactProviderSettings = loadProviderSettings(cwd);
       const compactSystemPromptMode = compactProviderSettings.systemPromptMode;
       const compactSettingSources = settingSourcesFor(compactSystemPromptMode);
@@ -152,7 +154,7 @@ export function createCompaction(dependencies: CompactionDependencies) {
           skills: [],
           persistSession: false,
           systemPrompt: buildClaudeSystemPrompt(
-            context.systemPrompt,
+            transcript.systemMessage,
             compactSystemPromptMode,
             compactProviderSettings.systemPromptReplacements,
           ),
@@ -255,7 +257,7 @@ export function createCompaction(dependencies: CompactionDependencies) {
     );
     const isolatedStreamFn = (
       model: Model<Api>,
-      context: Context,
+      context: TranscriptContext,
       options?: SimpleStreamOptions,
     ): AssistantMessageEventStream => {
       const stream = createAssistantMessageEventStream();

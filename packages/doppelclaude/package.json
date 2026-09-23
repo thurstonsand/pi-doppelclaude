@@ -34,6 +34,6 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "cc-session-io": "^0.4.0",
     "partial-json": "0.1.7",
-    "typebox": "1.3.7"
+    "typebox": "1.3.27"
   }
 }

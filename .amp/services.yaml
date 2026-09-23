@@ -1,0 +1,13 @@
+services:
+  doppelclaude-http:
+    command: >-
+      mise run build &&
+      mkdir -p .test-output/http-state &&
+      { [ -s .test-output/http-state/api-key ] || (umask 177 && openssl rand -hex 32 > .test-output/http-state/api-key); } &&
+      DOPPELCLAUDE_HTTP_API_KEY_FILE="$PWD/.test-output/http-state/api-key"
+      DOPPELCLAUDE_STATE_DIR="$PWD/.test-output/http-state"
+      exec node packages/http-doppelclaude/dist/cli.js
+    review: false
+    portal:
+      title: doppelclaude HTTP
+      description: Messages API. Send x-api-key from .test-output/http-state/api-key.

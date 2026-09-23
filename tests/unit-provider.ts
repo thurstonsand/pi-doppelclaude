@@ -6,9 +6,9 @@ import { afterEach, describe, it } from "node:test";
 import {
   type Api,
   type AssistantMessage,
-  type Context,
   createAssistantMessageEventStream,
   type Model,
+  normalizeContext,
   type RefreshModelsContext,
   type SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
@@ -26,7 +26,9 @@ import { createAnthropicAgentSdkProvider } from "pi-doppelclaude/provider";
 import { required } from "./lib/expect.js";
 import { bridgeModel } from "./lib/models.js";
 
-const context: Context = { messages: [{ role: "user", content: "test", timestamp: 1 }] };
+const context = normalizeContext({
+  messages: [{ role: "user", content: "test", timestamp: 1 }],
+});
 const authInput = {
   ctx: {
     env: async (): Promise<string | undefined> => undefined,

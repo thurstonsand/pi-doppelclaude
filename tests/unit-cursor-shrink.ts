@@ -11,12 +11,12 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Query, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import type {
-  Api,
-  Context,
-  Model,
-  Message as PiMessage,
-  SimpleStreamOptions,
+import {
+  type Api,
+  type Model,
+  normalizeContext,
+  type Message as PiMessage,
+  type SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
 import { planSessionSync } from "doppelclaude/doppel";
 import { PushQueue } from "doppelclaude/query-state";
@@ -95,7 +95,7 @@ function answer(text: string): SDKMessage[] {
 function stream(runtime: ReturnType<typeof makeRuntime>, messages: unknown[]) {
   return runtime.stream(
     fakeModel,
-    { systemPrompt: "", messages: messages as PiMessage[], tools: [] } as unknown as Context,
+    normalizeContext({ systemPrompt: "", messages: messages as PiMessage[], tools: [] }),
     { sessionId: HOST_SESSION } as SimpleStreamOptions,
   );
 }

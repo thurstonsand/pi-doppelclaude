@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
-import type { AssistantMessage, AssistantMessageEvent, Context } from "@earendil-works/pi-ai";
+import {
+  type AssistantMessage,
+  type AssistantMessageEvent,
+  normalizeContext,
+} from "@earendil-works/pi-ai";
 import { BridgeSessionStore, type SessionStoreWriter } from "doppelclaude/session-store";
 import { createPiBridgeRuntime as createBridgeRuntime } from "pi-doppelclaude/pi-runtime";
 import { bridgeModel } from "./lib/models.js";
@@ -47,7 +51,10 @@ const streamOptions = { sessionId: PI_SESSION_ID };
 const firstUser = { role: "user", content: "Reply only FIRST.", timestamp: Date.now() } as const;
 
 try {
-  const firstContext: Context = { systemPrompt: "You are concise.", messages: [firstUser] };
+  const firstContext = normalizeContext({
+    systemPrompt: "You are concise.",
+    messages: [firstUser],
+  });
   const failed = await terminalMessage(runtime.stream(model, firstContext, streamOptions));
   assert.equal(failed.stopReason, "error");
   assert.match(failed.errorMessage ?? "", /transcript mirror failed.*deliberate mirror failure/i);
@@ -64,10 +71,10 @@ try {
     content: "Reply only MIRROR_RECOVERED.",
     timestamp: Date.now() + 1,
   } as const;
-  const secondContext: Context = {
+  const secondContext = normalizeContext({
     systemPrompt: "You are concise.",
     messages: [firstUser, failed, secondUser],
-  };
+  });
   const recovered = await terminalMessage(runtime.stream(model, secondContext, streamOptions));
   assert.equal(recovered.stopReason, "stop");
   assert.match(

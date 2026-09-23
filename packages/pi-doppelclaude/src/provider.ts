@@ -1,12 +1,12 @@
 import {
   type Api,
   type AssistantMessageEventStream,
-  type Context,
   lazyStream,
   type Model,
   type Provider,
   type SimpleStreamOptions,
   type ThinkingLevel,
+  type TranscriptContext,
 } from "@earendil-works/pi-ai";
 import type { AccountProbe, AccountSnapshot } from "./account-probe.js";
 import { type BridgeModelCatalog, createBridgeModelCatalog } from "./model-catalog.js";
@@ -23,7 +23,7 @@ import {
 interface ProviderDependencies {
   stream(
     model: BridgeModel,
-    context: Context,
+    context: TranscriptContext,
     options?: SimpleStreamOptions,
   ): AssistantMessageEventStream;
   accountProbe: AccountProbe;
@@ -85,7 +85,7 @@ export function createAnthropicAgentSdkProvider(
 
   const validatedStream = (
     model: Model<Api>,
-    context: Context,
+    context: TranscriptContext,
     options: SimpleStreamOptions | undefined,
   ): AssistantMessageEventStream => {
     if (!isSupportedModel(model)) {

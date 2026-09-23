@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
-import type { AssistantMessage, AssistantMessageEvent, Context } from "@earendil-works/pi-ai";
+import {
+  type AssistantMessage,
+  type AssistantMessageEvent,
+  normalizeContext,
+} from "@earendil-works/pi-ai";
 import { BridgeSessionStore, type SessionStoreWriter } from "doppelclaude/session-store";
 import { createPiBridgeRuntime as createBridgeRuntime } from "pi-doppelclaude/pi-runtime";
 import { bridgeModel } from "./lib/models.js";
@@ -56,10 +60,10 @@ const runtime = createBridgeRuntime({
 });
 const PI_SESSION_ID = "session-store-barriers";
 await runtime.designateHost(PI_SESSION_ID);
-const context: Context = {
+const context = normalizeContext({
   systemPrompt: "You are concise.",
   messages: [{ role: "user", content: "Reply only BARRIER_OK.", timestamp: Date.now() }],
-};
+});
 
 try {
   let terminal = false;

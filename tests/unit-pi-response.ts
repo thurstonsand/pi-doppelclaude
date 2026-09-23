@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Query, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import type { Api, Context, Model } from "@earendil-works/pi-ai";
+import { type Api, type Model, normalizeContext } from "@earendil-works/pi-ai";
 import { createCoreResponse } from "doppelclaude/core-response";
 import { PushQueue } from "doppelclaude/query-state";
 import { projectCatalogModels } from "pi-doppelclaude/models";
@@ -221,11 +221,14 @@ describe("Pi response projection", () => {
       queryFactory: () => sdkQuery(messages),
     });
     const events = await collect(
-      runtime.stream(model, {
-        systemPrompt: "",
-        messages: [{ role: "user", content: "hi" }],
-        tools: [],
-      } as Context),
+      runtime.stream(
+        model,
+        normalizeContext({
+          systemPrompt: "",
+          messages: [{ role: "user", content: "hi", timestamp: 1 }],
+          tools: [],
+        }),
+      ),
     );
     const done = events.at(-1);
     assert.equal(done?.type, "done");
@@ -259,11 +262,14 @@ describe("Pi response projection", () => {
       queryFactory: () => sdkQuery(messages),
     });
     const events = await collect(
-      runtime.stream(model, {
-        systemPrompt: "",
-        messages: [{ role: "user", content: "hi" }],
-        tools: [],
-      } as Context),
+      runtime.stream(
+        model,
+        normalizeContext({
+          systemPrompt: "",
+          messages: [{ role: "user", content: "hi", timestamp: 1 }],
+          tools: [],
+        }),
+      ),
     );
     assert.deepEqual(
       events.map((event) => event.type),
