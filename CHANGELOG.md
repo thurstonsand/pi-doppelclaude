@@ -2,6 +2,17 @@
 
 # Changelog
 
+## 0.12.2 — 2026-09-23
+
+### Changed
+
+- Bump to pi 0.87.1
+- System prompt replacement targets pi's sections, not its text. pi now publishes its system message as named sections (`preamble`, `tools`, `docs`, …), so each replacement now applies to the section that owns it and the result renders through pi's own `getSystemMessageText`.
+
+### Fixed
+
+- pi reworded its system prompt, so two of the three passages were no longer getting replaced. Updated wording to match the new prompt.
+
 ## 0.12.1 — 2026-09-23
 
 ### Added
