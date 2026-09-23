@@ -356,7 +356,7 @@ function extractThread(system: ApiRequest["system"]): {
   }
   if (depth !== 0) wrappersMalformed = true;
   outside.push(prompt.slice(outsideStart));
-  const markerText = outside.join("");
+  const markerText = wrappersMalformed ? prompt : outside.join("");
   let threadId: string | null = null;
   let markerCount = 0;
   for (const match of markerText.matchAll(THREAD_LINE)) {
@@ -369,7 +369,7 @@ function extractThread(system: ApiRequest["system"]): {
     threadId: markerCount === 1 ? threadId : null,
     prompt,
     markerCount,
-    malformed: wrappersMalformed || labelCount !== markerCount,
+    malformed: labelCount !== markerCount,
   };
 }
 

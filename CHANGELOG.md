@@ -2,6 +2,22 @@
 
 # Changelog
 
+## 0.12.1 — 2026-09-23
+
+### Added
+
+- **Inspect the SDK model catalog** — authenticated `GET /v1/sdk-models` reports exact SDK model IDs, display names, current bridge alias targets, SDK version, and snapshot time.
+- **Sonnet alias** — HTTP requests can use `sonnet`, resolved from the SDK catalog at startup alongside `opus` and `fable`.
+- **Multi-architecture container images** — published HTTP frontend images support Linux amd64 and arm64.
+
+### Changed
+
+- **Opus 5.5 support** — update the Agent SDK to 0.3.280, whose `opus` alias resolves to `claude-opus-5-5`.
+
+### Fixed
+
+- **Instruction examples no longer break Amp thread identification** — ignore balanced `<instructions>...</instructions>` regions when finding the thread marker. Unbalanced wrappers fall back to validating the full prompt; malformed or duplicate markers still return 400.
+
 ## 0.12.0 — 2026-09-22
 
 ### Added

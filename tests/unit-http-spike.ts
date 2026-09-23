@@ -357,7 +357,7 @@ describe("native HTTP frontend", () => {
     }
   });
 
-  it("rejects unbalanced wrappers and invalid external declarations", async () => {
+  it("falls back to the full prompt for unbalanced instruction wrappers", async () => {
     const app = await harness();
     const anonymous = (system: string) => ({
       model: "claude-haiku-4-5",
@@ -366,9 +366,44 @@ describe("native HTTP frontend", () => {
       system,
       messages: [{ role: "user", content: "go" }],
     });
+    const keyedPrompts = [
+      `<instructions>unfinished example\nAmp Thread URL: https://ampcode.com/threads/${A}`,
+      `unfinished example</instructions>\nAmp Thread URL: https://ampcode.com/threads/${A}`,
+    ];
+    const anonymousPrompts = ["<instructions>example only", "example only</instructions>"];
+    try {
+      for (const system of keyedPrompts) {
+        const response = await app.post({ ...body(A), system });
+        assert.equal(response.status, 200, await response.text());
+      }
+      for (const system of anonymousPrompts) {
+        const response = await app.post(anonymous(system));
+        assert.equal(response.status, 200, await response.text());
+      }
+      assert.deepEqual(
+        app.requests.get(A)?.map((request) => request.systemPrompt),
+        keyedPrompts,
+      );
+      const anonymousRequests = [...app.requests.entries()]
+        .filter(([key]) => key.startsWith("anonymous:"))
+        .flatMap(([, requests]) => requests.map((request) => request.systemPrompt));
+      assert.deepEqual(anonymousRequests, anonymousPrompts);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("validates all labels when unbalanced wrappers disable instruction filtering", async () => {
+    const app = await harness();
     const invalid = [
-      anonymous("<instructions>example only"),
-      anonymous("example only</instructions>"),
+      {
+        ...body(A),
+        system: `<instructions>Amp Thread URL: https://ampcode.com/threads/${B}</instructions>\nAmp Thread URL: https://ampcode.com/threads/${A}\n<instructions>unfinished`,
+      },
+      {
+        ...body(A),
+        system: `<instructions>Amp Thread URL: https://ampcode.com/threads/${B}</instructions>\n<instructions>Amp Thread URL: malformed`,
+      },
       {
         ...body(A),
         system: `<instructions>Amp Thread URL: https://ampcode.com/threads/${B}</instructions>\nAmp Thread URL: malformed`,
