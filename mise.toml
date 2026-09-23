@@ -50,7 +50,7 @@ run = "shellcheck -x -P SCRIPTDIR .agents/setup .agents/resume scripts/*.sh test
 description = "Run Renovate"
 run = "PATH=\"{{ tools.node.path }}/bin:$PATH\" renovate"
 tools.node = "24"
-tools."npm:renovate" = { version = "44.29.4", allow_builds = [
+tools."npm:renovate" = { version = "44.108.2", allow_builds = [
   "re2",
 ], trust_policy_excludes = [
   "@yarnpkg/libzip@3.2.2",
@@ -60,7 +60,7 @@ tools."npm:renovate" = { version = "44.29.4", allow_builds = [
 description = "Validate Renovate configuration"
 run = "PATH=\"{{ tools.node.path }}/bin:$PATH\" renovate-config-validator renovate.json"
 tools.node = "24"
-tools."npm:renovate" = { version = "44.29.4", allow_builds = [
+tools."npm:renovate" = { version = "44.108.2", allow_builds = [
   "re2",
 ], trust_policy_excludes = [
   "@yarnpkg/libzip@3.2.2",
