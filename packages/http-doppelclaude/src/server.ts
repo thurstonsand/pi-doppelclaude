@@ -1,10 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { isIP } from "node:net";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 import { type ModelInfo, query } from "@anthropic-ai/claude-agent-sdk";
 import type { MessageParam, Tool } from "@anthropic-ai/sdk/resources/messages/messages";
 import {
@@ -208,7 +210,26 @@ export interface HttpModel {
 }
 
 const STABLE_CLAUDE_MODEL = /^claude-[a-z][a-z0-9]*-\d+(?:-\d+)*$/u;
-const REQUEST_MODEL_ALIASES = ["opus", "fable"];
+const REQUEST_MODEL_ALIASES = ["opus", "fable", "sonnet"];
+
+function installedSdkVersion(): string {
+  let directory = dirname(fileURLToPath(import.meta.resolve("@anthropic-ai/claude-agent-sdk")));
+  for (;;) {
+    const manifest = join(directory, "package.json");
+    try {
+      const value = JSON.parse(readFileSync(manifest, "utf8")) as {
+        name?: string;
+        version?: string;
+      };
+      if (value.name === "@anthropic-ai/claude-agent-sdk" && value.version) return value.version;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    const parent = dirname(directory);
+    if (parent === directory) throw new Error("could not locate Claude Agent SDK package.json");
+    directory = parent;
+  }
+}
 
 function snapshotModelAliases(models: readonly ModelInfo[]): Map<string, string> {
   const aliases = new Map<string, string>();
@@ -308,16 +329,47 @@ function extractThread(system: ApiRequest["system"]): {
   malformed: boolean;
 } {
   const texts = typeof system === "string" ? [system] : (system ?? []).map((block) => block.text);
-  const matches = texts.flatMap((text) => [...text.matchAll(THREAD_LINE)].map((match) => match[1]));
-  const labelCount = texts.reduce(
-    (count, text) => count + (text.match(/Amp Thread URL:/g)?.length ?? 0),
-    0,
-  );
+  const prompt = texts.join("\n");
+  const outside: string[] = [];
+  let outsideStart = 0;
+  let depth = 0;
+  let regionStart = -1;
+  let wrappersMalformed = false;
+  for (const tag of prompt.matchAll(/<\/?instructions>/g)) {
+    const index = tag.index;
+    if (tag[0] === "<instructions>") {
+      if (depth === 0) regionStart = index;
+      depth += 1;
+    } else if (depth === 0) {
+      wrappersMalformed = true;
+    } else {
+      depth -= 1;
+      if (depth === 0) {
+        const regionEnd = index + tag[0].length;
+        outside.push(
+          prompt.slice(outsideStart, regionStart),
+          prompt.slice(regionStart, regionEnd).replace(/[^\r\n\u2028\u2029]+/gu, " "),
+        );
+        outsideStart = regionEnd;
+      }
+    }
+  }
+  if (depth !== 0) wrappersMalformed = true;
+  outside.push(prompt.slice(outsideStart));
+  const markerText = outside.join("");
+  let threadId: string | null = null;
+  let markerCount = 0;
+  for (const match of markerText.matchAll(THREAD_LINE)) {
+    markerCount += 1;
+    if (markerCount === 1) threadId = match[1];
+  }
+  let labelCount = 0;
+  for (const _match of markerText.matchAll(/Amp Thread URL:/g)) labelCount += 1;
   return {
-    threadId: matches.length === 1 ? matches[0] : null,
-    prompt: texts.join("\n"),
-    markerCount: matches.length,
-    malformed: labelCount !== matches.length,
+    threadId: markerCount === 1 ? threadId : null,
+    prompt,
+    markerCount,
+    malformed: wrappersMalformed || labelCount !== markerCount,
   };
 }
 
@@ -604,8 +656,9 @@ async function readBody(request: IncomingMessage, limit: number): Promise<unknow
 
 export function createHttpServer(options: HttpServerOptions): Server {
   if (!options.apiKey.trim()) throw new Error("HTTP spike API key must not be blank");
-  const catalog = projectHttpModels(options.supportedModels);
-  const modelAliases = snapshotModelAliases(options.supportedModels);
+  const startupModels = options.supportedModels.map((model) => ({ ...model }));
+  const catalog = projectHttpModels(startupModels);
+  const modelAliases = snapshotModelAliases(startupModels);
   const stateDir = options.stateDir ?? join(homedir(), ".local/state/doppelclaude");
   if (!stateDir.trim()) throw new Error("state directory must not be blank");
   const states = new Map<string, ThreadState>();
@@ -613,6 +666,16 @@ export function createHttpServer(options: HttpServerOptions): Server {
   const pending = new Set<string>();
   const aborts = new Set<AbortController>();
   const now = options.now ?? Date.now;
+  const catalogSnapshot = {
+    sdkVersion: installedSdkVersion(),
+    capturedAt: new Date(now()).toISOString(),
+    models: startupModels.map((model) => ({
+      value: model.value,
+      resolvedModel: model.resolvedModel ?? null,
+      displayName: model.displayName,
+    })),
+    aliases: Object.fromEntries(modelAliases),
+  };
   const log =
     options.log ??
     ((record: Record<string, unknown>) => process.stderr.write(`${JSON.stringify(record)}\n`));
@@ -703,6 +766,14 @@ export function createHttpServer(options: HttpServerOptions): Server {
       typeof request.headers["x-api-key"] === "string" ? request.headers["x-api-key"] : bearer;
     if (supplied !== options.apiKey) {
       errorResponse(response, 401, "invalid API key");
+      return;
+    }
+    if (request.url === "/v1/sdk-models" && request.method === "GET") {
+      response.writeHead(200, {
+        "content-type": "application/json",
+        "cache-control": "no-store",
+      });
+      response.end(JSON.stringify(catalogSnapshot));
       return;
     }
     if (request.url === "/v1/models" && request.method === "GET") {

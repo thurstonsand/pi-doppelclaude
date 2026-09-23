@@ -141,6 +141,71 @@ describe("HTTP daemon lifecycle", () => {
     const [code] = await Promise.race([exited, timeout]);
     assert.equal(code, 0);
   });
+
+  it("parses a near-limit tag-dense prompt within a constrained heap", async () => {
+    const source = `
+      import assert from "node:assert/strict";
+      import { once } from "node:events";
+      import { createHttpServer } from "./packages/http-doppelclaude/src/server.ts";
+      const thread = "${thread}";
+      let allocations = 0;
+      let seenPrompt;
+      const server = createHttpServer({
+        apiKey: "${key}",
+        supportedModels: [],
+        createRuntime() {
+          allocations += 1;
+          return {
+            turn(request) {
+              seenPrompt = request.systemPrompt;
+              throw new Error("accepted");
+            },
+            clear: async () => {},
+            designateHost: async () => {},
+            markRebuild: async () => {},
+          };
+        },
+      });
+      server.listen(0, "127.0.0.1");
+      await once(server, "listening");
+      const address = server.address();
+      assert.ok(address && typeof address !== "string");
+      const post = (system) => fetch("http://127.0.0.1:" + address.port + "/v1/messages", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-api-key": "${key}" },
+        body: JSON.stringify({
+          model: "${model}", max_tokens: 20, stream: true, system,
+          messages: [{ role: "user", content: "go" }],
+        }),
+      });
+      const count = 600_000;
+      const region = "<instructions>".repeat(count) + "x".repeat(12_000_000) + "</instructions>".repeat(count);
+      const marker = "Amp Thread URL: https://ampcode.com/threads/" + thread;
+      const prompt = region + "\\n" + marker;
+      const accepted = await post(prompt);
+      await accepted.text();
+      assert.equal(allocations, 1);
+      assert.equal(seenPrompt, prompt);
+      const rejected = await post(region + "\\n" + marker + "\\n" + marker);
+      assert.equal(rejected.status, 400);
+      await rejected.text();
+      assert.equal(allocations, 1);
+      await new Promise((resolve) => server.close(resolve));
+    `;
+    const child = spawn(
+      process.execPath,
+      ["--max-old-space-size=256", "--import", "tsx", "--input-type=module", "-e", source],
+      { cwd: process.cwd(), stdio: "pipe" },
+    );
+    let stderr = "";
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    const [code, signal] = await once(child, "exit");
+    assert.equal(signal, null, stderr);
+    assert.equal(code, 0, stderr);
+  });
 });
 
 describe("HTTP daemon configuration", () => {

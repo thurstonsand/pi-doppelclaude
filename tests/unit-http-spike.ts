@@ -174,6 +174,89 @@ async function harness(supportedModels: readonly ModelInfo[] = []) {
 }
 
 describe("native HTTP frontend", () => {
+  it("serves a frozen raw SDK catalog with normal authentication", async () => {
+    const capturedAt = Date.UTC(2026, 8, 23, 12, 34, 56);
+    let allocations = 0;
+    const supportedModels = [
+      {
+        value: "sonnet",
+        resolvedModel: "claude-sonnet-4-20250514",
+        displayName: "Sonnet alias",
+        description: "not public",
+        account: { email: "not-public@example.com" },
+      },
+      {
+        value: "claude-sonnet-5-20260901",
+        displayName: "Dated Sonnet",
+        description: "also not public",
+      },
+      {
+        value: "claude-sonnet-6-20270901",
+        displayName: "Another candidate",
+        description: "also not public",
+      },
+    ] as ModelInfo[];
+    const server = createHttpServer({
+      apiKey: KEY,
+      supportedModels,
+      now: () => capturedAt,
+      createRuntime() {
+        allocations++;
+        throw new Error("catalog GET must not allocate a runtime");
+      },
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    const base = `http://127.0.0.1:${address.port}`;
+    const call = (path: string, key?: string, method = "GET") =>
+      fetch(`${base}${path}`, {
+        method,
+        headers: key === undefined ? {} : { "x-api-key": key },
+      });
+    supportedModels[0].resolvedModel = "claude-sonnet-9-20990101";
+    supportedModels[1].value = "mutated";
+    try {
+      const response = await call("/v1/sdk-models", KEY);
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get("cache-control"), "no-store");
+      const sdkVersion = JSON.parse(
+        await (await import("node:fs/promises")).readFile(
+          new URL("../node_modules/@anthropic-ai/claude-agent-sdk/package.json", import.meta.url),
+          "utf8",
+        ),
+      ).version;
+      assert.deepEqual(await response.json(), {
+        sdkVersion,
+        capturedAt: "2026-09-23T12:34:56.000Z",
+        models: [
+          {
+            value: "sonnet",
+            resolvedModel: "claude-sonnet-4-20250514",
+            displayName: "Sonnet alias",
+          },
+          {
+            value: "claude-sonnet-5-20260901",
+            resolvedModel: null,
+            displayName: "Dated Sonnet",
+          },
+          {
+            value: "claude-sonnet-6-20270901",
+            resolvedModel: null,
+            displayName: "Another candidate",
+          },
+        ],
+        aliases: { sonnet: "claude-sonnet-4-20250514" },
+      });
+      assert.equal((await call("/v1/sdk-models")).status, 401);
+      assert.equal((await call("/v1/sdk-models", "wrong")).status, 401);
+      assert.equal(allocations, 0);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   it("projects resolved catalog models, filters aliases, and deduplicates stable IDs", () => {
     assert.deepEqual(
       projectHttpModels([
@@ -236,6 +319,97 @@ describe("native HTTP frontend", () => {
         [0, 0, 2],
       );
       assert.ok(app.logs.every((record) => record.outcome === "error"));
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("excludes balanced instruction regions only while identifying the thread", async () => {
+    const app = await harness();
+    const external = `Amp Thread URL: https://ampcode.com/threads/${A}`;
+    const prompts: Array<string | Array<{ type: "text"; text: string }>> = [
+      `<instructions>curl 'Amp Thread URL: https://ampcode.com/threads/${B}'\nAmp Thread URL: https://ampcode.com/threads/${B}</instructions>\n${external}`,
+      `<instructions>first</instructions>\n<instructions><instructions>\nAmp Thread URL: malformed\n</instructions></instructions>\n${external}`,
+      [
+        { type: "text", text: "before\n<instructions>curl Amp Thread URL:" },
+        {
+          type: "text",
+          text: `https://ampcode.com/threads/${B}\n<instructions>nested</instructions>`,
+        },
+        { type: "text", text: `</instructions>\n${external}` },
+      ],
+    ];
+    try {
+      for (const [index, system] of prompts.entries()) {
+        const response = await app.post({ ...body(A), system });
+        const responseText = await response.text();
+        assert.equal(response.status, 200, `prompt ${index}: ${responseText}`);
+      }
+      assert.equal(app.requests.size, 1);
+      assert.deepEqual(
+        app.requests.get(A)?.map((request) => request.systemPrompt),
+        prompts.map((system) =>
+          typeof system === "string" ? system : system.map((block) => block.text).join("\n"),
+        ),
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects unbalanced wrappers and invalid external declarations", async () => {
+    const app = await harness();
+    const anonymous = (system: string) => ({
+      model: "claude-haiku-4-5",
+      max_tokens: 100,
+      stream: true,
+      system,
+      messages: [{ role: "user", content: "go" }],
+    });
+    const invalid = [
+      anonymous("<instructions>example only"),
+      anonymous("example only</instructions>"),
+      {
+        ...body(A),
+        system: `<instructions>Amp Thread URL: https://ampcode.com/threads/${B}</instructions>\nAmp Thread URL: malformed`,
+      },
+      {
+        ...body(A),
+        system: `<instructions>Amp Thread URL: malformed</instructions>\nAmp Thread URL: https://ampcode.com/threads/${A}\nAmp Thread URL: https://ampcode.com/threads/${B}`,
+      },
+      {
+        ...body(A),
+        system: `Amp Thread URL: https://ampcode.com/<instructions>example</instructions>threads/${A}`,
+      },
+      {
+        ...body(A),
+        system: `prefix<instructions>example\n</instructions>Amp Thread URL: https://ampcode.com/threads/${A}`,
+      },
+    ];
+    try {
+      for (const [index, request] of invalid.entries()) {
+        const response = await app.post(request);
+        const responseText = await response.text();
+        assert.equal(response.status, 400, `request ${index}: ${responseText}`);
+        assert.match(responseText, /invalid_request_error/);
+      }
+      assert.equal(app.requests.size, 0);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("preserves every JavaScript line boundary while excluding instruction regions", async () => {
+    const app = await harness();
+    try {
+      for (const separator of ["\n", "\r", "\r\n", "\u2028", "\u2029"]) {
+        const response = await app.post({
+          ...body(A),
+          system: `<instructions>example${separator}</instructions>${separator}Amp Thread URL: https://ampcode.com/threads/${A}`,
+        });
+        assert.equal(response.status, 200, `separator ${JSON.stringify(separator)}`);
+        await response.text();
+      }
     } finally {
       await app.close();
     }
@@ -922,6 +1096,30 @@ describe("native HTTP frontend", () => {
     }
   });
 
+  it("resolves Sonnet through the SDK alias or a unique concrete family", async () => {
+    for (const value of ["sonnet", "claude-sonnet-5"]) {
+      const app = await harness([
+        {
+          value,
+          resolvedModel: "claude-sonnet-5",
+          displayName: "Sonnet",
+          description: "",
+        },
+      ]);
+      try {
+        const response = await app.post({ ...body(A), model: "doppelclaude/sonnet" });
+        assert.equal(response.status, 200);
+        await response.text();
+        assert.equal(app.requests.get(A)?.[0]?.model, "claude-sonnet-5");
+        const haiku = await app.post({ ...body(B), model: "haiku" });
+        assert.equal(haiku.status, 400);
+        await haiku.text();
+      } finally {
+        await app.close();
+      }
+    }
+  });
+
   it("rejects absent and ambiguous aliases without choosing the first candidate", async () => {
     const app = await harness([
       {
@@ -943,7 +1141,7 @@ describe("native HTTP frontend", () => {
       },
     ]);
     try {
-      for (const model of ["opus", "provider/fable"]) {
+      for (const model of ["opus", "provider/fable", "provider/sonnet"]) {
         const response = await app.post({ ...body(A), model });
         assert.equal(response.status, 400);
         assert.match(

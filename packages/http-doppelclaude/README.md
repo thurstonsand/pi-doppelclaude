@@ -12,7 +12,7 @@ default `127.0.0.1`) and `PORT` (default `3456`). Configure exactly one of
 `DOPPELCLAUDE_STATE_DIR` (default `~/.local/state/doppelclaude`). `CLAUDE_CODE_OAUTH_TOKEN` and
 `CLAUDE_CONFIG_DIR` are inherited unchanged.
 
-Startup creates the state directory with mode `0700`, verifies first-party subscription authentication, and discovers the installed Claude Code tool-description limit and model catalog before opening the socket. Use `claude auth login` or supply `CLAUDE_CODE_OAUTH_TOKEN` through your service's secret manager. API-key authentication to Anthropic is rejected. Startup has a 30-second deadline. The requester chooses the model on every call; the discovered catalog supports client discovery but is not a request allowlist. The `opus` and `fable` aliases are snapshotted at startup. An exact SDK alias row with a stable `resolvedModel` takes precedence; otherwise the catalog must identify exactly one distinct stable concrete model in that family. Restart the daemon after an SDK or container-image refresh to pick up changed alias resolutions. An absent or ambiguous family makes only requests for that alias return 400.
+Startup creates the state directory with mode `0700`, verifies first-party subscription authentication, and discovers the installed Claude Code tool-description limit and model catalog before opening the socket. Use `claude auth login` or supply `CLAUDE_CODE_OAUTH_TOKEN` through your service's secret manager. API-key authentication to Anthropic is rejected. Startup has a 30-second deadline. The requester chooses the model on every call; the discovered catalog supports client discovery but is not a request allowlist. The `opus`, `fable`, and `sonnet` aliases are snapshotted at startup. An exact SDK alias row with a stable `resolvedModel` takes precedence; otherwise the catalog must identify exactly one distinct stable concrete model in that family. Restart the daemon after an SDK or container-image refresh to pick up changed alias resolutions. An absent or ambiguous family makes only requests for that alias return 400.
 
 Resource controls are `DOPPELCLAUDE_MAX_RUNTIMES` (32), `DOPPELCLAUDE_IDLE_TTL_MS` (3600000),
 `DOPPELCLAUDE_MAX_BODY_BYTES` (32000000, 32 MB), `DOPPELCLAUDE_REQUEST_TIMEOUT_MS` (600000),
@@ -24,9 +24,19 @@ Clients call `GET /v1/models` or streaming-only `POST /v1/messages`, authenticat
 `x-api-key` or `Authorization: Bearer …`. A conversation is keyed by the single Amp Thread URL in
 the system prompt. Run `doppelclaude-serve --help` for a no-network configuration summary.
 
+`GET /v1/sdk-models` returns the installed Agent SDK version, capture time, raw SDK model rows
+(`value`, nullable `resolvedModel`, and `displayName`), and the alias resolutions used for requests.
+The response has `Cache-Control: no-store` and contains no account identity. It is an immutable
+startup snapshot: requests do not call the SDK, and SDK/catalog changes require a daemon restart.
+It uses the same inference API key and authentication rules as `GET /v1/models`.
+
 ## Amp connection
 
 Expose the listener only through authenticated infrastructure. Configure an Anthropic Messages Custom URL connection in Amp with that public base URL and the daemon API key. Keep subscription credentials on the daemon host; never put them in Amp's connection settings or at the edge.
+
+The personal Amp plugin's `doppelclaude.models` command reuses that inference credential from the
+Amp personal secret `CLI_PROXY_API_KEY`. A locally run Amp CLI needs that environment variable
+injected into its process as well.
 
 Conversation requests must include exactly one complete system-text line, except for the bounded one-shot path below:
 
@@ -34,11 +44,11 @@ Conversation requests must include exactly one complete system-text line, except
 Amp Thread URL: https://ampcode.com/threads/T-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 ```
 
-The ID must be a UUID. Duplicate markers, or a malformed `Amp Thread URL:` label, return 400; shared history never determines identity. Amp currently provides this line automatically. It is an observed client contract, not a guaranteed protocol field.
+The ID must be a UUID. Duplicate markers, or a malformed `Amp Thread URL:` label, return 400; shared history never determines identity. Marker discovery ignores text inside balanced literal `<instructions>...</instructions>` regions, including nested or multiple regions, while the full original system prompt is still sent to Claude Code. This depends on Amp's observed wrapper format rather than a guaranteed protocol field. An unmatched opening or closing wrapper returns 400, even when the request would otherwise qualify for the markerless path. Amp currently provides the external identity line automatically.
 
 As a bounded trial exception, a request with no marker is accepted only when it has exactly one user message with nonempty text-only content (a string or text blocks), omits tools or supplies an empty tool list, requests at most 4096 output tokens, and `JSON.stringify({system, messages})` is at most 16384 UTF-8 bytes. Missing `system` is valid. The limits reject the request rather than clamping output or changing thinking. Markerless multi-turn, image, tool, malformed-marker, and oversized requests return 400 before Claude Code is invoked. This exception supports small one-shot work such as title generation; it does not identify or persist a conversation.
 
-Supported parameters are `system`, `messages`, `tools`, `max_tokens`, adaptive `thinking` or enabled `thinking` with a `budget_tokens` integer of at least 1024 (both optionally with summarized display), `output_config.effort`, and `tool_choice: auto|none`. Each request must select a stable Claude model ID or the `opus` or `fable` alias, either bare or provider-qualified. The optional provider prefix is removed at the HTTP boundary. Explicit stable IDs, including unadvertised IDs and any date suffix, are forwarded unchanged and are not catalog-allowlisted. Aliases are replaced with their startup-snapshotted concrete IDs before reaching the core. SSE response metadata reports the model served by the SDK, which may be canonicalized or differ from the requested ID. `GET /v1/models` continues to advertise concrete discovered models, not aliases. Temperature, forced tool choice, non-streaming requests, and unsupported content types are rejected. Cache-control metadata is ignored; Claude Code manages caching. Signed thinking and renamed tool IDs survive round trips.
+Supported parameters are `system`, `messages`, `tools`, `max_tokens`, adaptive `thinking` or enabled `thinking` with a `budget_tokens` integer of at least 1024 (both optionally with summarized display), `output_config.effort`, and `tool_choice: auto|none`. Each request must select a stable Claude model ID or the `opus`, `fable`, or `sonnet` alias, either bare or provider-qualified. The optional provider prefix is removed at the HTTP boundary. Explicit stable IDs, including unadvertised IDs and any date suffix, are forwarded unchanged and are not catalog-allowlisted. Aliases are replaced with their startup-snapshotted concrete IDs before reaching the core. SSE response metadata reports the model served by the SDK, which may be canonicalized or differ from the requested ID. `GET /v1/models` continues to advertise concrete discovered models, not aliases. Temperature, forced tool choice, non-streaming requests, and unsupported content types are rejected. Cache-control metadata is ignored; Claude Code manages caching. Signed thinking and renamed tool IDs survive round trips.
 
 ## Lifecycle and failure behavior
 
