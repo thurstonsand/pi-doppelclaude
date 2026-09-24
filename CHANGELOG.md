@@ -2,6 +2,12 @@
 
 # Changelog
 
+## 0.12.4 — 2026-09-24
+
+### Fixed
+
+- **Serve split steers on the live query** — when Amp answers a tool call with the results in one user message and the user's mid-turn text in a second, the HTTP frontend now delivers both to the waiting query instead of rebuilding the conversation cold.
+
 ## 0.12.3 — 2026-09-23
 
 ### Fixed

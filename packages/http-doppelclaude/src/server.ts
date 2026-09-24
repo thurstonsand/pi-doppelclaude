@@ -533,6 +533,26 @@ function validateMessages(messages: ApiRequest["messages"]): void {
   }
   if (messages.at(-1)?.role !== "user") throw new RequestError("last message must have role user");
 }
+
+/** A client answering a tool_use may send the results in one user message and, when the user
+ *  typed while the tools ran, the steering text in a second one. The live query serves both,
+ *  so the extra message continues the turn rather than diverging from it. */
+function continuesWithSplitSteer(messages: MessageParam[], expected: MessageParam[]): boolean {
+  if (messages.length !== expected.length + 2) return false;
+  const results = messages[messages.length - 2];
+  const steer = messages[messages.length - 1];
+  if (results.role !== "user" || steer.role !== "user") return false;
+  if (
+    !Array.isArray(results.content) ||
+    results.content.length === 0 ||
+    !results.content.every((block) => block.type === "tool_result")
+  )
+    return false;
+  if (Array.isArray(steer.content) && steer.content.some((block) => block.type === "tool_result"))
+    return false;
+  return canonicalHistory(messages.slice(0, -2)) === canonicalHistory(expected);
+}
+
 function normalizeMessages(
   messages: ApiRequest["messages"],
   priorCalls: Map<string, CallRecord>,
@@ -1016,7 +1036,11 @@ export function createHttpServer(options: HttpServerOptions): Server {
       const previousConfigurationFingerprint = state.configurationFingerprint ?? null;
       const expectedPrior = body.messages.slice(0, -1) as MessageParam[];
       const historyDiverged =
-        canonicalHistory(expectedPrior) !== canonicalHistory(state.expectedHistory);
+        canonicalHistory(expectedPrior) !== canonicalHistory(state.expectedHistory) &&
+        !(
+          state.pendingTool &&
+          continuesWithSplitSteer(body.messages as MessageParam[], state.expectedHistory)
+        );
       const signatureChanged =
         state.requestSignature !== undefined && state.requestSignature !== signature;
       const rebuild = state.forceRebuild || historyDiverged || signatureChanged;
