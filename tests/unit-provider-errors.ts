@@ -120,6 +120,7 @@ describe("provider SDK result errors", () => {
       {
         onResult() {},
         onSessionId() {},
+        onOutputCeiling() {},
       },
     );
     runtime.test.finalizeCurrentResponse(queryCtx);
@@ -185,6 +186,7 @@ describe("provider SDK result errors", () => {
       {
         onResult() {},
         onSessionId() {},
+        onOutputCeiling() {},
       },
     );
     runtime.test.finalizeCurrentResponse(queryCtx);
@@ -250,6 +252,7 @@ describe("provider stop reasons", () => {
       {
         onResult() {},
         onSessionId() {},
+        onOutputCeiling() {},
       },
     );
     runtime.test.finalizeCurrentResponse(queryCtx);
@@ -329,7 +332,7 @@ describe("native response completion", () => {
       new Map(),
       fakeModel.id,
       context,
-      { onResult() {}, onSessionId() {} },
+      { onResult() {}, onSessionId() {}, onOutputCeiling() {} },
     );
     coreRuntime.test.finalizeCurrentResponse(context);
     await collecting;
@@ -419,7 +422,7 @@ describe("native response completion", () => {
         new Map(),
         fakeModel.id,
         context,
-        { onResult() {}, onSessionId() {} },
+        { onResult() {}, onSessionId() {}, onOutputCeiling() {} },
       );
       coreRuntime.test.finalizeCurrentResponse(context);
       await collecting;
@@ -467,7 +470,7 @@ describe("native response completion", () => {
       new Map(),
       fakeModel.id,
       context,
-      { onResult() {}, onSessionId() {} },
+      { onResult() {}, onSessionId() {}, onOutputCeiling() {} },
     );
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(

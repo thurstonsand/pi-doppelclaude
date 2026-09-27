@@ -174,6 +174,7 @@ describe("Claude refusal entries", () => {
     await runtime.test.consumeQuery(sdkQuery, new Map(), fakeModel.id, queryCtx, {
       onResult() {},
       onSessionId() {},
+      onOutputCeiling() {},
     });
 
     assert.deepEqual(

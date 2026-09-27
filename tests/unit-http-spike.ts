@@ -966,7 +966,8 @@ describe("native HTTP frontend", () => {
       assert.equal(request.options?.env?.ENABLE_TOOL_SEARCH, "false");
       assert.equal(request.options?.env?.DISABLE_AUTO_COMPACT, "1");
       assert.equal(request.options?.env?.CLAUDE_CODE_DISABLE_AUTO_MEMORY, "1");
-      assert.equal(request.options?.env?.CLAUDE_CODE_MAX_OUTPUT_TOKENS, "128000");
+      // The ceiling is the runtime's to apply, at spawn and on the live query alike.
+      assert.equal(request.options?.env?.CLAUDE_CODE_MAX_OUTPUT_TOKENS, undefined);
     } finally {
       await app.close();
     }
@@ -1923,19 +1924,58 @@ describe("native HTTP frontend", () => {
         )
       ).text();
       assert.match(app.rebuilds.get(A)?.[0] ?? "", /history diverged/);
+      const continued = body(A, [
+        { role: "user", content: "edited" },
+        { role: "assistant", content: [{ type: "text", text: "old" }] },
+        { role: "user", content: "next" },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: "served-a",
+              name: "lookup",
+              input: {
+                n: 1,
+                options: {
+                  é: 1,
+                  "e\u0301": 2,
+                  order: ["first", "second"],
+                  exact: true,
+                  caller: "input-value",
+                },
+              },
+            },
+            { type: "tool_use", id: "served-b", name: "lookup", input: { n: 2 } },
+          ],
+        },
+        {
+          role: "user",
+          content: [
+            { type: "tool_result", tool_use_id: "served-a", content: "one" },
+            { type: "tool_result", tool_use_id: "served-b", content: "two" },
+          ],
+        },
+      ]);
+      // A new output ceiling is a sampling parameter, not a configuration change: Amp's
+      // compaction summary lowers it, and the compacted thread raises it back.
+      await (await app.post({ ...continued, max_tokens: 101 })).text();
+      assert.equal(app.rebuilds.get(A)?.length, 1);
+      assert.equal(app.logs.at(-1)?.reason, "compatible");
+      assert.equal(app.requests.get(A)?.at(-1)?.maxTokens, 101);
       await (
         await app.post({
-          ...body(A, [
-            { role: "user", content: "edited" },
-            { role: "assistant", content: [{ type: "text", text: "old" }] },
-            { role: "user", content: "next" },
+          ...continued,
+          messages: [
+            ...continued.messages,
             { role: "assistant", content: [{ type: "text", text: "done" }] },
-            { role: "user", content: "again" },
-          ]),
-          max_tokens: 101,
+            { role: "user", content: "once more" },
+          ],
+          output_config: { effort: "high" },
         })
       ).text();
       assert.ok(app.rebuilds.get(A)?.some((reason) => reason.includes("settings changed")));
+      assert.equal(app.logs.at(-1)?.reason, "configuration_changed");
     } finally {
       await app.close();
     }
@@ -1952,7 +1992,6 @@ describe("native HTTP frontend", () => {
       { field: "toolChoice", update: { tool_choice: { type: "auto" } } },
       { field: "effort", update: { output_config: { effort: "high" } } },
       { field: "thinking", update: { thinking: { type: "enabled", budget_tokens: 4000 } } },
-      { field: "maxTokens", update: { max_tokens: 101 } },
     ];
     for (const { field, update } of cases) {
       const app = await harness();
@@ -1966,7 +2005,8 @@ describe("native HTTP frontend", () => {
         assert.deepEqual(app.logs[1].changedConfigurationFields, [field]);
         assert.deepEqual(app.logs[2].changedConfigurationFields, []);
         const hashes = app.logs[1].configurationFields as Record<string, string>;
-        assert.equal(Object.keys(hashes).length, 7);
+        assert.equal(Object.keys(hashes).length, 6);
+        assert.equal("maxTokens" in hashes, false);
         assert.ok(Object.values(hashes).every((hash) => /^[a-f0-9]{16}$/u.test(hash)));
         assert.doesNotMatch(JSON.stringify(app.logs), /private-prompt-change|private-tool-change/);
       } finally {

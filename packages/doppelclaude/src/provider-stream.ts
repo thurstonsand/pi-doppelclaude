@@ -46,6 +46,8 @@ interface ProviderStreamDependencies {
 export interface QueryConsumerHooks {
   onResult(message: SDKResultMessage): void;
   onSessionId(sessionId: string): void;
+  /** The model stopped at the output ceiling and the reply has closed on that stop. */
+  onOutputCeiling(): void;
   onMirrorError?(message: SDKMirrorErrorMessage): void;
   onCompaction?(message: SDKStatusMessage | SDKCompactBoundaryMessage): void;
 }
@@ -273,6 +275,7 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
     customToolNameToPi: Map<string, string>,
     requestedModel: string,
     c: QueryContext,
+    hooks: QueryConsumerHooks,
   ): void {
     if (!c.currentResponse || !c.turnOutput) return;
     c.turnSawStreamEvent = true;
@@ -366,6 +369,12 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
       return;
     }
     if (event.type === "message_stop") {
+      if (output.stop_reason === "max_tokens") {
+        c.completeCommandUsage(requestedModel, null);
+        closeResponse(c);
+        hooks.onOutputCeiling();
+        return;
+      }
       if (!c.turnSawToolCall) return;
       output.stop_reason = "tool_use";
       noteRejectedToolCallNames(c);
@@ -552,7 +561,7 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
         hooks.onResult(message);
         break;
       case "stream_event":
-        processStreamEvent(message, customToolNameToPi, currentModel, c);
+        processStreamEvent(message, customToolNameToPi, currentModel, c, hooks);
         break;
       case "user":
         noteRejectedToolResults(message, c);

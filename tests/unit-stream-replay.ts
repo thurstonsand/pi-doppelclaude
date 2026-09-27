@@ -72,6 +72,7 @@ async function replay(name: string, { toolNames = ["read"] }: { toolNames?: stri
     onSessionId: (sessionId: string) => {
       capturedSessionId = sessionId;
     },
+    onOutputCeiling() {},
   });
   runtime.test.finalizeCurrentResponse(c);
   await projected;

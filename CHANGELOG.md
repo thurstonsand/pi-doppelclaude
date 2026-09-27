@@ -2,6 +2,12 @@
 
 # Changelog
 
+## 0.13.1 — 2026-09-27
+
+### Fixed
+
+- **Keep the cache across output-ceiling changes** — `max_tokens` is applied to the live query instead of rebuilding it, so Amp's compaction (summary at 16384, compacted thread at 32000) no longer forfeits the cached prompt prefix twice per compaction. A reply the model stops at the ceiling now ends there, instead of Claude Code silently asking the model to continue.
+
 ## 0.13.0 — 2026-09-27
 
 ### Added

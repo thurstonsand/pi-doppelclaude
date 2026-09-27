@@ -138,6 +138,7 @@ interface FreshTurn {
   mcpSignature: string;
   mcpServers: Record<string, McpServerConfig>;
   queryOptions: Options;
+  outputCeiling: number | null;
 }
 
 interface FreshQueryRequest extends FreshTurn {
@@ -162,6 +163,12 @@ type SessionDisposition = "rebuild" | "drop";
 const REPLAY_PROMPT = "The tool results above are available. Continue the pending task using them.";
 
 export const SESSION_STORE_LOAD_TIMEOUT_MS = 15_000;
+
+/** Claude Code takes its per-request `max_tokens` from this variable, clamped to the model's
+ *  own limit, both at spawn and through a live query's flag-settings layer. */
+function outputCeilingEnv(ceiling: number): Record<string, string> {
+  return { CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(ceiling) };
+}
 
 export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies = {}) {
   const queryFactory = dependencies.queryFactory ?? query;
@@ -619,6 +626,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies = {}
       mcpTools,
       mcpServers,
       cliModel,
+      outputCeiling,
       promptMessage,
       attachAbort,
     } = request;
@@ -650,6 +658,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies = {}
       queryCtx.mcpSignature = mcpSignature;
       queryCtx.hasMcpServer = mcpTools.length > 0;
       queryCtx.cliModel = cliModel;
+      queryCtx.outputCeiling = outputCeiling;
       queryCtx.modelUsageSnapshot = {};
       const inputQueue = new PushQueue<SDKUserMessage>();
       queryCtx.inputQueue = inputQueue;
@@ -705,6 +714,17 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies = {}
               postTokens: message.compact_metadata.post_tokens ?? null,
             });
           }
+        },
+        onOutputCeiling() {
+          if (queryCtx.closing) return;
+          // Claude Code treats a max_tokens stop as recoverable and asks the model to carry on,
+          // up to three more requests the caller never asked for and cannot see. The reply has
+          // already closed at the ceiling; the query goes with it, before the first of those.
+          debug(
+            "provider: output ceiling reached, retiring the query before Claude Code continues",
+          );
+          queryCtx.readyForInput = false;
+          discardQuery(queryCtx, "output ceiling reached", "rebuild");
         },
         onResult(result) {
           if (queryCtx.closing) return;
@@ -913,6 +933,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies = {}
       const customToolNameToPi = request.toolNameToClient ?? new Map<string, string>();
       const cwd = request.cwd;
       const cliModel = request.sdkModel ?? request.model;
+      const outputCeiling = request.maxTokens ?? null;
       const queryOptions: Options = {
         cwd,
         env: sdkChildEnv({ DISABLE_AUTO_COMPACT: "1" }),
@@ -927,6 +948,8 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies = {}
         ...(request.effort ? { effort: request.effort } : {}),
         ...makeCliDebugOptions(persistent ? "provider" : "provider-child"),
       };
+      if (outputCeiling !== null)
+        queryOptions.env = { ...queryOptions.env, ...outputCeilingEnv(outputCeiling) };
       const spawnSignature = JSON.stringify({
         cwd,
         cliModel,
@@ -950,7 +973,19 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies = {}
         mcpSignature: toolSignature,
         mcpServers: buildMcpServers(mcpTools, queryCtx),
         queryOptions,
+        outputCeiling,
       };
+    }
+
+    /** Moves a live query's output ceiling without a respawn: Claude Code reads the variable on
+     *  every API call, and the ceiling is a sampling parameter, so the cached prompt prefix
+     *  survives the change. */
+    async function applyOutputCeiling(queryCtx: QueryContext, activeQuery: Query): Promise<void> {
+      const ceiling = request.maxTokens;
+      if (ceiling === undefined || queryCtx.outputCeiling === ceiling) return;
+      debug(`provider: output ceiling ${queryCtx.outputCeiling ?? "default"} → ${ceiling}`);
+      await activeQuery.applyFlagSettings({ env: outputCeilingEnv(ceiling) });
+      queryCtx.outputCeiling = ceiling;
     }
 
     /** The subprocess a turn runs on, for a turn's first attempt and for the replay of
@@ -1051,6 +1086,14 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies = {}
       // belongs to the fresh subprocess: these results are in the session it rebuilt from,
       // and the handlers that were waiting for them died with the query.
       if (replayed) return stream;
+
+      // Not awaited: the blocked MCP handler is Claude Code's next API request, and holding it on
+      // a control acknowledgement that may never come mid-turn would hang the turn. Both travel
+      // the same channel in this order, so the ceiling lands before the request that needs it.
+      if (resultCtx.activeQuery)
+        applyOutputCeiling(resultCtx, resultCtx.activeQuery).catch((error) =>
+          debug(`provider: output ceiling not applied on continuation: ${errorMessage(error)}`),
+        );
 
       for (const result of allResults) {
         const id = result.toolCallId;
@@ -1219,6 +1262,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies = {}
               await activeQuery.setModel(freshTurn.cliModel);
               queryCtx.cliModel = freshTurn.cliModel;
             }
+            await applyOutputCeiling(queryCtx, activeQuery);
             inputQueue.push(promptMessage);
             dependencies.observeExecution?.({
               event: "query_reused",

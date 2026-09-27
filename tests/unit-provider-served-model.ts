@@ -101,6 +101,7 @@ describe("provider served-model reporting", () => {
       {
         onResult() {},
         onSessionId() {},
+        onOutputCeiling() {},
       },
     );
 
@@ -118,6 +119,7 @@ describe("provider served-model reporting", () => {
       {
         onResult() {},
         onSessionId() {},
+        onOutputCeiling() {},
       },
     );
     assert.deepEqual(warnings, [DETECTED, RECAP]);
@@ -134,6 +136,7 @@ describe("provider served-model reporting", () => {
       {
         onResult() {},
         onSessionId() {},
+        onOutputCeiling() {},
       },
     );
     assert.equal(warnings.length, 4);
@@ -152,6 +155,7 @@ describe("provider served-model reporting", () => {
       {
         onResult() {},
         onSessionId() {},
+        onOutputCeiling() {},
       },
     );
 
@@ -171,6 +175,7 @@ describe("provider served-model reporting", () => {
       {
         onResult() {},
         onSessionId() {},
+        onOutputCeiling() {},
       },
     );
     assert.deepEqual(warnings, [DETECTED]);
@@ -198,6 +203,7 @@ describe("provider served-model reporting", () => {
       {
         onResult() {},
         onSessionId() {},
+        onOutputCeiling() {},
       },
     );
 

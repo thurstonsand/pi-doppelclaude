@@ -106,6 +106,8 @@ export class QueryContext {
   mcpSignature: string | null = null;
   hasMcpServer = false;
   cliModel: string | null = null;
+  /** The output-token ceiling the live subprocess enforces, or null when it runs on its default. */
+  outputCeiling: number | null = null;
   modelUsageSnapshot: SdkModelUsage = {};
   commandId = createCommandId();
   commandOutputs: CoreResponseRecord[] = [];

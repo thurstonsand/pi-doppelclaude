@@ -1053,7 +1053,6 @@ export function createHttpServer(options: HttpServerOptions): Server {
         toolChoice: body.tool_choice,
         effort: body.output_config?.effort,
         thinking: body.thinking,
-        maxTokens: body.max_tokens,
       };
       const signature = JSON.stringify(configuration);
       const configurationFields = Object.fromEntries(
@@ -1181,7 +1180,6 @@ export function createHttpServer(options: HttpServerOptions): Server {
           env: sdkChildEnv({
             ENABLE_TOOL_SEARCH: "false",
             DISABLE_AUTO_COMPACT: "1",
-            CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(body.max_tokens),
           }),
         },
         toolNameToSdk,
