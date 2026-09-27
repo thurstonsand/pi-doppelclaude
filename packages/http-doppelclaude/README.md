@@ -1,6 +1,6 @@
 # http-doppelclaude
 
-Amp-only Anthropic Messages HTTP frontend for doppelclaude (Node 24+). Claude Code owns subscription authentication and model access; Amp owns tools and conversation history. This is a personal proxy, not a service for other users.
+Anthropic Messages HTTP frontend for doppelclaude (Node 24+), serving Amp and OpenCode from one daemon. Claude Code owns subscription authentication and model access; the client owns tools and conversation history. This is a personal proxy, not a service for other users.
 
 ```sh
 DOPPELCLAUDE_HTTP_API_KEY_FILE=/path/to/private/api-key doppelclaude-serve
@@ -21,8 +21,8 @@ Resource controls are `DOPPELCLAUDE_MAX_RUNTIMES` (32), `DOPPELCLAUDE_IDLE_TTL_M
 The body limit covers the entire JSON request, including base64 images and conversation history. Requests above it return 413 before invoking Claude Code. Claude Code also limits each image to 5 MiB of base64, not decoded bytes. Oversized attachments and tool-result images are re-encoded as WebP at quality 90, fitting within 2000 × 2000 pixels without enlargement, then reduced further only if necessary to meet that encoded-size limit. Smaller images pass through unchanged. This transforms the bridge's request copy, not the client's original attachment or history. Model-specific limits still apply.
 
 Clients call `GET /v1/models` or streaming-only `POST /v1/messages`, authenticating with either
-`x-api-key` or `Authorization: Bearer …`. A conversation is keyed by the single Amp Thread URL in
-the system prompt. Run `doppelclaude-serve --help` for a no-network configuration summary.
+`x-api-key` or `Authorization: Bearer …`. An OpenCode conversation is keyed by its `X-Session-Id`
+header; any other conversation by the single Amp Thread URL in the system prompt. Run `doppelclaude-serve --help` for a no-network configuration summary.
 
 `GET /v1/sdk-models` returns the installed Agent SDK version, capture time, raw SDK model rows
 (`value`, nullable `resolvedModel`, and `displayName`), and the alias resolutions used for requests.
@@ -50,6 +50,31 @@ As a bounded trial exception, a request with no marker is accepted only when it 
 
 Supported parameters are `system`, `messages`, `tools`, `max_tokens`, adaptive `thinking` or enabled `thinking` with a `budget_tokens` integer of at least 1024 (both optionally with summarized display), `output_config.effort`, and `tool_choice: auto|none`. Each request must select a stable Claude model ID or the `opus`, `fable`, or `sonnet` alias, either bare or provider-qualified. The optional provider prefix is removed at the HTTP boundary. Explicit stable IDs, including unadvertised IDs and any date suffix, are forwarded unchanged and are not catalog-allowlisted. Aliases are replaced with their startup-snapshotted concrete IDs before reaching the core. SSE response metadata reports the model served by the SDK, which may be canonicalized or differ from the requested ID. `GET /v1/models` continues to advertise concrete discovered models, not aliases. Temperature, forced tool choice, non-streaming requests, and unsupported content types are rejected. Cache-control metadata is ignored; Claude Code manages caching. Signed thinking and renamed tool IDs survive round trips.
 
+## OpenCode connection
+
+Add a provider to `opencode.json` using OpenCode's Anthropic SDK package, pointed at the daemon's `/v1` base URL:
+
+```json
+{
+  "provider": {
+    "doppelclaude": {
+      "npm": "@ai-sdk/anthropic",
+      "name": "doppelclaude",
+      "options": { "baseURL": "https://doppelclaude.example/v1", "apiKey": "{env:DOPPELCLAUDE_API_KEY}" },
+      "models": { "claude-opus-5": {}, "claude-haiku-4-5": {} }
+    }
+  },
+  "model": "doppelclaude/claude-opus-5",
+  "small_model": "doppelclaude/claude-haiku-4-5"
+}
+```
+
+The provider ID must not start with `opencode`; OpenCode only sends its session headers to other providers. Every request then carries `X-Session-Id: ses_…`, stable across turns and `--session` continuation, and a subagent gets its own session ID. When the header is present it alone identifies the conversation: it must be a `ses_` ID or the request returns 400, and Amp markers in the system prompt are ignored.
+
+OpenCode also sends title generation and compaction under the conversation's session ID. A request that is one text-only user message with no tools runs as a one-shot on its own ephemeral runtime, like a markerless Amp request but without its size limits, so it never displaces the conversation's warm query.
+
+Upstream rejects requests carrying OpenCode's stock environment block as `You're out of extra usage`. The daemon replaces that block's opening line (`Here is some useful information about the environment you are running in:`) with a heading you supply, leaving the block's contents unchanged. As with pi's system prompt replacements, the replacement text lives only in your configuration, never in this repository, so upstream cannot match on it. Set it with `DOPPELCLAUDE_HTTP_OPENCODE_ENVIRONMENT_HEADING`, or put it in a file named by `DOPPELCLAUDE_HTTP_OPENCODE_ENVIRONMENT_HEADING_FILE` (surrounding whitespace is trimmed). Set at most one of the two; a blank value stops the daemon at startup. Without either, OpenCode requests return 400 and Amp is unaffected. If OpenCode rewords the block and the rejection returns, the match is conjunctive: dropping the header, `Workspace root folder`, or `Is directory a git repo` line each cleared it on 2026-09-26.
+
 ## Lifecycle and failure behavior
 
 Each thread has one warm runtime and at most one active request. Overlap returns 409. Idle runtimes expire after the configured TTL; capacity pressure evicts the least-recently-used idle runtime, never an active one. If all slots are active or closing, admission returns 503. Pending tools count as idle after their response finishes. A later request imports the client history and resumes from its tool results.
@@ -62,7 +87,7 @@ SSE headers flush immediately and comment heartbeats run every 15 seconds. Disco
 
 ## Request diagnostics
 
-Normal stderr includes JSON `request_complete` records for authenticated Messages requests admitted to validation. `requestId`, `runtimeId`, `threadId`, timestamps, and duration correlate requests with the retained runtime. Markerless records use a null `threadId`; `requestKind`, anonymous eligibility, context byte size, and declared output limit diagnose admission without logging request contents. `requestedModel` is the validated model name without its provider prefix; `resolvedModel` is the concrete request model; `servedModel` is the SDK-observed model, or `null` when unavailable. Configuration and canonical-history fingerprints expose changes without logging their contents.
+Normal stderr includes JSON `request_complete` records for authenticated Messages requests admitted to validation. `requestId`, `runtimeId`, `threadId`, timestamps, and duration correlate requests with the retained runtime. Markerless and OpenCode one-shot records use a null `threadId`; `requestKind` (`keyed`, `anonymous`, `opencode`, or `opencode_one_shot`), anonymous eligibility, context byte size, and declared output limit diagnose admission without logging request contents. `requestedModel` is the validated model name without its provider prefix; `resolvedModel` is the concrete request model; `servedModel` is the SDK-observed model, or `null` when unavailable. Configuration and canonical-history fingerprints expose changes without logging their contents.
 
 `configurationFields` fingerprints the resolved model, prepared prompt, prepared tools, tool choice, effort, thinking, and maximum output tokens separately. `changedConfigurationFields` names differences from the last successful request on that runtime; it is `null` on the first request and `[]` when unchanged. Only field names and hashes are logged, never their values.
 

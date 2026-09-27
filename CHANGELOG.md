@@ -2,6 +2,12 @@
 
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Serve OpenCode alongside Amp** — the HTTP frontend keys OpenCode conversations by its `X-Session-Id` header, runs its title and compaction requests as isolated one-shots, and replaces OpenCode's environment-block heading, which upstream otherwise rejects as extra usage, with wording from `DOPPELCLAUDE_HTTP_OPENCODE_ENVIRONMENT_HEADING`.
+
 ## 0.12.4 — 2026-09-24
 
 ### Fixed

@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it } from "node:test";
 import type { Message } from "@anthropic-ai/sdk/resources/messages/messages";
 import type { CoreResponseEvent } from "doppelclaude/core-response";
@@ -235,6 +238,30 @@ describe("HTTP daemon configuration", () => {
         (await httpConfigFromEnvironment({ ...base, DOPPELCLAUDE_HTTP_HOST: host })).host,
         host,
       );
+  });
+
+  it("reads the OpenCode environment heading from a variable or a file", async () => {
+    const NAME = "DOPPELCLAUDE_HTTP_OPENCODE_ENVIRONMENT_HEADING";
+    const heading = async (env: NodeJS.ProcessEnv) =>
+      (await httpConfigFromEnvironment({ ...base, ...env })).openCodeEnvironmentHeading;
+    assert.equal(await heading({}), undefined);
+    assert.equal(await heading({ [NAME]: "Context:" }), "Context:");
+    const dir = await mkdtemp(join(tmpdir(), "doppelclaude-heading-"));
+    const file = join(dir, "heading");
+    try {
+      await writeFile(file, "Context from file:\n");
+      assert.equal(await heading({ [`${NAME}_FILE`]: file }), "Context from file:");
+      for (const env of [
+        { [NAME]: "  " },
+        { [NAME]: "Context:", [`${NAME}_FILE`]: file },
+        { [`${NAME}_FILE`]: join(dir, "missing") },
+      ])
+        await assert.rejects(heading(env));
+      await writeFile(file, " \n");
+      await assert.rejects(heading({ [`${NAME}_FILE`]: file }));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("rejects invalid bind addresses and out-of-range resource settings", async () => {

@@ -12,6 +12,9 @@ Startup account and binary-cap probes have a combined 30-second deadline.
 Environment:
   DOPPELCLAUDE_HTTP_API_KEY       API key accepted from clients (required*)
   DOPPELCLAUDE_HTTP_API_KEY_FILE  File containing that API key (required*)
+  DOPPELCLAUDE_HTTP_OPENCODE_ENVIRONMENT_HEADING
+                                  Replacement for OpenCode's environment heading;
+                                  required to serve OpenCode (or set it via _FILE)
   DOPPELCLAUDE_HTTP_HOST          Listen IP literal (default: 127.0.0.1)
   DOPPELCLAUDE_STATE_DIR          State and log directory
   PORT                            Listen port (default: 3456)

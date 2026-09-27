@@ -5,11 +5,13 @@ import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
+import type { HttpEnvironmentConfig } from "http-doppelclaude";
 import { runHttpDaemon } from "http-doppelclaude/startup";
 
-function config(stateDir: string) {
+function config(stateDir: string): HttpEnvironmentConfig {
   return {
     apiKey: "not-a-secret-used-outside-the-test",
+    openCodeEnvironmentHeading: undefined,
     host: "127.0.0.1",
     port: 3456,
     stateDir,

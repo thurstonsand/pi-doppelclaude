@@ -25,6 +25,13 @@ import { Value } from "typebox/value";
 
 const THREAD_LINE =
   /^Amp Thread URL: https:\/\/ampcode\.com\/threads\/(T-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\r?$/gm;
+const OPENCODE_SESSION = /^ses_[0-9A-Za-z]+$/;
+// Upstream bills a request carrying OpenCode's environment block as third-party extra usage.
+// Any one of its header, "Workspace root folder", and "Is directory a git repo" lines is part
+// of the match. The replacement heading is user-supplied, like pi's, so it never appears in
+// published source for upstream to match in turn.
+const OPENCODE_ENVIRONMENT_HEADER =
+  "Here is some useful information about the environment you are running in:";
 const DEFAULT_BODY_LIMIT = 32_000_000;
 const DEFAULT_RUNTIME_LIMIT = 32;
 const DEFAULT_IDLE_TTL = 3_600_000;
@@ -98,6 +105,8 @@ const RequestSchema = Type.Object(
               { type: Type.Literal("object") },
               { additionalProperties: true },
             ),
+            // Claude Code chooses its own tool-input streaming, so this hint has nothing to steer.
+            eager_input_streaming: Type.Optional(Type.Boolean()),
           },
           { additionalProperties: false },
         ),
@@ -173,6 +182,8 @@ interface CallRecord {
 
 export interface HttpServerOptions {
   apiKey: string;
+  /** Absent disables OpenCode: its requests are rejected rather than sent unrewritten. */
+  openCodeEnvironmentHeading?: string;
   supportedModels: readonly ModelInfo[];
   maxBodyBytes?: number;
   maxRuntimes?: number;
@@ -191,6 +202,7 @@ export interface HttpServerOptions {
 
 export interface HttpEnvironmentConfig {
   apiKey: string;
+  openCodeEnvironmentHeading: string | undefined;
   host: string;
   port: number;
   stateDir: string;
@@ -322,14 +334,14 @@ function errorResponse(response: ServerResponse, status: number, message: string
     JSON.stringify({ type: "error", error: { type: "invalid_request_error", message } }),
   );
 }
-function extractThread(system: ApiRequest["system"]): {
+function systemPrompt(system: ApiRequest["system"]): string {
+  return typeof system === "string" ? system : (system ?? []).map((block) => block.text).join("\n");
+}
+function extractThread(prompt: string): {
   threadId: string | null;
-  prompt: string;
   markerCount: number;
   malformed: boolean;
 } {
-  const texts = typeof system === "string" ? [system] : (system ?? []).map((block) => block.text);
-  const prompt = texts.join("\n");
   const outside: string[] = [];
   let outsideStart = 0;
   let depth = 0;
@@ -367,13 +379,12 @@ function extractThread(system: ApiRequest["system"]): {
   for (const _match of markerText.matchAll(/Amp Thread URL:/g)) labelCount += 1;
   return {
     threadId: markerCount === 1 ? threadId : null,
-    prompt,
     markerCount,
     malformed: labelCount !== markerCount,
   };
 }
 
-function anonymousEligibility(body: ApiRequest): { eligible: boolean; contextBytes: number } {
+function isOneShot(body: ApiRequest): boolean {
   const message = body.messages[0];
   const textOnly =
     typeof message?.content === "string"
@@ -382,16 +393,22 @@ function anonymousEligibility(body: ApiRequest): { eligible: boolean; contextByt
         message.content.length > 0 &&
         message.content.every((block) => block.type === "text") &&
         message.content.some((block) => block.type === "text" && block.text.length > 0);
+  return (
+    body.messages.length === 1 &&
+    message?.role === "user" &&
+    textOnly &&
+    (body.tools === undefined || body.tools.length === 0)
+  );
+}
+
+function anonymousEligibility(body: ApiRequest): { eligible: boolean; contextBytes: number } {
   const contextBytes = Buffer.byteLength(
     JSON.stringify({ system: body.system, messages: body.messages }),
     "utf8",
   );
   return {
     eligible:
-      body.messages.length === 1 &&
-      message?.role === "user" &&
-      textOnly &&
-      (body.tools === undefined || body.tools.length === 0) &&
+      isOneShot(body) &&
       contextBytes <= ANONYMOUS_MAX_CONTEXT_BYTES &&
       body.max_tokens <= ANONYMOUS_MAX_TOKENS,
     contextBytes,
@@ -867,33 +884,51 @@ export function createHttpServer(options: HttpServerOptions): Server {
         throw new RequestError("model must be a stable Claude model ID or <provider>/<model>");
       diagnostic.requestedModel = body.model.split("/").at(-1);
       diagnostic.resolvedModel = model;
-      const extracted = extractThread(body.system);
-      const { prompt } = extracted;
-      markerCount = extracted.markerCount;
-      const anonymous = extracted.markerCount === 0;
-      const eligibility = anonymousEligibility(body);
-      Object.assign(diagnostic, {
-        requestKind: extracted.markerCount === 0 ? "anonymous" : "keyed",
-        anonymousEligible: anonymous ? eligibility.eligible && !extracted.malformed : null,
-        anonymousContextBytes: anonymous ? eligibility.contextBytes : null,
-        declaredMaxTokens: body.max_tokens,
-      });
-      if (extracted.markerCount > 1)
-        throw new RequestError(
-          "system must contain exactly one Amp Thread URL line",
-          400,
-          extracted.markerCount,
-        );
-      if (extracted.malformed)
-        throw new RequestError("system contains a malformed Amp Thread URL line", 400, 0);
-      if (anonymous && !eligibility.eligible)
-        throw new RequestError(
-          "unkeyed requests require one nonempty text-only user message, no tools, at most 16384 context bytes, and max_tokens at most 4096",
-          400,
-          0,
-        );
-      const threadId = extracted.threadId ?? `anonymous:${randomUUID()}`;
-      safeThreadId = extracted.threadId;
+      let prompt = systemPrompt(body.system);
+      const openCodeSession = request.headers["x-session-id"];
+      let conversationId: string | null;
+      diagnostic.declaredMaxTokens = body.max_tokens;
+      if (openCodeSession !== undefined) {
+        if (typeof openCodeSession !== "string" || !OPENCODE_SESSION.test(openCodeSession))
+          throw new RequestError("x-session-id must be a single OpenCode ses_ session ID");
+        if (!options.openCodeEnvironmentHeading)
+          throw new RequestError(
+            "OpenCode requests require DOPPELCLAUDE_HTTP_OPENCODE_ENVIRONMENT_HEADING on the server",
+          );
+        // OpenCode sends title and compaction requests under the conversation's session ID;
+        // they must not touch its warm runtime.
+        conversationId = isOneShot(body) ? null : openCodeSession;
+        diagnostic.requestKind = conversationId ? "opencode" : "opencode_one_shot";
+        prompt = prompt.replace(OPENCODE_ENVIRONMENT_HEADER, options.openCodeEnvironmentHeading);
+      } else {
+        const extracted = extractThread(prompt);
+        markerCount = extracted.markerCount;
+        const eligibility = anonymousEligibility(body);
+        const unkeyed = extracted.markerCount === 0;
+        Object.assign(diagnostic, {
+          requestKind: unkeyed ? "anonymous" : "keyed",
+          anonymousEligible: unkeyed ? eligibility.eligible && !extracted.malformed : null,
+          anonymousContextBytes: unkeyed ? eligibility.contextBytes : null,
+        });
+        if (extracted.markerCount > 1)
+          throw new RequestError(
+            "system must contain exactly one Amp Thread URL line",
+            400,
+            extracted.markerCount,
+          );
+        if (extracted.malformed)
+          throw new RequestError("system contains a malformed Amp Thread URL line", 400, 0);
+        if (unkeyed && !eligibility.eligible)
+          throw new RequestError(
+            "unkeyed requests require one nonempty text-only user message, no tools, at most 16384 context bytes, and max_tokens at most 4096",
+            400,
+            0,
+          );
+        conversationId = extracted.threadId;
+      }
+      const anonymous = conversationId === null;
+      const threadId = conversationId ?? `anonymous:${randomUUID()}`;
+      safeThreadId = conversationId;
       reservationKey = threadId;
       stage = "acquire_runtime";
       // Validate history references before reserving scarce process capacity. Tool names are mapped
@@ -903,11 +938,11 @@ export function createHttpServer(options: HttpServerOptions): Server {
       state = await registry(() => {
         if (shuttingDown) throw new RequestError("server is shutting down", 503);
         if (closing.has(threadId) || pending.has(threadId))
-          throw new RequestError("another request for this Amp thread is active", 409);
+          throw new RequestError("another request for this conversation is active", 409);
         const existing = states.get(threadId);
         if (existing) {
           if (existing.busy)
-            throw new RequestError("another request for this Amp thread is active", 409);
+            throw new RequestError("another request for this conversation is active", 409);
           existing.busy = true;
           return existing;
         }
@@ -968,7 +1003,7 @@ export function createHttpServer(options: HttpServerOptions): Server {
           state = await registry(() => {
             if (shuttingDown) throw new RequestError("server is shutting down", 503);
             if (!pending.has(threadId))
-              throw new RequestError("another request for this Amp thread is active", 409);
+              throw new RequestError("another request for this conversation is active", 409);
             if (
               states.size + closing.size + pending.size >
               (options.maxRuntimes ?? DEFAULT_RUNTIME_LIMIT)
@@ -1391,22 +1426,23 @@ export function createHttpServer(options: HttpServerOptions): Server {
   return server;
 }
 
+async function valueOrFileFromEnvironment(
+  env: NodeJS.ProcessEnv,
+  name: string,
+): Promise<string | undefined> {
+  const file = `${name}_FILE`;
+  if (env[name] !== undefined && env[file] !== undefined)
+    throw new Error(`set exactly one of ${name} or ${file}`);
+  const value = env[name] ?? (env[file] ? (await readFile(env[file], "utf8")).trim() : undefined);
+  if (value !== undefined && !value.trim()) throw new Error(`${name} must not be blank`);
+  return value;
+}
+
 export async function apiKeyFromEnvironment(env = process.env): Promise<string> {
-  if (
-    env.DOPPELCLAUDE_HTTP_API_KEY !== undefined &&
-    env.DOPPELCLAUDE_HTTP_API_KEY_FILE !== undefined
-  )
-    throw new Error(
-      "set exactly one of DOPPELCLAUDE_HTTP_API_KEY or DOPPELCLAUDE_HTTP_API_KEY_FILE",
-    );
-  const key =
-    env.DOPPELCLAUDE_HTTP_API_KEY ??
-    (env.DOPPELCLAUDE_HTTP_API_KEY_FILE
-      ? (await readFile(env.DOPPELCLAUDE_HTTP_API_KEY_FILE, "utf8")).trim()
-      : undefined);
-  if (key?.trim()) return key;
-  if (key !== undefined) throw new Error("HTTP spike API key must not be blank");
-  throw new Error("set DOPPELCLAUDE_HTTP_API_KEY or DOPPELCLAUDE_HTTP_API_KEY_FILE");
+  const key = await valueOrFileFromEnvironment(env, "DOPPELCLAUDE_HTTP_API_KEY");
+  if (key === undefined)
+    throw new Error("set DOPPELCLAUDE_HTTP_API_KEY or DOPPELCLAUDE_HTTP_API_KEY_FILE");
+  return key;
 }
 
 function integerOption(
@@ -1435,6 +1471,10 @@ export async function httpConfigFromEnvironment(
     throw new Error("DOPPELCLAUDE_HTTP_HOST must be an IPv4 or IPv6 address literal");
   return {
     apiKey: await apiKeyFromEnvironment(env),
+    openCodeEnvironmentHeading: await valueOrFileFromEnvironment(
+      env,
+      "DOPPELCLAUDE_HTTP_OPENCODE_ENVIRONMENT_HEADING",
+    ),
     host,
     port: integerOption(env, "PORT", 3456, 1, 65_535),
     stateDir,

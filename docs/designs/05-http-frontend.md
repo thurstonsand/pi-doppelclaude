@@ -39,7 +39,7 @@ Also surfaced during the spike, unrelated to Amp: the README claims `maxTokens` 
 ## Non-Goals
 
 - Serving anyone but the account owner. The daemon is a personal proxy; the legal-and-compliance page forbids intermediating subscription credentials for others.
-- T3 Code or any second client in v1. Requests without the Amp thread marker are unsupported, even if otherwise Messages API compatible.
+- T3 Code or any second client in v1. Requests without the Amp thread marker are unsupported, even if otherwise Messages API compatible. OpenCode was added after v1, keyed by its `X-Session-Id` header; see the package README.
 - Global history-based identity matching or `forkSession` cache optimization.
 - Persisting doppels across daemon restarts in v1 (see Alternatives).
 - Cancel semantics beyond what the pi frontend already has. The Amp app's mid-stream cancel has not been observed on the wire.

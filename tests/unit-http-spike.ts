@@ -8,7 +8,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { CoreResponseEvent } from "doppelclaude/core-response";
 import type { RuntimeRequest } from "doppelclaude/runtime-request";
-import { createHttpServer, projectHttpModels } from "http-doppelclaude";
+import { createHttpServer, type HttpServerOptions, projectHttpModels } from "http-doppelclaude";
 import sharp from "sharp";
 
 const KEY = "test-key";
@@ -155,13 +155,17 @@ function body(thread: string, messages: unknown[] = [{ role: "user", content: "g
     messages,
   };
 }
-async function harness(supportedModels: readonly ModelInfo[] = []) {
+async function harness(
+  supportedModels: readonly ModelInfo[] = [],
+  overrides: Partial<HttpServerOptions> = {},
+) {
   const requests = new Map<string, RuntimeRequest[]>();
   const rebuilds = new Map<string, string[]>();
   const logs: Array<Record<string, unknown>> = [];
   const server = createHttpServer({
     apiKey: KEY,
     supportedModels,
+    openCodeEnvironmentHeading: "Test environment heading:",
     log: (record) => logs.push(record),
     createRuntime(id) {
       const seen: RuntimeRequest[] = [];
@@ -170,6 +174,7 @@ async function harness(supportedModels: readonly ModelInfo[] = []) {
       rebuilds.set(id, marked);
       return fakeRuntime(seen, marked) as never;
     },
+    ...overrides,
   });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
@@ -180,10 +185,10 @@ async function harness(supportedModels: readonly ModelInfo[] = []) {
     requests,
     rebuilds,
     logs,
-    post: (value: unknown, key = KEY) =>
+    post: (value: unknown, key = KEY, headers: Record<string, string> = {}) =>
       fetch(`${url}/v1/messages`, {
         method: "POST",
-        headers: { "content-type": "application/json", "x-api-key": key },
+        headers: { "content-type": "application/json", "x-api-key": key, ...headers },
         body: JSON.stringify(value),
       }),
     rawPost: (value: string) =>
@@ -537,6 +542,90 @@ describe("native HTTP frontend", () => {
           .filter((record) => record.event === "runtime_close")
           .every((record) => record.threadId === null),
       );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("keys OpenCode sessions by header and isolates their one-shot requests", async () => {
+    const app = await harness();
+    const S1 = "ses_f206d765affeGZ1IwPvP3qgxl7";
+    const S2 = "ses_f206d765affeGZ1IwPvP3qgxl8";
+    const openCode = (session: string, value: unknown) =>
+      app.post(value, KEY, { "x-session-id": session });
+    const conversation = (messages: unknown[]) => ({
+      ...body(A, messages),
+      system:
+        "You are OpenCode.\nSee docs mentioning Amp Thread URL: somewhere\nHere is some useful information about the environment you are running in:\n<env>\n</env>",
+      max_tokens: 32_000,
+      tools: [{ ...body(A).tools[0], eager_input_streaming: true }],
+    });
+    const oneShot = (text: string) => ({
+      model: "claude-haiku-4-5",
+      max_tokens: 32_000,
+      stream: true,
+      system: "You are a context summarization agent.",
+      messages: [{ role: "user", content: [{ type: "text", text }] }],
+    });
+    try {
+      assert.equal(
+        (await openCode(S1, conversation([{ role: "user", content: "go" }]))).status,
+        200,
+      );
+      assert.equal((await openCode(S1, oneShot("Generate a title"))).status, 200);
+      const compaction = await openCode(S1, oneShot("x".repeat(40_000)));
+      assert.equal(compaction.status, 200);
+      assert.match(await compaction.text(), /event: message_stop/);
+      assert.equal(
+        (await openCode(S2, conversation([{ role: "user", content: "go" }]))).status,
+        200,
+      );
+      const { tools: _, ...toolless } = conversation([
+        { role: "user", content: "one" },
+        { role: "assistant", content: [{ type: "text", text: "two" }] },
+        { role: "user", content: "three" },
+      ]);
+      assert.equal((await openCode(S2, toolless)).status, 200);
+      assert.equal((await openCode("abc", conversation([]))).status, 400);
+
+      assert.equal(app.requests.get(S1)?.length, 1);
+      assert.equal(
+        app.requests.get(S1)?.[0]?.systemPrompt,
+        "You are OpenCode.\nSee docs mentioning Amp Thread URL: somewhere\nTest environment heading:\n<env>\n</env>",
+      );
+      assert.equal(app.requests.get(S2)?.length, 2);
+      assert.equal(app.requests.has(A), false);
+      const oneShotKeys = [...app.requests.keys()].filter((key) => key.startsWith("anonymous:"));
+      assert.equal(oneShotKeys.length, 2);
+      assert.ok(oneShotKeys.every((key) => app.requests.get(key)?.length === 1));
+
+      const records = app.logs.filter((record) => record.event === "request_complete");
+      assert.deepEqual(
+        records.map((record) => [record.requestKind ?? null, record.threadId, record.outcome]),
+        [
+          ["opencode", S1, "success"],
+          ["opencode_one_shot", null, "success"],
+          ["opencode_one_shot", null, "success"],
+          ["opencode", S2, "success"],
+          ["opencode", S2, "success"],
+          [null, null, "error"],
+        ],
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("rejects OpenCode sessions without an environment heading and still serves Amp", async () => {
+    const app = await harness([], { openCodeEnvironmentHeading: undefined });
+    try {
+      const openCode = await app.post(body(A, [{ role: "user", content: "go" }]), KEY, {
+        "x-session-id": "ses_f206d765affeGZ1IwPvP3qgxl7",
+      });
+      assert.equal(openCode.status, 400);
+      assert.match(await openCode.text(), /DOPPELCLAUDE_HTTP_OPENCODE_ENVIRONMENT_HEADING/);
+      assert.equal((await app.post(body(A, [{ role: "user", content: "go" }]))).status, 200);
+      assert.deepEqual([...app.requests.keys()], [A]);
     } finally {
       await app.close();
     }
