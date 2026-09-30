@@ -19,10 +19,9 @@ run = [
     # pi must always resolve to the global install, never this repo's copy
     "rm -f node_modules/.bin/pi",
     "hk install --mise --quiet",
-    "mkdir -p .mise && touch .mise/bootstrap",
 ]
 sources = ["mise.toml", "hk.pkl", "package.json", "package-lock.json"]
-outputs = ["node_modules/.package-lock.json", ".mise/bootstrap"]
+outputs = { auto = true }
 quiet = true
 
 [tasks.lint]

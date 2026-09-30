@@ -2,7 +2,6 @@
 .github
 .amp
 .agents
-.mise
 node_modules
 packages/*/dist
 diag

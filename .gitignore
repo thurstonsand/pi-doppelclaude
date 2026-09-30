@@ -1,6 +1,5 @@
 node_modules/
 packages/*/dist/
-.mise/
 .claude/
 .test-output/
 eli/.DS_Store
