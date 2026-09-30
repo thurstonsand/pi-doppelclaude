@@ -931,6 +931,201 @@ describe("native HTTP frontend", () => {
     }
   });
 
+  it("accepts OpenCode binding and cache hints, disabled thinking, and omitted display", async () => {
+    const app = await harness();
+    try {
+      for (const thinking of [
+        { type: "adaptive", block_binding: { prefix_mismatch_behavior: "drop_block" } },
+        { type: "adaptive", display: null as null },
+        { type: "disabled" },
+        { type: "enabled", budget_tokens: 2048, display: "omitted" },
+      ]) {
+        const response = await app.post({
+          ...body(A),
+          thinking,
+          output_config: { effort: "xhigh" },
+          cache_control: { type: "ephemeral" },
+          tools: body(A).tools.map((tool) => ({
+            ...tool,
+            type: "custom",
+            cache_control: { type: "ephemeral", ttl: "1h" },
+          })),
+        });
+        assert.equal(response.status, 200, await response.text());
+        const sent = app.requests.get(A)?.at(-1);
+        assert.equal(sent?.effort, "xhigh");
+        assert.deepEqual(
+          sent?.options?.thinking,
+          thinking.type === "enabled"
+            ? { type: "enabled", budgetTokens: 2048 }
+            : { type: thinking.type },
+        );
+        assert.equal(sent?.tools?.[0].cache_control, undefined);
+        assert.equal(sent?.tools?.[0].type, "custom");
+        assert.deepEqual(
+          sent?.options?.extraArgs,
+          thinking.display ? { "thinking-display": "omitted" } : undefined,
+        );
+      }
+      const strict = await app.post({
+        ...body(A),
+        thinking: { type: "adaptive", block_binding: { prefix_mismatch_behavior: "error" } },
+      });
+      assert.equal(strict.status, 400);
+      assert.match(await strict.text(), /\/thinking\/block_binding\/prefix_mismatch_behavior/);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("names the failing union block and source field without exposing its payload", async () => {
+    const app = await harness();
+    try {
+      for (const [block, path, reason] of [
+        [{ type: "audio", data: "private-payload" }, "/messages/0/content/1/type", "audio"],
+        [
+          { type: "document", source: { type: "base64", media_type: "application/pdf" } },
+          "/messages/0/content/1/source",
+          "data",
+        ],
+        [
+          {
+            type: "tool_result",
+            tool_use_id: "id",
+            content: [{ type: "document", source: { type: "url", url: 123 } }],
+          },
+          "/messages/0/content/1/content/0/source/url",
+          "string",
+        ],
+      ] as const) {
+        const response = await app.post(
+          body(A, [{ role: "user", content: [{ type: "text", text: "private-payload" }, block] }]),
+        );
+        assert.equal(response.status, 400);
+        const error = await response.text();
+        assert.ok(error.includes(path), error);
+        assert.ok(error.includes(reason), error);
+        assert.doesNotMatch(error, /private-payload/);
+      }
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("forwards document/source variants and redacted thinking without losing history", async () => {
+    const app = await harness();
+    const sources = [
+      { type: "base64", media_type: "application/pdf", data: "JVBERi0xLjQ=" },
+      { type: "url", url: "https://example.com/report.pdf" },
+      { type: "file", file_id: "file_report" },
+      { type: "text", media_type: "text/plain", data: "report text" },
+      { type: "content", content: [{ type: "text", text: "paragraph" }] },
+      { type: "content", content: "paragraph" },
+    ];
+    const blocks = [
+      ...sources.map((source) => ({
+        type: "document",
+        source,
+        title: "Report",
+        context: "Evidence",
+        citations: { enabled: true },
+      })),
+      { type: "image", source: { type: "url", url: "https://example.com/image.png" } },
+      { type: "image", source: { type: "file", file_id: "file_image" } },
+      {
+        type: "search_result",
+        source: "https://example.com",
+        title: "Result",
+        content: [{ type: "text", text: "Result text" }],
+        citations: { enabled: true },
+      },
+    ];
+    const messages = [
+      { role: "user", content: blocks },
+      {
+        role: "assistant",
+        content: [
+          { type: "redacted_thinking", data: "opaque-encrypted-reasoning" },
+          {
+            type: "tool_use",
+            id: "read_pdf",
+            name: "lookup",
+            input: {},
+            caller: { type: "direct" },
+          },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "read_pdf",
+            content: [{ type: "text", text: "PDF read" }, ...blocks],
+          },
+        ],
+      },
+    ];
+    try {
+      const response = await app.post(body(A, messages));
+      assert.equal(response.status, 200, await response.text());
+      const expected = structuredClone(messages);
+      Object.assign(expected[1].content[1], { name: "mcp__custom-tools__lookup" });
+      assert.deepEqual(app.requests.get(A)?.[0].messages, expected);
+      const followup = await app.post(
+        body(A, [
+          ...messages,
+          {
+            role: "assistant",
+            content: [
+              { type: "thinking", thinking: "why", signature: "signed" },
+              { type: "text", text: "done" },
+            ],
+          },
+          { role: "user", content: "continue" },
+        ]),
+      );
+      assert.equal(followup.status, 200, await followup.text());
+      assert.deepEqual(app.requests.get(A)?.[1].messages.slice(0, 3), expected);
+      assert.equal(app.logs[1].historyDiverged, false);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("accepts omitted tool-result content and strips cache hints inside document content", async () => {
+    const app = await harness();
+    const paragraph = { type: "text", text: "Paragraph" };
+    const document = {
+      type: "document",
+      source: {
+        type: "content",
+        content: [{ ...paragraph, cache_control: { type: "ephemeral" } }],
+      },
+      cache_control: null as null,
+    };
+    try {
+      const response = await app.post(
+        body(A, [
+          { role: "user", content: [document] },
+          {
+            role: "assistant",
+            content: [{ type: "tool_use", id: "empty", name: "lookup", input: {} }],
+          },
+          { role: "user", content: [{ type: "tool_result", tool_use_id: "empty" }] },
+        ]),
+      );
+      assert.equal(response.status, 200, await response.text());
+      const sent = app.requests.get(A)?.[0].messages;
+      assert.deepEqual(sent?.[0].content, [
+        { type: "document", source: { type: "content", content: [paragraph] } },
+      ]);
+      assert.deepEqual(sent?.[2].content, [{ type: "tool_result", tool_use_id: "empty" }]);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("sends native requests, parameters, schemas, maps, and raw SSE", async () => {
     const app = await harness();
     try {
@@ -1660,8 +1855,9 @@ describe("native HTTP frontend", () => {
       type: "image",
       source: { type: "base64", media_type: "image/png", data: "A".repeat(5 * 1024 * 1024) },
     };
+    const document = { type: "document", source: { type: "content", content: [image] } };
     const history = [
-      { role: "user", content: [image] },
+      { role: "user", content: [image, document] },
       {
         role: "assistant",
         content: [{ type: "tool_use", id: "client", name: "lookup", input: {} }],
@@ -1680,6 +1876,10 @@ describe("native HTTP frontend", () => {
       assert.ok(sent && Array.isArray(sent[0].content));
       const prepared = sent[0].content[0];
       assert.ok(prepared.type === "image" && prepared.source.type === "base64");
+      assert.deepEqual(sent[0].content[1], {
+        type: "document",
+        source: { type: "content", content: [prepared] },
+      });
       assert.equal(prepared.source.media_type, "image/webp");
       assert.ok(prepared.source.data.length <= 5 * 1024 * 1024);
       const decoded = sharp(Buffer.from(prepared.source.data, "base64"));
@@ -1718,11 +1918,18 @@ describe("native HTTP frontend", () => {
       );
       assert.equal(continued.status, 200);
       await continued.text();
-      assert.equal(app.logs[0].resizedImages, 2);
-      assert.equal(app.logs[1].resizedImages, 2);
+      assert.equal(app.logs[0].resizedImages, 3);
+      assert.equal(app.logs[1].resizedImages, 3);
       assert.equal(app.logs[1].historyDiverged, false);
       assert.equal(app.logs[1].sync, "compatible");
       assert.deepEqual(app.requests.get(A)?.[1].messages.slice(0, 3), sent);
+      const strict = await app.post(
+        body(A, [
+          { role: "user", content: [{ ...image, transformations: { oversized_image: "error" } }] },
+        ]),
+      );
+      assert.equal(strict.status, 400);
+      assert.match(await strict.text(), /transformations\.oversized_image is error/);
     } finally {
       await app.close();
     }

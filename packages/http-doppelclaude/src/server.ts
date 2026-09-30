@@ -20,7 +20,7 @@ import type { RuntimeRequest } from "doppelclaude/runtime-request";
 import { sdkChildEnv } from "doppelclaude/sdk-child-env";
 import { prepareToolDescriptions } from "doppelclaude/tool-description-relocation";
 import sharp from "sharp";
-import { type Static, Type } from "typebox";
+import { type Static, type TSchema, Type } from "typebox";
 import { Value } from "typebox/value";
 
 const THREAD_LINE =
@@ -39,30 +39,90 @@ const DEFAULT_REQUEST_TIMEOUT = 600_000;
 const DEFAULT_SHUTDOWN_TIMEOUT = 15_000;
 const ANONYMOUS_MAX_CONTEXT_BYTES = 16_384;
 const ANONYMOUS_MAX_TOKENS = 4_096;
-const CacheControl = Type.Optional(Type.Record(Type.String(), Type.Unknown()));
+const CacheControl = Type.Optional(
+  Type.Union([Type.Record(Type.String(), Type.Unknown()), Type.Null()]),
+);
 const TextBlock = Type.Object({
   type: Type.Literal("text"),
   text: Type.String(),
+  citations: Type.Optional(Type.Union([Type.Array(Type.Unknown()), Type.Null()])),
   cache_control: CacheControl,
 });
+const URLSource = Type.Object({ type: Type.Literal("url"), url: Type.String() });
+const FileSource = Type.Object({ type: Type.Literal("file"), file_id: Type.String() });
 const ImageBlock = Type.Object({
   type: Type.Literal("image"),
-  source: Type.Object({
-    type: Type.Literal("base64"),
-    media_type: Type.Union([
-      Type.Literal("image/jpeg"),
-      Type.Literal("image/png"),
-      Type.Literal("image/gif"),
-      Type.Literal("image/webp"),
+  source: Type.Union([
+    Type.Object({
+      type: Type.Literal("base64"),
+      media_type: Type.Union([
+        Type.Literal("image/jpeg"),
+        Type.Literal("image/png"),
+        Type.Literal("image/gif"),
+        Type.Literal("image/webp"),
+      ]),
+      data: Type.String(),
+    }),
+    URLSource,
+    FileSource,
+  ]),
+  transformations: Type.Optional(
+    Type.Union([
+      Type.Object(
+        {
+          oversized_image: Type.Optional(
+            Type.Union([Type.Literal("downsize"), Type.Literal("error")]),
+          ),
+        },
+        { additionalProperties: false },
+      ),
+      Type.Null(),
     ]),
-    data: Type.String(),
-  }),
+  ),
+  cache_control: CacheControl,
+});
+const Citations = Type.Object({ enabled: Type.Optional(Type.Boolean()) });
+const DocumentBlock = Type.Object({
+  type: Type.Literal("document"),
+  source: Type.Union([
+    Type.Object({
+      type: Type.Literal("base64"),
+      media_type: Type.Literal("application/pdf"),
+      data: Type.String(),
+    }),
+    Type.Object({
+      type: Type.Literal("text"),
+      media_type: Type.Literal("text/plain"),
+      data: Type.String(),
+    }),
+    Type.Object({
+      type: Type.Literal("content"),
+      content: Type.Union([Type.String(), Type.Array(Type.Union([TextBlock, ImageBlock]))]),
+    }),
+    URLSource,
+    FileSource,
+  ]),
+  title: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+  context: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+  citations: Type.Optional(Type.Union([Citations, Type.Null()])),
+  cache_control: CacheControl,
+});
+const SearchResultBlock = Type.Object({
+  type: Type.Literal("search_result"),
+  source: Type.String(),
+  title: Type.String(),
+  content: Type.Array(TextBlock),
+  citations: Type.Optional(Citations),
   cache_control: CacheControl,
 });
 const ThinkingBlock = Type.Object({
   type: Type.Literal("thinking"),
   thinking: Type.String(),
   signature: Type.String(),
+});
+const RedactedThinkingBlock = Type.Object({
+  type: Type.Literal("redacted_thinking"),
+  data: Type.String(),
 });
 const ToolUseBlock = Type.Object({
   type: Type.Literal("tool_use"),
@@ -74,14 +134,22 @@ const ToolUseBlock = Type.Object({
 const ToolResultBlock = Type.Object({
   type: Type.Literal("tool_result"),
   tool_use_id: Type.String(),
-  content: Type.Union([Type.String(), Type.Array(Type.Union([TextBlock, ImageBlock]))]),
+  content: Type.Optional(
+    Type.Union([
+      Type.String(),
+      Type.Array(Type.Union([TextBlock, ImageBlock, DocumentBlock, SearchResultBlock])),
+    ]),
+  ),
   is_error: Type.Optional(Type.Boolean()),
   cache_control: CacheControl,
 });
 const ContentBlock = Type.Union([
   TextBlock,
   ImageBlock,
+  DocumentBlock,
+  SearchResultBlock,
   ThinkingBlock,
+  RedactedThinkingBlock,
   ToolUseBlock,
   ToolResultBlock,
 ]);
@@ -89,6 +157,19 @@ const Message = Type.Object({
   role: Type.Union([Type.Literal("user"), Type.Literal("assistant")]),
   content: Type.Union([Type.String(), Type.Array(ContentBlock)]),
 });
+// Claude Code owns thinking-prefix reconciliation; clients may request its drop policy,
+// but the SDK has no equivalent of the API's strict "error" policy.
+const BlockBinding = Type.Optional(
+  Type.Object(
+    {
+      prefix_mismatch_behavior: Type.Literal("drop_block"),
+    },
+    { additionalProperties: false },
+  ),
+);
+const ThinkingDisplay = Type.Optional(
+  Type.Union([Type.Literal("summarized"), Type.Literal("omitted"), Type.Null()]),
+);
 const RequestSchema = Type.Object(
   {
     model: Type.String(),
@@ -100,6 +181,7 @@ const RequestSchema = Type.Object(
         Type.Object(
           {
             name: Type.String(),
+            type: Type.Optional(Type.Union([Type.Literal("custom"), Type.Null()])),
             description: Type.Optional(Type.String()),
             input_schema: Type.Object(
               { type: Type.Literal("object") },
@@ -107,12 +189,14 @@ const RequestSchema = Type.Object(
             ),
             // Claude Code chooses its own tool-input streaming, so this hint has nothing to steer.
             eager_input_streaming: Type.Optional(Type.Boolean()),
+            cache_control: CacheControl,
           },
           { additionalProperties: false },
         ),
       ),
     ),
     stream: Type.Optional(Type.Boolean()),
+    cache_control: CacheControl,
     temperature: Type.Optional(Type.Number()),
     tool_choice: Type.Optional(
       Type.Union([
@@ -125,7 +209,8 @@ const RequestSchema = Type.Object(
         Type.Object(
           {
             type: Type.Literal("adaptive"),
-            display: Type.Optional(Type.Literal("summarized")),
+            display: ThinkingDisplay,
+            block_binding: BlockBinding,
           },
           { additionalProperties: false },
         ),
@@ -133,10 +218,12 @@ const RequestSchema = Type.Object(
           {
             type: Type.Literal("enabled"),
             budget_tokens: Type.Integer({ minimum: 1024 }),
-            display: Type.Optional(Type.Literal("summarized")),
+            display: ThinkingDisplay,
+            block_binding: BlockBinding,
           },
           { additionalProperties: false },
         ),
+        Type.Object({ type: Type.Literal("disabled") }, { additionalProperties: false }),
       ]),
     ),
     output_config: Type.Optional(
@@ -146,6 +233,7 @@ const RequestSchema = Type.Object(
             Type.Literal("low"),
             Type.Literal("medium"),
             Type.Literal("high"),
+            Type.Literal("xhigh"),
             Type.Literal("max"),
           ]),
         },
@@ -156,6 +244,55 @@ const RequestSchema = Type.Object(
   { additionalProperties: false },
 );
 type ApiRequest = Static<typeof RequestSchema>;
+
+function schemaError(schema: TSchema, value: unknown, path = ""): string {
+  const object =
+    value !== null && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : undefined;
+  if (Type.IsUnion(schema)) {
+    const branch = schema.anyOf.find((candidate) =>
+      object && typeof object.type === "string"
+        ? Type.IsObject(candidate) &&
+          Type.IsLiteral(candidate.properties.type) &&
+          candidate.properties.type.const === object.type
+        : "type" in candidate && candidate.type === (Array.isArray(value) ? "array" : typeof value),
+    );
+    if (branch) return schemaError(branch, value, path);
+    if (object && typeof object.type === "string")
+      return `schema validation failed at ${path}/type: unsupported type ${JSON.stringify(object.type.slice(0, 80))}`;
+  }
+  if (Type.IsObject(schema) && object) {
+    for (const [key, child] of Object.entries(schema.properties)) {
+      if (key in object && !Value.Check(child, object[key]))
+        return (
+          schemaError(
+            child,
+            object[key],
+            `${path}/${key.replaceAll("~", "~0").replaceAll("/", "~1")}`,
+          ) +
+          (typeof object.type === "string"
+            ? `; in type ${JSON.stringify(object.type.slice(0, 80))}`
+            : "")
+        );
+    }
+  }
+  if (Type.IsArray(schema) && Array.isArray(value)) {
+    const index = value.findIndex((item) => !Value.Check(schema.items, item));
+    if (index !== -1) return schemaError(schema.items, value[index], `${path}/${index}`);
+  }
+  const errors = Value.Errors(schema, value);
+  // Unknown properties produce both a boolean-schema error and a useful property error.
+  const error = errors.find((candidate) => candidate.keyword !== "boolean") ?? errors[0];
+  const type =
+    object && typeof object.type === "string"
+      ? ` (type ${JSON.stringify(object.type.slice(0, 80))})`
+      : "";
+  return error
+    ? `schema validation failed at ${path + error.instancePath || "/"}: ${error.message}${type}; params=${JSON.stringify(error.params)}`
+    : "invalid request";
+}
+
 type Runtime = ReturnType<typeof createBridgeRuntime>;
 interface ThreadState {
   runtime: Runtime;
@@ -419,17 +556,42 @@ function fingerprint(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, 16);
 }
 
+function* contentBlocks(
+  blocks: Static<typeof ContentBlock>[],
+): Generator<Static<typeof ContentBlock>> {
+  for (const block of blocks) {
+    yield block;
+    if (
+      (block.type === "tool_result" || block.type === "search_result") &&
+      Array.isArray(block.content)
+    )
+      yield* contentBlocks(block.content);
+    if (
+      block.type === "document" &&
+      block.source.type === "content" &&
+      Array.isArray(block.source.content)
+    )
+      yield* contentBlocks(block.source.content);
+  }
+}
+
 async function prepareImages(messages: ApiRequest["messages"]): Promise<number> {
   // Claude Code checks encoded length, not the decoded-byte limit used by clients.
   const maxBase64Size = 5 * 1024 * 1024;
   let resized = 0;
   for (const message of messages) {
     if (!Array.isArray(message.content)) continue;
-    const blocks = message.content.flatMap((block) =>
-      block.type === "tool_result" && Array.isArray(block.content) ? block.content : [block],
-    );
-    for (const block of blocks) {
-      if (block.type !== "image" || block.source.data.length <= maxBase64Size) continue;
+    for (const block of contentBlocks(message.content)) {
+      if (
+        block.type !== "image" ||
+        block.source.type !== "base64" ||
+        block.source.data.length <= maxBase64Size
+      )
+        continue;
+      if (block.transformations?.oversized_image === "error")
+        throw new RequestError(
+          "image exceeds Claude Code's base64 size limit and transformations.oversized_image is error",
+        );
       const input = Buffer.from(block.source.data, "base64");
       for (let dimension = 2000; dimension >= 1; dimension = Math.floor(dimension / 2)) {
         const output = await sharp(input)
@@ -451,16 +613,12 @@ async function prepareImages(messages: ApiRequest["messages"]): Promise<number> 
 }
 
 function stripBlockCaches(messages: ApiRequest["messages"]): MessageParam[] {
-  const copy = structuredClone(messages) as Array<Record<string, unknown>>;
+  const copy = structuredClone(messages);
   for (const message of copy) {
-    delete message.cache_control;
+    if ("cache_control" in message) delete message.cache_control;
     if (Array.isArray(message.content))
-      for (const raw of message.content) {
-        const block = raw as Record<string, unknown>;
-        delete block.cache_control;
-        if (block.type === "tool_result" && Array.isArray(block.content))
-          for (const nested of block.content)
-            delete (nested as Record<string, unknown>).cache_control;
+      for (const block of contentBlocks(message.content)) {
+        if ("cache_control" in block) delete block.cache_control;
       }
   }
   return copy as unknown as MessageParam[];
@@ -478,7 +636,10 @@ function canonicalJson(value: unknown): string {
 }
 
 function canonicalHistory(messages: MessageParam[]): string {
-  const copy = structuredClone(messages) as Array<{ role: string; content: unknown }>;
+  const copy = stripBlockCaches(messages as ApiRequest["messages"]) as Array<{
+    role: string;
+    content: unknown;
+  }>;
   const ids = new Map<string, string>();
   let assistant = 0;
   for (const message of copy) {
@@ -486,12 +647,10 @@ function canonicalHistory(messages: MessageParam[]): string {
       let call = 0;
       for (const raw of message.content) {
         const block = raw as Record<string, unknown>;
-        delete block.cache_control;
         if (block.type === "text") delete block.citations;
         if (block.type === "tool_result" && Array.isArray(block.content))
           for (const nested of block.content) {
             const content = nested as Record<string, unknown>;
-            delete content.cache_control;
             if (content.type === "text") delete content.citations;
           }
         if (message.role === "assistant" && block.type === "tool_use") {
@@ -543,8 +702,15 @@ function validateMessages(messages: ApiRequest["messages"]): void {
     for (const block of message.content) {
       const allowed =
         message.role === "assistant"
-          ? block.type === "text" || block.type === "thinking" || block.type === "tool_use"
-          : block.type === "text" || block.type === "image" || block.type === "tool_result";
+          ? block.type === "text" ||
+            block.type === "thinking" ||
+            block.type === "redacted_thinking" ||
+            block.type === "tool_use"
+          : block.type === "text" ||
+            block.type === "image" ||
+            block.type === "document" ||
+            block.type === "search_result" ||
+            block.type === "tool_result";
       if (!allowed) throw new RequestError(`${block.type} is invalid in a ${message.role} message`);
     }
   }
@@ -866,15 +1032,7 @@ export function createHttpServer(options: HttpServerOptions): Server {
       const value = await readBody(request, options.maxBodyBytes ?? DEFAULT_BODY_LIMIT);
       if (shuttingDown) throw new RequestError("server is shutting down", 503);
       if (!Value.Check(RequestSchema, value)) {
-        const errors = Value.Errors(RequestSchema, value);
-        // An unknown property is reported twice: against the `false` subschema it landed on,
-        // which names nothing, and against the parent object, which names the key.
-        const error = errors.find((candidate) => candidate.keyword !== "boolean") ?? errors[0];
-        throw new RequestError(
-          error
-            ? `schema validation failed at ${error.instancePath || "/"}: ${error.message}; params=${JSON.stringify(error.params)}`
-            : "invalid request",
-        );
+        throw new RequestError(schemaError(RequestSchema, value));
       }
       const body = value as ApiRequest;
       validateMessages(body.messages);
@@ -1036,7 +1194,11 @@ export function createHttpServer(options: HttpServerOptions): Server {
       const toolNameToSdk = new Map<string, string>();
       const toolNameToClient = new Map<string, string>();
       const rawTools =
-        body.tool_choice?.type === "none" ? [] : (structuredClone(body.tools ?? []) as Tool[]);
+        body.tool_choice?.type === "none"
+          ? []
+          : ((body.tools ?? []).map(({ cache_control: _cache, ...tool }) =>
+              structuredClone(tool),
+            ) as Tool[]);
       const prepared = prepareToolDescriptions(
         rawTools,
         prompt,
@@ -1173,11 +1335,12 @@ export function createHttpServer(options: HttpServerOptions): Server {
             body.thinking?.type === "enabled"
               ? { type: "enabled", budgetTokens: body.thinking.budget_tokens }
               : body.thinking
-                ? { type: "adaptive" }
+                ? { type: body.thinking.type }
                 : undefined,
-          extraArgs: body.thinking?.display
-            ? { "thinking-display": body.thinking.display }
-            : undefined,
+          extraArgs:
+            body.thinking && "display" in body.thinking && body.thinking.display
+              ? { "thinking-display": body.thinking.display }
+              : undefined,
           env: sdkChildEnv({
             ENABLE_TOOL_SEARCH: "false",
             DISABLE_AUTO_COMPACT: "1",

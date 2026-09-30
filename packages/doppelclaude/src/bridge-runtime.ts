@@ -250,8 +250,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies = {}
       .join("\n");
   }
 
-  /** Extract the last user message as ContentBlockParam[] (preserving images).
-   *  Returns null if no images — caller should fall back to string prompt. */
+  /** Keep structured user content intact; tool results travel through MCP or transcript replay. */
   function extractUserPromptBlocks(messages: MessageParam[]): ContentBlockParam[] | null {
     const last = messages[messages.length - 1];
     if (last?.role !== "user") return null;
@@ -266,17 +265,8 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies = {}
     debug(
       `extractUserPromptBlocks: ${last.content.length} blocks, types=${last.content.map((b) => b.type).join(",")}`,
     );
-    let hasImage = false;
-    const blocks: ContentBlockParam[] = [];
-    for (const block of last.content) {
-      if (block.type === "text" && block.text) {
-        blocks.push({ type: "text", text: block.text });
-      } else if (block.type === "image" && block.source.type === "base64") {
-        hasImage = true;
-        blocks.push(block);
-      }
-    }
-    return hasImage ? blocks : null;
+    const blocks = last.content.filter((block) => block.type !== "tool_result");
+    return blocks.length ? blocks : null;
   }
 
   function sdkPrompt(content: string | ContentBlockParam[]): SDKUserMessage {
@@ -879,7 +869,28 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies = {}
     const lastHasUserInput =
       lastMsg?.role === "user" &&
       (typeof lastMsg.content === "string" ||
-        lastUserBlocks.some((block) => block.type === "text" || block.type === "image"));
+        lastUserBlocks.some((block) => block.type !== "tool_result"));
+    // MCP cannot carry native document/search blocks or URL/file images. Import the entire
+    // tail instead of discarding them or inventing a lossy text/resource representation.
+    let replayToolContent = false;
+    for (let index = nativeMessages.length - 1; index >= 0; index--) {
+      const message = nativeMessages[index];
+      if (message.role === "assistant") break;
+      if (
+        Array.isArray(message.content) &&
+        message.content.some(
+          (block) =>
+            block.type === "tool_result" &&
+            Array.isArray(block.content) &&
+            block.content.some(
+              (item) =>
+                !(item.type === "text" && !item.citations?.length) &&
+                !(item.type === "image" && item.source.type === "base64" && !item.transformations),
+            ),
+        )
+      )
+        replayToolContent = true;
+    }
     debug(
       `provider: run called, conversationKey=${request.conversationKey?.slice(0, 8) ?? "ephemeral"}, lastRole=${lastMsg?.role}`,
     );
@@ -1011,7 +1022,10 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies = {}
       });
     }
 
-    const allResults = activeQueryContexts.size > 0 ? extractAllToolResults(nativeMessages) : [];
+    const allResults =
+      !replayToolContent && activeQueryContexts.size > 0
+        ? extractAllToolResults(nativeMessages)
+        : [];
     const resultCtx = allResults.length > 0 ? contextForToolResults(allResults) : undefined;
 
     if (resultCtx) {
@@ -1049,6 +1063,19 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies = {}
               // is the replay's prompt; otherwise the history ends at the results and the replay
               // only asks the fresh subprocess to carry on.
               const steering = lastHasUserInput;
+              const replayHistory = steering
+                ? [
+                    ...nativeMessages.slice(0, -1),
+                    ...(lastHasToolResult
+                      ? [
+                          {
+                            role: "user" as const,
+                            content: lastUserBlocks.filter((block) => block.type === "tool_result"),
+                          },
+                        ]
+                      : []),
+                  ]
+                : nativeMessages;
               debug(
                 `provider: replaying the tool-result continuation on a fresh subprocess (doppel=${doppel.label}, ${allResults.length} result(s) already in pi's history, prompt=${steering ? "steering" : "replay"}, persistent=${persistent})`,
               );
@@ -1059,9 +1086,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies = {}
               spawnTurn({
                 queryCtx,
                 freshTurn: planFreshTurn(queryCtx, persistent),
-                syncPlan: steering
-                  ? planSessionSync(nativeMessages, doppel.session)
-                  : planReplaySync(nativeMessages, doppel.session),
+                syncPlan: planReplaySync(replayHistory, doppel.session),
                 promptMessage: steering ? sdkUserMessage(nativeMessages) : sdkPrompt(REPLAY_PROMPT),
                 persistent,
                 drainExisting: false,
@@ -1139,7 +1164,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies = {}
       return stream;
     }
 
-    if (lastHasToolResult && request.explicitReplay) {
+    if (replayToolContent || (lastHasToolResult && request.explicitReplay)) {
       const doppel = doppels.resolve(request.conversationKey);
       const replayCtx = doppel.context;
       const persistent = doppel.kind === "host";
@@ -1156,7 +1181,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies = {}
         syncPlan: planReplaySync(nativeMessages, doppel.session),
         promptMessage: sdkPrompt(REPLAY_PROMPT),
         persistent,
-        drainExisting: Boolean(replayCtx.activeQuery),
+        drainExisting: !replayToolContent && Boolean(replayCtx.activeQuery),
       });
       return stream;
     }

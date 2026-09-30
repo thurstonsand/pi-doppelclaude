@@ -45,3 +45,18 @@ Pass:
 - a second turn that replays the first assistant message exactly, thinking block included, logs `sync: compatible` and `query_reused`. A hand-written history that drops the thinking block rebuilds; that is correct.
 
 The marker must match `THREAD_LINE` in `server.ts`, or the request is a 400 at the edge. `amp orb service logs doppelclaude-http | rg '"requestKind"'` (or the daemon's stdout elsewhere) shows the per-request diagnostic.
+
+## OpenCode PDF history
+
+Configure OpenCode's `@ai-sdk/anthropic` provider and the daemon's environment heading as described in the HTTP package README. Use a scratch directory containing a one-page PDF with a unique printed code; the prompt must not reveal the code. Select the provider explicitly, use the PDF's absolute client-side path, and close stdin for noninteractive runs.
+
+```sh
+opencode run --dir "$SCRATCH" --model doppelclaude/claude-fable-5-1 --format json \
+  "Use read to open $SCRATCH/report.pdf. Reply only with the verification code printed inside." </dev/null
+opencode run --dir "$SCRATCH" --model doppelclaude/claude-fable-5-1 --format json --session "$SESSION_ID" \
+  'Without tools, repeat the verification code from the preceding PDF.' </dev/null
+```
+
+Pass: the first run emits a completed `read` call with a PDF attachment and the exact code; the same-session followup repeats it without tools. The daemon accepts the PDF tool-result request and OpenCode's adaptive `block_binding`, rebuilds the SDK query to import the document, then logs `query_reused` on the followup. Also check a top-level PDF attachment with `opencode run --file "$SCRATCH/report.pdf"`. Source URL/file-ID variants are covered offline for forwarding; their live availability depends on upstream access.
+
+Verified with OpenCode 1.18.33 and Fable 5.1. A separate live Messages client check covers PDF tool results, a subsequent turn retaining the PDF, and a top-level PDF attachment with Haiku 4.5.

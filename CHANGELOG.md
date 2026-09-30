@@ -2,7 +2,7 @@
 
 # Changelog
 
-## Unreleased
+## UNRELEASED
 
 ### Added
 
@@ -16,6 +16,10 @@
 
 - pi's `maxTokens` reaches Claude Code as its output ceiling instead of being dropped, and payload hooks can change it as `max_tokens`.
 - A refusal fallback no longer replaces the model pi shows. The message keeps the requested model and records the served one as `responseModel`, as pi's own Anthropic provider does, so `/session` costs each model separately.
+- **Preserve OpenCode PDF history** — attached PDFs and documents returned by tools reach Claude Code intact, and later turns no longer fail validation. Document, search-result, URL/file image, and redacted-thinking content survive SDK prompts and transcript replay.
+- **Accept current Anthropic client options** — OpenCode's adaptive thinking binding hint, disabled/omitted thinking, `xhigh` effort, custom-tool markers, and cache hints are accepted. Unsupported controls remain explicit errors, with the compatibility boundary documented.
+- **Name invalid content precisely** — validation errors identify the offending block/source path and type instead of reporting the unrelated string branch. Nested document images receive the size check, and explicit no-resize image settings are honored.
+- **Retain mixed tool results on retry** — a dead-query retry preserves tool results that share a user message with steering, while sending the steering once as the new prompt.
 
 ## 0.13.1 — 2026-09-27
 
