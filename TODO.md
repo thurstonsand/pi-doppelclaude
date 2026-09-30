@@ -54,6 +54,21 @@
 
 ## Upstream Gaps
 
+- **Amp does not identify individual Oracle invocations**: Oracle requests carry
+  the parent Amp thread ID but no Oracle invocation ID. Two Oracle calls emitted
+  in one assistant turn therefore select the same warm runtime, and the second
+  returns 409 while the first is active. Hosted Amp guidance now says, “Call the
+  Oracle one at a time, never in parallel.” Reliable parallel support requires
+  either an upstream invocation ID or HTTP-side routing by exact canonical
+  history checkpoints; task hashes, arrival order, and tool IDs are ambiguous,
+  and Amp rewrites tool IDs. Fresh runtimes are not a cache-safe substitute: a
+  2026-09-30 live Fable A/B measured a warm tool continuation at 50,946 cache-read
+  and 74 cache-creation tokens, versus 0 read and 51,040 created after cold
+  replay. Wire capture showed that `Session.importMessages()` reconstructs the
+  first user message differently from Claude Code's live query, invalidating the
+  history prefix. OpenCode is unaffected because every subagent sends its own
+  `X-Session-Id`.
+
 - **Claude Code does not request fine-grained tool streaming**: verified on the wire
   with `diag/capture-proxy.mjs` — CC 2.1.226 sends `oauth`, `interleaved-thinking`,
   `thinking-token-count`, `context-management`, `prompt-caching-scope`,
