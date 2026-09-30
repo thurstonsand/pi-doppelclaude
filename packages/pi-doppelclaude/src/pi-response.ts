@@ -45,7 +45,7 @@ function createMessage(model: Model<Api>, record: CoreResponseRecord): Assistant
     content: [],
     api: model.api,
     provider: model.provider,
-    model: record.message.model,
+    model: model.id,
     usage: {
       input: 0,
       output: 0,
@@ -122,6 +122,7 @@ export function createPiResponseRuntime() {
             error: null,
           });
           messages.set(event.message.id, output);
+          if (event.message.model !== model.id) output.responseModel = event.message.model;
           applySdkUsage(output, event.message.usage, model);
           stream.push({ type: "start", partial: output });
         } else if (event.type === "content_block_start" && output) {
@@ -222,7 +223,8 @@ export function createPiResponseRuntime() {
             stream.push({ type: "start", partial: output });
           }
           messages.set(event.response.id, output);
-          output.model = event.response.message.model;
+          if (event.response.message.model !== model.id)
+            output.responseModel = event.response.message.model;
           const supported = event.response.message.content.filter(
             (block) =>
               block.type === "text" || block.type === "thinking" || block.type === "tool_use",
@@ -245,9 +247,7 @@ export function createPiResponseRuntime() {
           const terminal = stopReason(event.response);
           output.stopReason = terminal.reason;
           output.errorMessage = terminal.error;
-          if (event.response.rawStopReason)
-            (output as AssistantMessage & { rawStopReason?: string }).rawStopReason =
-              event.response.rawStopReason;
+          if (event.response.rawStopReason) output.rawStopReason = event.response.rawStopReason;
           if (terminal.reason === "error" || terminal.reason === "aborted")
             stream.push({ type: "error", reason: terminal.reason, error: output });
           else if (terminal.reason !== "pending")

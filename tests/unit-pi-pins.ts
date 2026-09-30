@@ -23,10 +23,27 @@ describe("typebox pin", () => {
   });
 
   it("declares that version exactly, so npm update cannot float off it", () => {
-    const local = readJson<{ dependencies: { typebox: string } }>(
-      "../packages/pi-doppelclaude/package.json",
+    const root = readJson<{ devDependencies: { typebox: string } }>("../package.json");
+    assert.equal(root.devDependencies.typebox, piPinnedVersion);
+  });
+
+  // Pi's alias only wins when no physical copy exists anywhere under the extension, core included.
+  for (const pkg of ["pi-doppelclaude", "doppelclaude"]) {
+    it(`leaves ${pkg}'s runtime copy to pi as a host-provided peer`, () => {
+      const local = readJson<{
+        dependencies: Record<string, string>;
+        peerDependencies: Record<string, string>;
+      }>(`../packages/${pkg}/package.json`);
+      assert.equal(local.dependencies.typebox, undefined);
+      assert.equal(local.peerDependencies.typebox, "*");
+    });
+  }
+
+  it("gives the HTTP frontend, which runs without pi, pi's version", () => {
+    const http = readJson<{ dependencies: { typebox: string } }>(
+      "../packages/http-doppelclaude/package.json",
     );
-    assert.equal(local.dependencies.typebox, piPinnedVersion);
+    assert.equal(http.dependencies.typebox, piPinnedVersion);
   });
 });
 

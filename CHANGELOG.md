@@ -2,6 +2,16 @@
 
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Bump to pi 0.99.1 and Agent SDK 0.3.285
+
+### Fixed
+
+- A refusal fallback no longer replaces the model pi shows. The message keeps the requested model and records the served one as `responseModel`, as pi's own Anthropic provider does, so `/session` costs each model separately.
+
 ## 0.13.1 — 2026-09-27
 
 ### Fixed

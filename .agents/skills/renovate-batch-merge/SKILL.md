@@ -66,11 +66,11 @@ Done when the SDK diff has been read and its consequences are either landed, fil
 
 `renovate.json` disables `typebox` and `partial-json`. They are pinned to the versions pi ships, and Renovate cannot know what those are, so it will never raise them — they move only when pi moves. That makes a pi bump the one update in a batch that carries hidden work.
 
-When the batch bumps `@earendil-works/pi-*`, read the new `@earendil-works/pi-ai/package.json` and match its `typebox` and `partial-json` pins exactly, in the same commit. Bump the `peerDependencies` floor alongside the devDependency if the new version is actually required.
+When the batch bumps `@earendil-works/pi-*`, read the new `@earendil-works/pi-ai/package.json` and match its `typebox` and `partial-json` pins exactly, in the same commit: the root devDependency and the HTTP frontend's real dependency. `unit-pi-pins.ts` enforces both.
 
-Then re-read the alias list in pi's extension loader, `packages/coding-agent/src/core/extensions/loader.ts` — the `alias` map for Node and `VIRTUAL_MODULES` for the Bun binary, which must agree. That list, not our imports, decides which packages we need to ship:
+Then re-read the alias list in pi's extension loader, `packages/coding-agent/src/core/extensions/loader.ts` — the `alias` map for Node and `VIRTUAL_MODULES` for the Bun binary, which must agree. That list, not our imports, decides which packages we need to ship. Pi warns when an extension lists a package it supplies in `dependencies`:
 
-- newly aliased — pi now supplies it, so demote ours to a devDependency; it is only typing what pi executes, and it must match pi's version or the types lie
+- newly aliased — pi now supplies it, so make it a `"*"` peer of `pi-doppelclaude` and of core, which runs inside pi; the root devDependency types what pi executes, and it must match pi's version or the types lie
 - no longer aliased — pi stopped supplying it, so ours must become a real dependency or the published extension breaks on a machine where nothing else hoists it
 
 Prove the classification rather than trusting the read: move the package out of `node_modules` and run a live smoke that exercises it. Use the global `pi`, since a devDependency copy of pi resolves its own imports normally and will fail for reasons that have nothing to do with the extension.

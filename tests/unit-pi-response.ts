@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Query, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import { type Api, type Model, normalizeContext } from "@earendil-works/pi-ai";
+import {
+  type Api,
+  type AssistantMessage,
+  type Model,
+  normalizeContext,
+} from "@earendil-works/pi-ai";
 import { createCoreResponse } from "doppelclaude/core-response";
 import { PushQueue } from "doppelclaude/query-state";
 import { projectCatalogModels } from "pi-doppelclaude/models";
@@ -65,6 +70,46 @@ describe("Pi response projection", () => {
     const error = events[1];
     assert.ok(error);
     assert.equal((error.error as { errorMessage?: string }).errorMessage, "initialization failed");
+  });
+
+  it("keeps the requested model as identity and reports a fallback as responseModel", async () => {
+    const runtime = createPiResponseRuntime();
+    const served = async (servedModel: string) => {
+      const adapter = runtime.adapt(model);
+      const core = createCoreResponse("command", model.id, new PushQueue());
+      core.record.message.stop_reason = "end_turn";
+      adapter.native.push({ type: "message_start", message: structuredClone(core.record.message) });
+      core.record.message.model = servedModel;
+      adapter.native.push({ type: "response", response: core.record });
+      adapter.native.end();
+      const done = (await collect(adapter.stream)).find((event) => event.type === "done");
+      assert.ok(done);
+      return done.message as AssistantMessage;
+    };
+
+    const fallback = await served("claude-opus-4-8");
+    assert.equal(fallback.model, model.id);
+    assert.equal(fallback.responseModel, "claude-opus-4-8");
+
+    const requested = await served(model.id);
+    assert.equal(requested.model, model.id);
+    assert.equal(requested.responseModel, undefined);
+  });
+
+  it("reports a fallback served at message_start on the start partial", async () => {
+    const runtime = createPiResponseRuntime();
+    const adapter = runtime.adapt(model);
+    const core = createCoreResponse("command", model.id, new PushQueue());
+    core.record.message.model = "claude-opus-4-8";
+    core.record.message.stop_reason = "end_turn";
+    adapter.native.push({ type: "message_start", message: structuredClone(core.record.message) });
+    const iterator = adapter.stream[Symbol.asyncIterator]();
+    const start = (await iterator.next()).value;
+    assert.ok(start?.type === "start");
+    assert.equal(start.partial.model, model.id);
+    assert.equal(start.partial.responseModel, "claude-opus-4-8");
+    adapter.native.push({ type: "response", response: core.record });
+    adapter.native.end();
   });
 
   it("updates tool arguments before emitting toolcall_end", async () => {
