@@ -23,11 +23,10 @@ export function resultErrorText(message: SDKMessage): string | null {
 export function logServedContextWindow(
   debug: (...args: unknown[]) => void,
   label: string,
-  message: SDKMessage,
+  message: { modelUsage?: Record<string, ModelUsage> | null },
   registeredContextWindow: number,
 ): void {
-  const modelUsage = (message as SDKMessage & { modelUsage?: Record<string, ModelUsage> })
-    .modelUsage;
+  const { modelUsage } = message;
   if (!modelUsage) return;
   for (const [k, v] of Object.entries(modelUsage)) {
     debug(

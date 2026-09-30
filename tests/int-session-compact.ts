@@ -79,7 +79,7 @@ try {
 
   const preCompactSessionIds = [
     ...preEventLog.matchAll(
-      /syncResult: path=(?:reuse|rebuild) doppel=\S+ sessionId=([a-f0-9-]+)/g,
+      /syncResult: path=(?:reuse|rebuild) doppel=\S+ reason=\S+ sessionId=([a-f0-9-]+)/g,
     ),
   ].map((m) => m[1]);
   const preCompactSessionId = preCompactSessionIds.at(-1);
@@ -91,7 +91,7 @@ try {
   // Capture both the path and rebuild flavor.
   const syncResults = [
     ...postEventLog.matchAll(
-      /syncResult: path=(reuse|rebuild|clean-start) doppel=\S+(?: sessionId=([a-f0-9-]+) priors=\d+ (\S+))?/g,
+      /syncResult: path=(reuse|rebuild|clean-start) doppel=\S+ reason=\S+(?: sessionId=([a-f0-9-]+) priors=\d+ cursor=\d+ (\S+))?/g,
     ),
   ].map((m) => ({ path: m[1], sessionId: m[2], flavor: m[3] }));
   console.log(`  Post-event syncResults: ${JSON.stringify(syncResults)}`);

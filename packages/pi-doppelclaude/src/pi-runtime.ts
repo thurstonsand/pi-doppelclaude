@@ -8,8 +8,10 @@ import type {
 } from "@earendil-works/pi-ai";
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { createBridgeRuntime } from "doppelclaude/bridge-runtime";
+import { debug } from "doppelclaude/debug";
 import type { RefusalEntryData } from "doppelclaude/refusal-data";
 import type { RuntimeRequest } from "doppelclaude/runtime-request";
+import { logServedContextWindow } from "doppelclaude/sdk-result";
 import type { BridgeSessionStore } from "doppelclaude/session-store";
 import { convertPiMessages, readPiTranscript } from "./convert.js";
 import type { BridgeModelCatalog } from "./model-catalog.js";
@@ -44,7 +46,10 @@ export function createPiBridgeRuntime(dependencies: PiBridgeRuntimeDependencies)
     observeServedModel: (id) => dependencies.modelCatalog?.noteServedModel(id),
     observeCommandUsage: (usage) => {
       const model = models.get(usage.requestedModel);
-      if (model) responses.observeUsage(usage, model);
+      if (model) {
+        logServedContextWindow(debug, "result", usage, model.contextWindow);
+        responses.observeUsage(usage, model);
+      }
     },
   });
 
