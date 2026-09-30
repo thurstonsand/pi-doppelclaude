@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+### Added
+
+- **Provider request hooks** — `before_provider_request` handlers see the turn as `{model, system, messages, tools}` and may rewrite the newest message or narrow the tools; changing the model, system prompt, or delivered history fails the turn. `after_provider_response` hears the status of each API attempt Claude Code retries and of the one that streamed, without headers.
+
 ### Changed
 
 - Bump to pi 0.99.1 and Agent SDK 0.3.285

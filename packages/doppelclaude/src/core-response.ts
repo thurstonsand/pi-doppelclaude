@@ -22,7 +22,17 @@ export interface CoreResponseResult {
   response: CoreResponseRecord;
 }
 
-export type CoreResponseEvent = RawMessageStreamEvent | CoreTerminalError | CoreResponseResult;
+/** An API attempt Claude Code made, failed with an HTTP status, and is retrying. */
+export interface CoreApiRetry {
+  type: "api_retry";
+  status: number;
+}
+
+export type CoreResponseEvent =
+  | RawMessageStreamEvent
+  | CoreTerminalError
+  | CoreResponseResult
+  | CoreApiRetry;
 
 export interface CommandUsageObservation {
   commandId: string;

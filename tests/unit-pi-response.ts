@@ -112,6 +112,109 @@ describe("Pi response projection", () => {
     adapter.native.end();
   });
 
+  it("reports retried, started, and terminal statuses to onResponse", async () => {
+    const runtime = createPiResponseRuntime();
+    const statuses: number[] = [];
+    const adapter = runtime.adapt(model, ({ status, headers }) => {
+      assert.deepEqual(headers, {});
+      statuses.push(status);
+    });
+    const core = createCoreResponse("command", model.id, new PushQueue());
+    core.record.message.stop_reason = "end_turn";
+    adapter.native.push({ type: "api_retry", status: 529 });
+    adapter.native.push({ type: "message_start", message: structuredClone(core.record.message) });
+    adapter.native.push({ type: "api_retry", status: 529 });
+    adapter.native.push({ type: "message_start", message: structuredClone(core.record.message) });
+    adapter.native.push({ type: "response", response: core.record });
+    adapter.native.end();
+    await collect(adapter.stream);
+    assert.deepEqual(statuses, [529, 200]);
+
+    const failed: number[] = [];
+    const rejected = runtime.adapt(model, ({ status }) => {
+      failed.push(status);
+    });
+    const terminal = createCoreResponse("command", model.id, new PushQueue());
+    terminal.record.lifecycle = "failed";
+    terminal.record.error = { reason: "error", message: "rate limited" };
+    rejected.native.push({
+      type: "terminal_error",
+      reason: "error",
+      message: "rate limited",
+      retryableStatus: 429,
+      response: terminal.record,
+    });
+    rejected.native.end();
+    await collect(rejected.stream);
+    assert.deepEqual(failed, [429]);
+  });
+
+  it("fails the stream and aborts the turn when onResponse throws", async () => {
+    const runtime = createPiResponseRuntime();
+    let aborted = false;
+    const adapter = runtime.adapt(
+      model,
+      () => {
+        throw new Error("hook refused");
+      },
+      () => {
+        aborted = true;
+      },
+    );
+    const core = createCoreResponse("command", model.id, new PushQueue());
+    core.record.message.stop_reason = "end_turn";
+    adapter.native.push({ type: "message_start", message: structuredClone(core.record.message) });
+    adapter.native.push({ type: "response", response: core.record });
+    adapter.native.end();
+    const events = await collect(adapter.stream);
+    assert.deepEqual(
+      events.map((event) => event.type),
+      ["start", "error"],
+    );
+    const error = events[1];
+    assert.ok(error);
+    assert.equal((error.error as AssistantMessage).errorMessage, "hook refused");
+    assert.equal(aborted, true);
+  });
+
+  it("settles usage for responses drained after a failure", async () => {
+    const runtime = createPiResponseRuntime();
+    const adapter = runtime.adapt(model);
+    const core = createCoreResponse("command", model.id, new PushQueue());
+    core.record.message.stop_reason = "end_turn";
+    adapter.fail(new Error("payload refused"));
+    adapter.native.push({ type: "message_start", message: structuredClone(core.record.message) });
+    adapter.native.push({ type: "response", response: core.record });
+    adapter.native.end();
+    const events = await collect(adapter.stream);
+    assert.deepEqual(
+      events.map((event) => event.type),
+      ["start", "error"],
+    );
+    const failed = events[1]?.error as AssistantMessage;
+    runtime.observeUsage(
+      {
+        commandId: "command",
+        requestedModel: model.id,
+        responseIds: [core.record.id],
+        modelUsage: {
+          [model.id]: {
+            inputTokens: 1,
+            outputTokens: 7,
+            cacheReadInputTokens: 0,
+            cacheCreationInputTokens: 0,
+            webSearchRequests: 0,
+            costUSD: 0.5,
+            contextWindow: 200_000,
+            maxOutputTokens: 1,
+          },
+        },
+      },
+      model,
+    );
+    assert.equal(failed.usage.cost.total, 0.5);
+  });
+
   it("updates tool arguments before emitting toolcall_end", async () => {
     const runtime = createPiResponseRuntime();
     const adapter = runtime.adapt(model);

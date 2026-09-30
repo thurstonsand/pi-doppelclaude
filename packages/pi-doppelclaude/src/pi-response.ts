@@ -5,6 +5,7 @@ import {
   createAssistantMessageEventStream,
   type JsonObject,
   type Model,
+  type ProviderResponse,
   type StopReason,
   type ToolCall,
 } from "@earendil-works/pi-ai";
@@ -39,7 +40,7 @@ function stopReason(record: CoreResponseRecord): { reason: StopReason; error?: s
   }
 }
 
-function createMessage(model: Model<Api>, record: CoreResponseRecord): AssistantMessage {
+function createMessage(model: Model<Api>, responseId: string | undefined): AssistantMessage {
   return {
     role: "assistant",
     content: [],
@@ -55,7 +56,7 @@ function createMessage(model: Model<Api>, record: CoreResponseRecord): Assistant
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
     stopReason: "pending",
-    responseId: record.id,
+    responseId,
     timestamp: Date.now(),
   };
 }
@@ -63,6 +64,8 @@ function createMessage(model: Model<Api>, record: CoreResponseRecord): Assistant
 export interface PiResponseAdapter {
   readonly native: PushQueue<CoreResponseEvent>;
   readonly stream: AssistantMessageEventStream;
+  /** Ends pi's stream with an error; later native events only settle usage accounting. */
+  fail(error: unknown): void;
 }
 
 /** Command-scoped accounting deliberately outlives individual streams: the SDK result for a
@@ -103,24 +106,60 @@ export function createPiResponseRuntime() {
       pendingUsage.set(observation.commandId, { observation, model });
   }
 
-  function adapt(model: Model<Api>): PiResponseAdapter {
+  function adapt(
+    model: Model<Api>,
+    onResponse?: (response: ProviderResponse, model: Model<Api>) => void | Promise<void>,
+    abort?: () => void,
+  ): PiResponseAdapter {
     const native = new PushQueue<CoreResponseEvent>();
     const stream = createAssistantMessageEventStream();
     let output: AssistantMessage | undefined;
+    let failure: AssistantMessage | undefined;
     const openBlocks = new Map<number, number>();
     const partialToolJson = new Map<number, string>();
 
+    function fail(error: unknown, responseId?: string): void {
+      if (!output) {
+        output = createMessage(model, responseId);
+        stream.push({ type: "start", partial: output });
+      }
+      output.stopReason = "error";
+      output.errorMessage = error instanceof Error ? error.message : String(error);
+      stream.push({ type: "error", reason: "error", error: output });
+      stream.end(output);
+      failure = output;
+    }
+
+    function settleFailed(failed: AssistantMessage, responseId: string): void {
+      messages.set(responseId, failed);
+      terminalResponses.add(responseId);
+      retryPendingUsage();
+    }
+
+    // Claude Code makes the HTTP calls, so pi hears only their statuses — a retried failure,
+    // the start of a streamed success, or the failure a turn ended on — and never headers.
+    async function reportResponse(status: number, responseId: string | undefined): Promise<void> {
+      try {
+        await onResponse?.({ status, headers: {} }, model);
+      } catch (error) {
+        fail(error, responseId);
+        abort?.();
+      }
+    }
+
     queueMicrotask(async () => {
       for await (const event of native) {
-        if (event.type === "message_start") {
-          output ??= createMessage(model, {
-            commandId: "",
-            id: event.message.id,
-            requestedModel: model.id,
-            message: event.message,
-            lifecycle: "open",
-            error: null,
-          });
+        if (failure) {
+          if (event.type === "response" || event.type === "terminal_error")
+            settleFailed(failure, event.response.id);
+          continue;
+        }
+        if (event.type === "api_retry") {
+          if (!output) await reportResponse(event.status, undefined);
+        } else if (event.type === "message_start") {
+          if (!output) await reportResponse(200, event.message.id);
+          if (failure) continue;
+          output ??= createMessage(model, event.message.id);
           messages.set(event.message.id, output);
           if (event.message.model !== model.id) output.responseModel = event.message.model;
           applySdkUsage(output, event.message.usage, model);
@@ -219,7 +258,14 @@ export function createPiResponseRuntime() {
           applySdkUsage(output, event.usage, model);
         } else if (event.type === "response" || event.type === "terminal_error") {
           if (!output) {
-            output = createMessage(model, event.response);
+            if (event.type === "terminal_error" && event.retryableStatus) {
+              await reportResponse(event.retryableStatus, event.response.id);
+              if (failure) {
+                settleFailed(failure, event.response.id);
+                continue;
+              }
+            }
+            output = createMessage(model, event.response.id);
             stream.push({ type: "start", partial: output });
           }
           messages.set(event.response.id, output);
@@ -256,7 +302,7 @@ export function createPiResponseRuntime() {
         }
       }
     });
-    return { native, stream };
+    return { native, stream, fail };
   }
 
   return { adapt, observeUsage };

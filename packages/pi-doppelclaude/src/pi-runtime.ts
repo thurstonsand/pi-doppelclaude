@@ -9,10 +9,12 @@ import type {
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { createBridgeRuntime } from "doppelclaude/bridge-runtime";
 import type { RefusalEntryData } from "doppelclaude/refusal-data";
+import type { RuntimeRequest } from "doppelclaude/runtime-request";
 import type { BridgeSessionStore } from "doppelclaude/session-store";
 import { convertPiMessages, readPiTranscript } from "./convert.js";
 import type { BridgeModelCatalog } from "./model-catalog.js";
 import { createPiResponseRuntime } from "./pi-response.js";
+import { applyPayloadHook } from "./provider-payload.js";
 import type { ProviderSettings } from "./settings.js";
 import { planTurn, resolveMcpTools } from "./turn-plan.js";
 
@@ -75,7 +77,8 @@ export function createPiBridgeRuntime(dependencies: PiBridgeRuntimeDependencies)
       mcpServers: _mcp,
       ...spawnOptions
     } = plan.queryOptions;
-    const request = {
+    const hookAbort = new AbortController();
+    const request: RuntimeRequest = {
       conversationKey: options?.sessionId,
       ephemeral: !options?.sessionId,
       model: model.id,
@@ -88,15 +91,25 @@ export function createPiBridgeRuntime(dependencies: PiBridgeRuntimeDependencies)
       })),
       systemPrompt,
       effort,
-      signal: options?.signal,
+      signal: options?.signal
+        ? AbortSignal.any([options.signal, hookAbort.signal])
+        : hookAbort.signal,
       cwd: cwd ?? process.cwd(),
       options: spawnOptions,
       toolNameToSdk: turnTools.customToolNameToSdk,
       toolNameToClient: turnTools.customToolNameToPi,
     };
-    const adapter = responses.adapt(model);
-    const native = explicitReplay ? core.replay(request) : core.turn(request);
+    const adapter = responses.adapt(model, options?.onResponse, () => hookAbort.abort());
     void (async () => {
+      let sent: RuntimeRequest;
+      try {
+        sent = await applyPayloadHook(request, model, options?.onPayload);
+      } catch (error) {
+        adapter.fail(error);
+        adapter.native.end();
+        return;
+      }
+      const native = explicitReplay ? core.replay(sent) : core.turn(sent);
       for await (const event of native) adapter.native.push(event);
       adapter.native.end();
     })();

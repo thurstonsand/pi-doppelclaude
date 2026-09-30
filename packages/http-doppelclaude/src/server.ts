@@ -681,6 +681,7 @@ async function writeStream(
       stopped = true;
       continue;
     }
+    if (event.type === "api_retry") continue;
     await sse(response, event.type, event);
     emitted = true;
   }

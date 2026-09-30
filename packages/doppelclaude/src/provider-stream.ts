@@ -531,6 +531,8 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
           hooks.onCompaction?.(message);
         else if (message.subtype === "mirror_error") hooks.onMirrorError?.(message);
         else if (message.subtype === "api_retry") {
+          if (message.error_status !== null)
+            c.currentResponse?.stream.push({ type: "api_retry", status: message.error_status });
           const failure =
             apiStatusFailure(message.error_status) ?? assistantApiFailure(message.error);
           if (failure)

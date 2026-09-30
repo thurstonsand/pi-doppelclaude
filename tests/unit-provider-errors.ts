@@ -370,6 +370,25 @@ describe("native response completion", () => {
     assert.equal(terminal.retryableStatus, 529);
   });
 
+  it("forwards each retried API status as an api_retry event", async () => {
+    const events = await runNative([
+      {
+        type: "system",
+        subtype: "api_retry",
+        error_status: 529,
+        attempt: 1,
+        max_retries: 10,
+        retry_delay_ms: 0,
+        error: "overloaded",
+      } as unknown as SDKMessage,
+      result(),
+    ]);
+    assert.deepEqual(
+      events.filter((event) => event.type === "api_retry"),
+      [{ type: "api_retry", status: 529 }],
+    );
+  });
+
   it("carries retry status from result api_error_status", async () => {
     const terminal = terminalError(
       await runNative([result({ api_error_status: 529, is_error: true })]),
