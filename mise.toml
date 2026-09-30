@@ -21,7 +21,7 @@ run = [
     "hk install --mise --quiet",
 ]
 sources = ["mise.toml", "hk.pkl", "package.json", "package-lock.json"]
-outputs = { auto = true }
+outputs = ["node_modules/.package-lock.json"]
 quiet = true
 
 [tasks.lint]
