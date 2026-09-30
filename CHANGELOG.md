@@ -2,24 +2,22 @@
 
 # Changelog
 
-## UNRELEASED
+## 0.14.0 - 2026-09-30
 
 ### Added
 
-- **Provider request hooks** — `before_provider_request` handlers see the turn as `{model, system, messages, tools}` and may rewrite the newest message or narrow the tools; changing the model, system prompt, or delivered history fails the turn. `after_provider_response` hears the status of each API attempt Claude Code retries and of the one that streamed, without headers.
+- **Provider request hooks** — Pi's `before_provider_request` handlers can rewrite the newest message or narrow tools. Changes to the model, system prompt, or delivered history fail the turn. `after_provider_response` reports API-attempt status, including retries, without headers.
 
 ### Changed
 
-- Bump to pi 0.99.1 and Agent SDK 0.3.285
+- Upgrade to **Pi 0.99.1** and **Agent SDK 0.3.285**.
 
 ### Fixed
 
-- pi's `maxTokens` reaches Claude Code as its output ceiling instead of being dropped, and payload hooks can change it as `max_tokens`.
-- A refusal fallback no longer replaces the model pi shows. The message keeps the requested model and records the served one as `responseModel`, as pi's own Anthropic provider does, so `/session` costs each model separately.
-- **Preserve OpenCode PDF history** — attached PDFs and documents returned by tools reach Claude Code intact, and later turns no longer fail validation. Document, search-result, URL/file image, and redacted-thinking content survive SDK prompts and transcript replay.
-- **Accept current Anthropic client options** — OpenCode's adaptive thinking binding hint, disabled/omitted thinking, `xhigh` effort, custom-tool markers, and cache hints are accepted. Unsupported controls remain explicit errors, with the compatibility boundary documented.
-- **Name invalid content precisely** — validation errors identify the offending block/source path and type instead of reporting the unrelated string branch. Nested document images receive the size check, and explicit no-resize image settings are honored.
-- **Retain mixed tool results on retry** — a dead-query retry preserves tool results that share a user message with steering, while sending the steering once as the new prompt.
+- **Preserve OpenCode PDF history** — attached PDFs and documents returned by tools reach Claude Code intact. Supported document, search-result, URL/file-image, and redacted-thinking content survives SDK delivery.
+- **Accept current Anthropic client options** — support OpenCode's adaptive-thinking binding hint, disabled/omitted thinking, `xhigh` effort, custom-tool markers, and cache hints. Unsupported controls remain explicit errors.
+- **Honor Pi's output ceiling** — `maxTokens` reaches Claude Code, and payload hooks can change it through `max_tokens`.
+- **Keep the requested model visible after refusal fallback** — record the served model as `responseModel`, allowing Pi to account for each model separately.
 
 ## 0.13.1 — 2026-09-27
 
