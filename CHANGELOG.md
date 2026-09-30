@@ -14,6 +14,7 @@
 
 ### Fixed
 
+- pi's `maxTokens` reaches Claude Code as its output ceiling instead of being dropped, and payload hooks can change it as `max_tokens`.
 - A refusal fallback no longer replaces the model pi shows. The message keeps the requested model and records the served one as `responseModel`, as pi's own Anthropic provider does, so `/session` costs each model separately.
 
 ## 0.13.1 — 2026-09-27

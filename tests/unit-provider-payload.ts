@@ -36,7 +36,7 @@ describe("applyPayloadHook", () => {
         model,
         edit(() => undefined),
       ),
-      request,
+      { ...request, maxTokens: undefined },
     );
   });
 
@@ -112,7 +112,7 @@ describe("applyPayloadHook", () => {
       applyPayloadHook(
         request,
         model,
-        edit((payload) => ({ ...payload, max_tokens: 10 })),
+        edit((payload) => ({ ...payload, thinking: { type: "disabled" } })),
       ),
       /invalid provider payload/,
     );

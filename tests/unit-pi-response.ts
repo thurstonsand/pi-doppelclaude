@@ -435,4 +435,35 @@ describe("Pi response projection", () => {
     const done = events.at(-1)?.message as { content: unknown[] };
     assert.equal(done.content.length, 2);
   });
+
+  it("forwards pi's maxTokens, as the payload hook leaves it, to Claude Code", async () => {
+    const spawnCeilings: Array<string | undefined> = [];
+    const runtime = createPiBridgeRuntime({
+      providerSettings: { systemPromptMode: "claude-code" },
+      queryFactory: ({ options }) => {
+        spawnCeilings.push(options?.env?.CLAUDE_CODE_MAX_OUTPUT_TOKENS);
+        return sdkQuery([
+          { type: "result", subtype: "success", is_error: false, result: "", modelUsage: {} },
+        ] as unknown as SDKMessage[]);
+      },
+    });
+    const context = normalizeContext({
+      systemPrompt: "",
+      messages: [{ role: "user", content: "hi", timestamp: 1 }],
+      tools: [],
+    });
+    const offered: unknown[] = [];
+    await collect(runtime.stream(model, context));
+    await collect(
+      runtime.stream(model, context, {
+        maxTokens: 123,
+        onPayload: (payload) => {
+          offered.push((payload as { max_tokens?: number }).max_tokens);
+          return { ...(payload as object), max_tokens: 99 };
+        },
+      }),
+    );
+    assert.deepEqual(offered, [123]);
+    assert.deepEqual(spawnCeilings, [undefined, "99"]);
+  });
 });

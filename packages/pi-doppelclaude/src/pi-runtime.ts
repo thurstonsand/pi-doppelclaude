@@ -91,6 +91,7 @@ export function createPiBridgeRuntime(dependencies: PiBridgeRuntimeDependencies)
       })),
       systemPrompt,
       effort,
+      maxTokens: options?.maxTokens,
       signal: options?.signal
         ? AbortSignal.any([options.signal, hookAbort.signal])
         : hookAbort.signal,

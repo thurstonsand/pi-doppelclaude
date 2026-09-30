@@ -11,6 +11,7 @@ export interface ProviderPayload {
   system: Options["systemPrompt"];
   messages: MessageParam[];
   tools: Tool[];
+  max_tokens?: number;
 }
 
 const PAYLOAD_SCHEMA = Type.Object(
@@ -30,13 +31,14 @@ const PAYLOAD_SCHEMA = Type.Object(
         input_schema: Type.Object({ type: Type.Literal("object") }),
       }),
     ),
+    max_tokens: Type.Optional(Type.Integer({ minimum: 1 })),
   },
   { additionalProperties: false },
 );
 
 /**
  * Offers the turn to pi's payload hook and takes back what the bridge can honour: the newest
- * message, and a subset of the declared tools. Session sync compares only message counts, so
+ * message, a subset of the declared tools, and the output ceiling. Session sync compares only message counts, so
  * rewriting history Claude Code has already seen would go unnoticed. The model belongs to
  * Claude Code, and the system prompt has already been rewritten to stay deliverable. Changing
  * any of those, or adding a Messages API field the bridge cannot forward, fails the turn.
@@ -53,6 +55,7 @@ export async function applyPayloadHook(
     system: request.systemPrompt,
     messages: request.messages,
     tools: request.tools ?? [],
+    max_tokens: request.maxTokens,
   };
   const offered = structuredClone(payload);
   const next = parseValue(
@@ -76,5 +79,6 @@ export async function applyPayloadHook(
     ...request,
     messages: next.messages as MessageParam[],
     tools: next.tools as Tool[],
+    maxTokens: next.max_tokens,
   };
 }
