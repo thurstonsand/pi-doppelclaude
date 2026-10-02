@@ -1104,6 +1104,36 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies = {}
         }
       }
 
+      // Reconciled against what the client had been shown before this request, and before the
+      // buffer replays: a replayed tool call can already have its handler waiting on the next
+      // request, and a replay that closes this response would leave a failure no stream to
+      // carry it, killing the query while the client sees a clean turn.
+      const answeredIds = new Set(allResults.map((result) => result.toolCallId));
+      for (const id of answeredIds) {
+        if (
+          id &&
+          !resultCtx.hasPendingToolCall(id) &&
+          !resultCtx.rejectedToolCallIds.has(id) &&
+          !resultCtx.shownToolCallIds.has(id)
+        ) {
+          failReconciliation(
+            resultCtx,
+            `Claude bridge: pi delivered a result for tool call [${id}], which was never streamed to pi`,
+          );
+          return stream;
+        }
+      }
+      const unanswered = resultCtx.pendingToolCallIds.filter(
+        (id) => resultCtx.shownToolCallIds.has(id) && !answeredIds.has(id),
+      );
+      if (unanswered.length > 0) {
+        failReconciliation(
+          resultCtx,
+          `Claude bridge: ${unanswered.length} tool handler(s) still waiting after ${allResults.length} result(s) [${unanswered.join(", ")}]`,
+        );
+        return stream;
+      }
+
       // Anything Claude Code streamed while pi was executing is older than what the
       // unblocked generator will produce, so it replays into the fresh turn first.
       replayBufferedSdkMessages(resultCtx);
@@ -1136,24 +1166,10 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies = {}
           // Claude Code already answered this call with its own error; a second
           // answer would be a duplicate reply to a closed question.
           debug(`provider: dropping result for Claude-rejected call [${id}]`);
-        } else if (resultCtx.shownToolCallIds.has(id)) {
+        } else {
           resultCtx.pendingResults.set(id, result);
           debug(`provider: queued result [${id}] (${resultCtx.pendingResults.size} pending)`);
-        } else {
-          failReconciliation(
-            resultCtx,
-            `Claude bridge: pi delivered a result for tool call [${id}], which was never streamed to pi`,
-          );
-          return stream;
         }
-      }
-      if (resultCtx.pendingToolCallCount > 0) {
-        const waiting = resultCtx.pendingToolCallIds.join(", ");
-        failReconciliation(
-          resultCtx,
-          `Claude bridge: ${resultCtx.pendingToolCallCount} tool handler(s) still waiting after ${allResults.length} result(s) [${waiting}]`,
-        );
-        return stream;
       }
       if (resultCtx.doppel.session) resultCtx.doppel.session.cursor = nativeCursor;
       dependencies.observeExecution?.({

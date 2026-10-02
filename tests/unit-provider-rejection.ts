@@ -255,6 +255,50 @@ describe("Claude Code-rejected tool calls", () => {
     await third.done;
   });
 
+  it("keeps the query when the buffered correction's handler blocks before pi re-enters", async () => {
+    const { push, drained, close, runtime } = makeHarness();
+    const ctx = runtime.test.hostContext;
+    const first = record(stream(runtime, prompt));
+    push(...toolUseEvents("call_bad", "bash", '{"command":"ls"}'));
+    await first.done;
+    push(
+      ccRejection("call_bad"),
+      ...toolUseEvents("call_good", "mcp__custom-tools__bash", '{"command":"ls"}'),
+    );
+    await drained();
+    // Claude Code invokes the corrected call's handler without waiting for its stream to be
+    // replayed, so it is already blocked when pi answers only the rejected call.
+    const handler = runtime.test.createMcpToolHandler("bash", ctx);
+    const dispatched = handler(
+      { command: "ls" },
+      { _meta: { "claudecode/toolUseId": "call_good" } },
+    );
+    await until(() => ctx.hasPendingToolCall("call_good"), "the corrected call to block on pi");
+
+    const second = record(stream(runtime, rejectedTurn));
+    await second.done;
+    assert.deepEqual(toolCalls(second.events), [{ id: "call_good", name: "bash" }]);
+    assert.equal(terminalError(second.events), null);
+
+    const third = record(
+      stream(runtime, [
+        ...rejectedTurn,
+        {
+          role: "assistant",
+          content: [
+            { type: "toolCall", id: "call_good", name: "bash", arguments: { command: "ls" } },
+          ],
+        },
+        { role: "toolResult", toolCallId: "call_good", content: "file.txt" },
+      ]),
+    );
+    assert.deepEqual((await dispatched).content, [{ type: "text", text: "file.txt" }]);
+    push(...textEvents("listed"), resultMessage());
+    await third.done;
+    assert.deepEqual(texts(third.events), ["listed"]);
+    close();
+  });
+
   it("streams the correction live when pi re-enters first (the lucky ordering)", async () => {
     const { push, drained, runtime } = makeHarness();
     const first = record(stream(runtime, prompt));
