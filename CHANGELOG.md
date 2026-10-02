@@ -2,6 +2,12 @@
 
 # Changelog
 
+## 0.14.1 — 2026-10-02
+
+### Fixed
+
+- **Survive slow answers to rejected tool calls** — when Claude Code rejects a misnamed tool call and retries with the right name before the client returns the rejection's error, the bridge no longer mistakes the retried call for a stuck handler and tears down the query. Amp, which takes seconds to answer, previously saw its turn end empty mid-task; Pi always answered first and never hit it.
+
 ## 0.14.0 - 2026-09-30
 
 ### Added
