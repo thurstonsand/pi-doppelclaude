@@ -99,6 +99,7 @@ export function createCoreResponse(
         role: "assistant",
         container: null,
         content: [],
+        diagnostics: null,
         model: requestedModel,
         stop_details: null,
         stop_reason: null,
