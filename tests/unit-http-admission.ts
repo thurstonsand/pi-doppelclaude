@@ -39,6 +39,7 @@ function answer(): Message {
     stop_reason: "end_turn",
     stop_sequence: null,
     container: null,
+    diagnostics: null,
     stop_details: null,
     usage: {
       input_tokens: 1,

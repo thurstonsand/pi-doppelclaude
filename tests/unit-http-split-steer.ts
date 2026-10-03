@@ -24,6 +24,7 @@ function message(content: Message["content"], stop: Message["stop_reason"]): Mes
     stop_reason: stop,
     stop_sequence: null,
     container: null,
+    diagnostics: null,
     stop_details: null,
     usage: {
       input_tokens: 11,
