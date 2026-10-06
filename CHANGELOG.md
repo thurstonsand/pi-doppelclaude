@@ -2,6 +2,14 @@
 
 # Changelog
 
+## 0.14.2 — 2026-10-06
+
+### Changed
+
+- Upgrade to **Pi 1.0.4**. The system-prompt rewrite and the model catalog are unchanged against Pi 1.0; no settings changes are needed.
+- **HTTP frontend tracks Anthropic SDK 0.131** — response messages now carry `diagnostics: null`, matching the current Messages API shape.
+- The container image's Node 24 base is refreshed.
+
 ## 0.14.1 — 2026-10-02
 
 ### Fixed
