@@ -2,6 +2,12 @@
 
 # Changelog
 
+## 0.14.3 — 2026-10-09
+
+### Changed
+
+- Upgrade to **Agent SDK 0.3.295**, which serves **Haiku 5.5** as `claude-haiku-5-5`.
+
 ## 0.14.2 — 2026-10-06
 
 ### Changed
