@@ -643,6 +643,13 @@ function canonicalHistory(messages: MessageParam[]): string {
   const ids = new Map<string, string>();
   let assistant = 0;
   for (const message of copy) {
+    // Clients may send prior turns without their signed thinking (Amp does for threads that
+    // switched providers); the live session keeps it, so it never counts as divergence.
+    if (message.role === "assistant" && Array.isArray(message.content))
+      message.content = message.content.filter((raw) => {
+        const type = (raw as Record<string, unknown>).type;
+        return type !== "thinking" && type !== "redacted_thinking";
+      });
     if (Array.isArray(message.content)) {
       let call = 0;
       for (const raw of message.content) {

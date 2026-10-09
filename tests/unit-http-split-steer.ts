@@ -72,7 +72,9 @@ async function* native(
 
 type Seen = { kind: "turn" | "replay"; request: RuntimeRequest };
 
+// The echoes below omit this thinking block, as Amp does for some threads.
 const TOOL_USE_REPLY = [
+  { type: "thinking", thinking: "plan", signature: "signed" },
   { type: "tool_use", id: "sdk-1", name: "lookup", input: { n: 1 } },
   { type: "tool_use", id: "sdk-2", name: "lookup", input: { n: 2 } },
 ] as Message["content"];
@@ -168,6 +170,15 @@ const cases: Array<{ label: string; second: unknown[]; expect: Expectation }> = 
   {
     label: "plain continuation: results only (+2)",
     second: [{ role: "user", content: "go" }, ASSISTANT_ECHO, { role: "user", content: RESULTS }],
+    expect: { reason: "compatible", sync: "compatible", coldReplay: false, kind: "turn" },
+  },
+  {
+    label: "plain continuation echoing the reply's thinking (+2)",
+    second: [
+      { role: "user", content: "go" },
+      { ...ASSISTANT_ECHO, content: [TOOL_USE_REPLY[0], ...ASSISTANT_ECHO.content] },
+      { role: "user", content: RESULTS },
+    ],
     expect: { reason: "compatible", sync: "compatible", coldReplay: false, kind: "turn" },
   },
   {

@@ -2,6 +2,12 @@
 
 # Changelog
 
+## UNRELEASED
+
+### Fixed
+
+- **HTTP: thinking-less history no longer rebuilds every turn** — Amp sends some threads (those that switched providers) with every thinking block stripped. History matching now ignores assistant thinking, so those threads reuse the live query instead of re-uploading their whole history on every tool call.
+
 ## 0.14.3 — 2026-10-09
 
 ### Changed
