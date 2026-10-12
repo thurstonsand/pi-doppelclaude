@@ -16,14 +16,6 @@
   tools may have similar mismatches (units, defaults, optional-vs-required params).
   Compare Claude Code's tool schemas against pi's for read, write, edit, grep, find.
 
-- **Description-cap probe misreads CC ≥ 2.1.295**: `scanToolDescriptionCap`
-  reports 1000/1023 (`fallback:false`) instead of 4096. CC now passes the cap as
-  a default parameter (`s=Ax()`, `Ax` resolving `CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH`
-  or a constant), so the captured identifier matches an unrelated `s=…` elsewhere.
-  Effect: descriptions over ~1000 chars get relocated to the system prompt
-  needlessly (safe, but wrong). Options: teach the probe the default-param shape,
-  or pin `CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH` in `sdkChildEnv` and delete the probe.
-
 ## Possible Enhancements
 
 - **Explore `forkSession` for rewinds and guest doppels**: the SDK exposes a
@@ -61,6 +53,12 @@
   — they only run against live quota, so nothing caught the drift.
 
 ## Upstream Gaps
+
+- **Entry renderers do not receive `outputPad`**: Pi 1.1.0 passes the user's
+  transcript padding to message and tool renderers, but `EntryRenderOptions` is
+  still `{ expanded }`. The refusal entry renderer reads
+  `pi.getSettings().outputPad` instead; delete that wrapper in `index.ts` once
+  Pi adds the field.
 
 - **Amp does not identify individual Oracle invocations**: Oracle requests carry
   the parent Amp thread ID but no Oracle invocation ID. Two Oracle calls emitted

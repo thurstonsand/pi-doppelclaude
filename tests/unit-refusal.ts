@@ -88,8 +88,8 @@ const plainTheme = {
   bg: (_color: string, text: string) => text,
 } as unknown as Theme;
 
-function plainRender(data: RefusalEntryData, expanded: boolean): string {
-  const component = renderRefusalEntry(entryFor(data), { expanded }, plainTheme);
+function plainRender(data: RefusalEntryData, expanded: boolean, outputPad = 1): string {
+  const component = renderRefusalEntry(entryFor(data), { expanded, outputPad }, plainTheme);
   assert.ok(component, "renderer produced no component");
   return component.render(100).join("\n");
 }
@@ -128,6 +128,15 @@ describe("Claude refusal entries", () => {
     // Formatted for the platform by Pi, so `alt` surfaces as `option` on macOS.
     assert.match(collapsed, /\((alt|option)\+e to expand\)/u);
     assert.doesNotMatch(collapsed, /exploit chain/u);
+  });
+
+  it("pads its box by the user's outputPad setting", () => {
+    const headlineLine = (outputPad: number) =>
+      plainRender(refusalEntryData(NO_FALLBACK), true, outputPad)
+        .split("\n")
+        .find((line) => line.includes("refused"));
+    assert.match(headlineLine(1) ?? "", /^ ⚠ claude-fable-5 refused/u);
+    assert.match(headlineLine(0) ?? "", /^⚠ claude-fable-5 refused/u);
   });
 
   it("says so rather than offering a blank key when nothing is bound", () => {

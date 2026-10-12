@@ -4,12 +4,12 @@ import { dirname } from "node:path";
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
 
-export const FALLBACK_TOOL_DESCRIPTION_CAP = 2048;
+export const FALLBACK_TOOL_DESCRIPTION_CAP = 4096;
 const MIN_TOOL_DESCRIPTION_CAP = 256;
 const MAX_TOOL_DESCRIPTION_CAP = 65_536;
 const SCAN_CHUNK_SIZE = 1024 * 1024;
 const SCAN_OVERLAP = 1024;
-const CACHE_VERSION = 2;
+const CACHE_VERSION = 3;
 
 const CACHED_VERSION_SCHEMA = Type.Object({
   path: Type.String(),
@@ -81,6 +81,48 @@ async function scanMatches(
   ];
 }
 
+async function scanAssignment(
+  path: string,
+  identifier: string,
+  nearIndex: number,
+  signal?: AbortSignal,
+): Promise<CapResult> {
+  const assignments = await scanMatches(
+    path,
+    new RegExp(`(?:^|[^\\w$])${escapeRegex(identifier)}=(\\d+)`, "g"),
+    signal,
+  );
+  const candidates = assignments
+    .map(({ index, match }) => ({ index, value: Number(match[1]) }))
+    .filter(({ value }) => value >= MIN_TOOL_DESCRIPTION_CAP && value <= MAX_TOOL_DESCRIPTION_CAP);
+  if (candidates.length === 0) {
+    return {
+      cap: FALLBACK_TOOL_DESCRIPTION_CAP,
+      fallback: true,
+      reason: "no in-bounds cap assignment found",
+    };
+  }
+
+  const distinctValues = new Set(candidates.map(({ value }) => value));
+  if (distinctValues.size === 1) return { cap: candidates[0].value, fallback: false };
+
+  const byDistance = [...candidates].sort(
+    (left, right) => Math.abs(left.index - nearIndex) - Math.abs(right.index - nearIndex),
+  );
+  const nearestDistance = Math.abs(byDistance[0].index - nearIndex);
+  const nearestValues = new Set(
+    byDistance
+      .filter(({ index }) => Math.abs(index - nearIndex) === nearestDistance)
+      .map(({ value }) => value),
+  );
+  if (nearestValues.size === 1) return { cap: byDistance[0].value, fallback: false };
+  return {
+    cap: FALLBACK_TOOL_DESCRIPTION_CAP,
+    fallback: true,
+    reason: "ambiguous cap assignments",
+  };
+}
+
 export async function scanToolDescriptionCap(
   path: string,
   signal?: AbortSignal,
@@ -102,42 +144,24 @@ export async function scanToolDescriptionCap(
     };
   }
 
-  const identifier = anchors[0].match[1];
-  const assignments = await scanMatches(
+  // Since CC 2.1.295 the anchored identifier is a default parameter filled by a resolver,
+  // `CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH ?? (deferred ? deferredCap : eagerCap)`; bridged
+  // tools are advertised eagerly, so their cap is the else-branch constant.
+  const resolvers = await scanMatches(
     path,
-    new RegExp(`(?:^|[^\\w$])${escapeRegex(identifier)}=(\\d+)`, "g"),
+    /\.CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH\?\?\([A-Za-z_$][\w$]*\?[A-Za-z_$][\w$]*:([A-Za-z_$][\w$]*)\)/g,
     signal,
   );
-  const candidates = assignments
-    .map(({ index, match }) => ({ index, value: Number(match[1]) }))
-    .filter(({ value }) => value >= MIN_TOOL_DESCRIPTION_CAP && value <= MAX_TOOL_DESCRIPTION_CAP);
-  if (candidates.length === 0) {
+  if (resolvers.length === 0)
+    return scanAssignment(path, anchors[0].match[1], anchors[0].index, signal);
+  if (new Set(resolvers.map(({ match }) => match[1])).size !== 1) {
     return {
       cap: FALLBACK_TOOL_DESCRIPTION_CAP,
       fallback: true,
-      reason: "no in-bounds cap assignment found",
+      reason: "resolver named multiple cap constants",
     };
   }
-
-  const distinctValues = new Set(candidates.map(({ value }) => value));
-  if (distinctValues.size === 1) return { cap: candidates[0].value, fallback: false };
-
-  const anchorIndex = anchors[0].index;
-  const byDistance = [...candidates].sort(
-    (left, right) => Math.abs(left.index - anchorIndex) - Math.abs(right.index - anchorIndex),
-  );
-  const nearestDistance = Math.abs(byDistance[0].index - anchorIndex);
-  const nearestValues = new Set(
-    byDistance
-      .filter(({ index }) => Math.abs(index - anchorIndex) === nearestDistance)
-      .map(({ value }) => value),
-  );
-  if (nearestValues.size === 1) return { cap: byDistance[0].value, fallback: false };
-  return {
-    cap: FALLBACK_TOOL_DESCRIPTION_CAP,
-    fallback: true,
-    reason: "ambiguous cap assignments",
-  };
+  return scanAssignment(path, resolvers[0].match[1], resolvers[0].index, signal);
 }
 
 export function resolveClaudeCodeBinary(pathToClaudeCodeExecutable: string | undefined): string {

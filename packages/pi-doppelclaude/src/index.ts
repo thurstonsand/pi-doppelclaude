@@ -3,7 +3,7 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import { type ExtensionAPI, getAgentDir, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { configureDebug, debug, moduleInstanceId } from "doppelclaude/debug";
 import { errorMessage } from "doppelclaude/errors";
-import { REFUSAL_CUSTOM_TYPE } from "doppelclaude/refusal-data";
+import { REFUSAL_CUSTOM_TYPE, type RefusalEntryData } from "doppelclaude/refusal-data";
 import { createDefaultAccountProbe } from "./account-probe.js";
 import { acquireBridgeOwner } from "./bridge-owner.js";
 import { createCompaction } from "./compaction.js";
@@ -63,7 +63,10 @@ export default function activate(pi: ExtensionAPI): void {
   );
 
   pi.registerProvider(provider);
-  pi.registerEntryRenderer(REFUSAL_CUSTOM_TYPE, renderRefusalEntry);
+  // Pi 1.1.0 hands outputPad to message and tool renderers but not entry renderers.
+  pi.registerEntryRenderer<RefusalEntryData>(REFUSAL_CUSTOM_TYPE, (entry, options, theme) =>
+    renderRefusalEntry(entry, { ...options, outputPad: pi.getSettings().outputPad ?? 1 }, theme),
+  );
 
   pi.on("session_before_compact", async (event, ctx) => {
     if (ctx.model?.provider !== PROVIDER_ID) return undefined;

@@ -6,7 +6,7 @@ Accepted
 
 ## Decision Summary
 
-Claude Code truncates every MCP tool description at a hard-coded cap (2048 chars as of CC 2.1.22x) when rendering it into the model prompt. For bridged pi tools whose descriptions exceed the cap, the bridge advertises a short pointer stub over MCP and carries the full description in the system prompt, where no cap applies. The cap is recovered from the CC binary by a cached probe rather than hard-coded, trading a startup scan for resilience to CC version drift.
+Claude Code truncates every MCP tool description at a hard-coded cap (2048 chars as of CC 2.1.22x; 4096 for eagerly advertised tools as of CC 2.1.295, which also made it overridable via `CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH` and resolves it through a helper the probe now follows) when rendering it into the model prompt. For bridged pi tools whose descriptions exceed the cap, the bridge advertises a short pointer stub over MCP and carries the full description in the system prompt, where no cap applies. The cap is recovered from the CC binary by a cached probe rather than hard-coded, trading a startup scan for resilience to CC version drift.
 
 ## Problem Statement / Background
 

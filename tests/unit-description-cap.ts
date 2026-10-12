@@ -46,16 +46,16 @@ describe("createToolDescriptionCap", () => {
     }
   });
 
-  it("uses 2048 until an unset cap's asynchronous probe overwrites it", async () => {
+  it("uses the fallback until an unset cap's asynchronous probe overwrites it", async () => {
     const cap = createToolDescriptionCap({
       providerSettings: { systemPromptMode: "claude-code" },
-      probe: async () => 4096,
+      probe: async () => 8192,
       debug() {},
     });
 
     assert.equal(cap.get(), FALLBACK_TOOL_DESCRIPTION_CAP);
     await cap.start();
-    assert.equal(cap.get(), 4096);
+    assert.equal(cap.get(), 8192);
   });
 
   it("buffers a probe warning until a session supplies its notify sink", async () => {
@@ -131,6 +131,16 @@ describe("scanToolDescriptionCap", () => {
     const path = await fixture(`minified();cap=4096;other();${GENERIC_ANCHOR};tail()`);
 
     assert.deepEqual(await scanToolDescriptionCap(path), { cap: 4096, fallback: false });
+  });
+
+  it("reads the eager cap from Claude Code's deferred-aware resolver", async () => {
+    const path = await fixture(
+      `function t(e,r,n,cap=Ax()){return \`${GENERIC_ANCHOR}\`}cap=1000;` +
+        "function Ax(e=!1){return a.CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH??(e?big:eag)}" +
+        "var big=16384,eag=3072;",
+    );
+
+    assert.deepEqual(await scanToolDescriptionCap(path), { cap: 3072, fallback: false });
   });
 
   it("falls back when the anchor is missing", async () => {
@@ -238,7 +248,7 @@ describe("createDescriptionCapProbe", () => {
 
     assert.equal(await probe(), 3072);
     const cache = JSON.parse(await readFile(cachePath, "utf8")) as { version: number };
-    assert.equal(cache.version, 2);
+    assert.equal(cache.version, 3);
   });
 
   it("does not persist an unavailable binary as a synthetic version", async () => {
@@ -272,7 +282,7 @@ describe("createDescriptionCapProbe", () => {
     assert.equal(await probe(), FALLBACK_TOOL_DESCRIPTION_CAP);
     assert.equal(await probe(), FALLBACK_TOOL_DESCRIPTION_CAP);
     assert.equal(warnings.length, 1);
-    assert.match(warnings[0], /assuming 2048/);
+    assert.match(warnings[0], /assuming 4096/);
 
     const restartedProbe = createDescriptionCapProbe({
       cachePath,
