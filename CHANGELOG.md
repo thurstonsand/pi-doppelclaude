@@ -2,6 +2,17 @@
 
 # Changelog
 
+## 0.14.5 — 2026-10-12
+
+### Changed
+
+- Upgrade to **Pi 1.1.0**, **Agent SDK 0.3.296** (Claude Code 2.1.296), and **Anthropic SDK 0.133**. Haiku 5.5 now takes its metadata from Pi's own catalog.
+- **Refusal notices follow Pi's transcript padding** — the "Claude declined" entry honors the new `/settings` output padding instead of always indenting one column.
+
+### Fixed
+
+- **Long tool descriptions stay in the tool list** — Claude Code 2.1.295 reshaped how it sets its MCP description cap, and the probe misread it as ~1000 characters, relocating any tool description longer than that into the system prompt. The probe now reads the real 4096-character cap, and the fallback when it cannot is 4096 instead of 2048.
+
 ## 0.14.4 — 2026-10-09
 
 ### Fixed
