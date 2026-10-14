@@ -2,6 +2,12 @@
 
 # Changelog
 
+## 0.14.6 — 2026-10-14
+
+### Fixed
+
+- **HTTP: long-prompt Amp titles no longer fail** — markerless one-shot requests are now admitted up to 32 KiB of serialized context, up from 16 KiB. A thread whose first message pushed its title request past the old cap was rejected on every retry and never got a title. Multi-message and tool-bearing requests are still refused without a marker.
+
 ## 0.14.5 — 2026-10-12
 
 ### Changed
