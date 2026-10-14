@@ -37,7 +37,7 @@ const DEFAULT_RUNTIME_LIMIT = 32;
 const DEFAULT_IDLE_TTL = 3_600_000;
 const DEFAULT_REQUEST_TIMEOUT = 600_000;
 const DEFAULT_SHUTDOWN_TIMEOUT = 15_000;
-const ANONYMOUS_MAX_CONTEXT_BYTES = 16_384;
+const ANONYMOUS_MAX_CONTEXT_BYTES = 32_768;
 const ANONYMOUS_MAX_TOKENS = 4_096;
 const CacheControl = Type.Optional(
   Type.Union([Type.Record(Type.String(), Type.Unknown()), Type.Null()]),
@@ -1086,7 +1086,7 @@ export function createHttpServer(options: HttpServerOptions): Server {
           throw new RequestError("system contains a malformed Amp Thread URL line", 400, 0);
         if (unkeyed && !eligibility.eligible)
           throw new RequestError(
-            "unkeyed requests require one nonempty text-only user message, no tools, at most 16384 context bytes, and max_tokens at most 4096",
+            "unkeyed requests require one nonempty text-only user message, no tools, at most 32768 context bytes, and max_tokens at most 4096",
             400,
             0,
           );

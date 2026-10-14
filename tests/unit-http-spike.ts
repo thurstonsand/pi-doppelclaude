@@ -491,7 +491,7 @@ describe("native HTTP frontend", () => {
       const exactOverhead = Buffer.byteLength(
         JSON.stringify({ messages: [{ role: "user", content: "" }] }),
       );
-      const exact = "x".repeat(16_384 - exactOverhead);
+      const exact = "x".repeat(32_768 - exactOverhead);
       const accepted = await app.post(anonymous(exact));
       assert.equal(accepted.status, 200);
       assert.match(await accepted.text(), /event: message_stop/);
@@ -532,7 +532,7 @@ describe("native HTTP frontend", () => {
       const records = app.logs.filter((record) => record.event === "request_complete");
       assert.equal(records[0].requestKind, "anonymous");
       assert.equal(records[0].threadId, null);
-      assert.equal(records[0].anonymousContextBytes, 16_384);
+      assert.equal(records[0].anonymousContextBytes, 32_768);
       assert.equal(records[0].declaredMaxTokens, 4_096);
       assert.equal(records[1].anonymousEligible, false);
       assert.equal(records.at(-3)?.markerCount, 0);
