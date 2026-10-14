@@ -80,15 +80,18 @@ Add a provider to `opencode.json` using OpenCode's Anthropic SDK package, pointe
       "npm": "@ai-sdk/anthropic",
       "name": "doppelclaude",
       "options": { "baseURL": "https://doppelclaude.example/v1", "apiKey": "{env:DOPPELCLAUDE_API_KEY}" },
-      "models": { "claude-opus-5": {}, "claude-haiku-4-5": {} }
+      "models": {
+        "claude-opus-5-5": { "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] } },
+        "claude-haiku-4-5": { "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] } }
+      }
     }
   },
-  "model": "doppelclaude/claude-opus-5",
+  "model": "doppelclaude/claude-opus-5-5",
   "small_model": "doppelclaude/claude-haiku-4-5"
 }
 ```
 
-The provider ID must not start with `opencode`; OpenCode only sends its session headers to other providers. Every request then carries `X-Session-Id: ses_…`, stable across turns and `--session` continuation, and a subagent gets its own session ID. When the header is present it alone identifies the conversation: it must be a `ses_` ID or the request returns 400, and Amp markers in the system prompt are ignored.
+Declare `modalities` on every model. Without it, OpenCode treats a custom provider's models as text-only and replaces each attached image or PDF with an `ERROR: Cannot read …` note before sending the request, so the daemon never sees the attachment. The provider ID must not start with `opencode`; OpenCode only sends its session headers to other providers. Every request then carries `X-Session-Id: ses_…`, stable across turns and `--session` continuation, and a subagent gets its own session ID. When the header is present it alone identifies the conversation: it must be a `ses_` ID or the request returns 400, and Amp markers in the system prompt are ignored.
 
 OpenCode also sends title generation and compaction under the conversation's session ID. A request that is one text-only user message with no tools runs as a one-shot on its own ephemeral runtime, like a markerless Amp request but without its size limits, so it never displaces the conversation's warm query.
 
