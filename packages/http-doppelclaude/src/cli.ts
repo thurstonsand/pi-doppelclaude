@@ -25,6 +25,8 @@ Environment:
   DOPPELCLAUDE_SHUTDOWN_TIMEOUT_MS Graceful shutdown deadline (15000)
   DOPPELCLAUDE_RETRY_ATTEMPTS     Transient retry count (2)
   DOPPELCLAUDE_DEBUG              Set to 1 to enable bridge debug logging
+  DOPPELCLAUDE_RECORD_REQUESTS    Diagnostic: append each admitted request's prompt,
+                                  tools, and history to this JSONL file (off)
   CLAUDE_CODE_OAUTH_TOKEN         Passed unchanged to Claude Code
   CLAUDE_CONFIG_DIR               Passed unchanged to Claude Code
 

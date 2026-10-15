@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -93,6 +93,57 @@ describe("HTTP daemon lifecycle", () => {
     assert.equal((await app.post(requestBody([]))).status, 400);
     assert.equal(allocations, 0);
     await new Promise<void>((resolve) => app.server.close(() => resolve()));
+  });
+
+  it("records each admitted request's prepared prompt, tools, and history only when asked", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "doppelclaude-record-"));
+    const path = join(dir, "requests.jsonl");
+    const logs: Record<string, unknown>[] = [];
+    const app = await openServer({
+      apiKey: key,
+      supportedModels: [],
+      recordRequestsPath: path,
+      toolDescriptionCap: 10,
+      log: (record) => logs.push(record),
+      createRuntime() {
+        return {
+          turn: successful,
+          replay: successful,
+          clear: async () => {},
+          designateHost: async () => {},
+          markRebuild: async () => {},
+        } as never;
+      },
+    });
+    try {
+      const tool = {
+        name: "read",
+        description: "Read a file from the workspace by its absolute path.",
+        input_schema: { type: "object", properties: {} },
+      };
+      const sent = { ...requestBody([{ role: "user", content: "secret history" }]), tools: [tool] };
+      const response = await app.post({ ...sent, model: `doppelclaude/${model}` });
+      await response.text();
+      assert.equal(response.status, 200);
+      assert.equal((await app.post(requestBody([]))).status, 400);
+      const lines = (await readFile(path, "utf8")).trimEnd().split("\n");
+      assert.equal(lines.length, 1);
+      const record = JSON.parse(lines[0] as string);
+      const completed = logs.find((entry) => entry.event === "request_complete");
+      assert.equal(record.requestId, completed?.requestId);
+      assert.equal(record.threadId, thread);
+      assert.equal(record.requestedModel, model);
+      assert.equal(record.resolvedModel, model);
+      assert.ok(record.systemPrompt.endsWith(sent.system));
+      assert.ok(record.systemPrompt.includes(tool.description));
+      assert.notEqual(record.tools[0].description, tool.description);
+      assert.deepEqual(record.request.messages, sent.messages);
+      assert.deepEqual(record.request.tools, [tool]);
+      assert.ok(!JSON.stringify(logs).includes("secret history"));
+    } finally {
+      await new Promise<void>((resolve) => app.server.close(() => resolve()));
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("returns from shutdown deadline when runtime clear never settles", async () => {
@@ -231,6 +282,7 @@ describe("HTTP daemon configuration", () => {
     });
     assert.equal(parsed.retryAttempts, 0);
     assert.equal(parsed.host, "127.0.0.1");
+    assert.equal(parsed.recordRequestsPath, undefined);
   });
 
   it("accepts IPv4 and IPv6 bind address literals", async () => {
@@ -274,6 +326,7 @@ describe("HTTP daemon configuration", () => {
       { ...base, DOPPELCLAUDE_IDLE_TTL_MS: "2147483648" },
       { ...base, DOPPELCLAUDE_RETRY_ATTEMPTS: "11" },
       { ...base, DOPPELCLAUDE_STATE_DIR: "  " },
+      { ...base, DOPPELCLAUDE_RECORD_REQUESTS: " " },
     ])
       await assert.rejects(httpConfigFromEnvironment(env));
   });

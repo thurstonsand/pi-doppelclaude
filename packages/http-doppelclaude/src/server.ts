@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { appendFile, readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { isIP } from "node:net";
 import { homedir } from "node:os";
@@ -328,6 +328,8 @@ export interface HttpServerOptions {
   requestTimeoutMs?: number;
   shutdownTimeoutMs?: number;
   stateDir?: string;
+  /** Absent disables the inbound request record. */
+  recordRequestsPath?: string;
   now?: () => number;
   retryAttempts?: number;
   retryDelay?: (attempt: number, signal: AbortSignal) => Promise<void>;
@@ -343,6 +345,7 @@ export interface HttpEnvironmentConfig {
   host: string;
   port: number;
   stateDir: string;
+  recordRequestsPath: string | undefined;
   maxRuntimes: number;
   idleTtlMs: number;
   maxBodyBytes: number;
@@ -1212,6 +1215,21 @@ export function createHttpServer(options: HttpServerOptions): Server {
         options.toolDescriptionCap ?? false,
       );
       const tools = prepared.tools;
+      if (options.recordRequestsPath)
+        await appendFile(
+          options.recordRequestsPath,
+          `${JSON.stringify({
+            timestamp: new Date().toISOString(),
+            requestId,
+            threadId: safeThreadId,
+            requestKind: diagnostic.requestKind,
+            requestedModel: diagnostic.requestedModel,
+            resolvedModel: model,
+            systemPrompt: prepared.systemPrompt,
+            tools,
+            request: body,
+          })}\n`,
+        );
       for (const tool of tools) {
         const sdk = `mcp__custom-tools__${tool.name}`;
         toolNameToSdk.set(tool.name, sdk);
@@ -1638,6 +1656,9 @@ export async function httpConfigFromEnvironment(
   const host = env.DOPPELCLAUDE_HTTP_HOST ?? "127.0.0.1";
   if (isIP(host) === 0)
     throw new Error("DOPPELCLAUDE_HTTP_HOST must be an IPv4 or IPv6 address literal");
+  const recordRequestsPath = env.DOPPELCLAUDE_RECORD_REQUESTS;
+  if (recordRequestsPath !== undefined && !recordRequestsPath.trim())
+    throw new Error("DOPPELCLAUDE_RECORD_REQUESTS must not be blank");
   return {
     apiKey: await apiKeyFromEnvironment(env),
     openCodeEnvironmentHeading: await valueOrFileFromEnvironment(
@@ -1647,6 +1668,7 @@ export async function httpConfigFromEnvironment(
     host,
     port: integerOption(env, "PORT", 3456, 1, 65_535),
     stateDir,
+    recordRequestsPath,
     maxRuntimes: integerOption(env, "DOPPELCLAUDE_MAX_RUNTIMES", 32),
     idleTtlMs: integerOption(env, "DOPPELCLAUDE_IDLE_TTL_MS", 3_600_000),
     maxBodyBytes: integerOption(env, "DOPPELCLAUDE_MAX_BODY_BYTES", DEFAULT_BODY_LIMIT),

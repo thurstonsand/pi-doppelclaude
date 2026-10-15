@@ -15,6 +15,7 @@ function config(stateDir: string): HttpEnvironmentConfig {
     host: "127.0.0.1",
     port: 3456,
     stateDir,
+    recordRequestsPath: undefined,
     maxRuntimes: 32,
     idleTtlMs: 1000,
     maxBodyBytes: 1000,
