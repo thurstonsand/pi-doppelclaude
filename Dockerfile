@@ -1,4 +1,4 @@
-FROM node:24-bookworm-slim@sha256:51b1100cc2a83d370c6a60952e3f2989c8a43159d0e38586e090f3b3326efefd AS build
+FROM node:24-bookworm-slim@sha256:ec857ea6bb60cb3d0fa4d97495590c5fe7d51be8572c307b55957eeb06569cf7 AS build
 
 WORKDIR /source
 COPY package.json package-lock.json tsconfig.json tsconfig.base.json mise.toml ./
@@ -11,7 +11,7 @@ RUN node scripts/set-release-version.mjs "$VERSION" && \
     npx tsc -p packages/doppelclaude && \
     npx tsc -p packages/http-doppelclaude
 
-FROM node:24-bookworm-slim@sha256:51b1100cc2a83d370c6a60952e3f2989c8a43159d0e38586e090f3b3326efefd
+FROM node:24-bookworm-slim@sha256:ec857ea6bb60cb3d0fa4d97495590c5fe7d51be8572c307b55957eeb06569cf7
 
 RUN groupadd --gid 3456 doppelclaude && \
     useradd --uid 3456 --gid 3456 --home-dir /var/lib/doppelclaude \
