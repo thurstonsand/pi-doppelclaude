@@ -54,12 +54,6 @@
 
 ## Upstream Gaps
 
-- **Entry renderers do not receive `outputPad`**: Pi 1.1.0 passes the user's
-  transcript padding to message and tool renderers, but `EntryRenderOptions` is
-  still `{ expanded }`. The refusal entry renderer reads
-  `pi.getSettings().outputPad` instead; delete that wrapper in `index.ts` once
-  Pi adds the field.
-
 - **Amp does not identify individual Oracle invocations**: Oracle requests carry
   the parent Amp thread ID but no Oracle invocation ID. Two Oracle calls emitted
   in one assistant turn therefore select the same warm runtime, and the second
