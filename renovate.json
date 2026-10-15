@@ -40,6 +40,19 @@
       "enabled": false
     },
     {
+      "description": "The harnesses this bridge joins always take their latest release, whatever minimumReleaseAge any preset or rule sets elsewhere: the bridge tracks them closely and drops workarounds as soon as they catch up.",
+      "matchPackageNames": [
+        "@earendil-works/pi-*",
+        "@anthropic-ai/claude-agent-sdk",
+        "@anthropic-ai/claude-code",
+        "@openai/codex",
+        "npm:@earendil-works/pi-*",
+        "npm:@anthropic-ai/claude-code",
+        "npm:@openai/codex"
+      ],
+      "minimumReleaseAge": null
+    },
+    {
       "matchDatasources": ["github-releases"],
       "matchPackageNames": ["jdx/hk"],
       "groupName": "hk",

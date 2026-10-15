@@ -42,6 +42,7 @@ function message(
       output_tokens_details: null,
       server_tool_use: null,
       service_tier: null,
+      speed: null,
     },
   };
 }

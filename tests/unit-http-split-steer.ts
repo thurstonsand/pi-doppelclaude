@@ -36,6 +36,7 @@ function message(content: Message["content"], stop: Message["stop_reason"]): Mes
       output_tokens_details: null,
       server_tool_use: null,
       service_tier: null,
+      speed: null,
     },
   };
 }

@@ -45,6 +45,7 @@ async function* successful(): AsyncIterable<CoreResponseEvent> {
       output_tokens_details: null,
       server_tool_use: null,
       service_tier: null,
+      speed: null,
     },
   } as Message;
   yield { type: "message_start", message: { ...message, content: [] } };
