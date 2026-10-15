@@ -2,6 +2,12 @@
 
 # Changelog
 
+## 0.14.7 — 2026-10-15
+
+### Added
+
+- **HTTP: inbound request recording** — `DOPPELCLAUDE_RECORD_REQUESTS=<path>` appends one JSON line per admitted Messages request with the prepared system prompt, tools, full request body, and the `requestId`, thread, and model fields that correlate it with `request_complete`. Off by default; it writes prompts and history to disk, so use it only for a capture. `request_complete` records remain hash-only.
+
 ## 0.14.6 — 2026-10-14
 
 ### Fixed
