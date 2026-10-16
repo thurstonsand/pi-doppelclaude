@@ -2,6 +2,16 @@
 
 # Changelog
 
+## 0.14.8 — 2026-10-16
+
+### Added
+
+- **HTTP: Haiku alias, and every family the SDK reports** — requests can use `haiku` alongside `opus`, `fable`, and `sonnet`. Aliases are no longer a fixed list: any family the SDK catalog reports a stable model in becomes an alias at startup, resolved the same way as before, so a new family works without a bridge release.
+
+### Changed
+
+- Upgrade to **Pi 1.3.0**, **Agent SDK 0.3.301** (Claude Code 2.1.301), and **Anthropic SDK 0.135**.
+
 ## 0.14.7 — 2026-10-15
 
 ### Added
