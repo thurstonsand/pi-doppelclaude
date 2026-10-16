@@ -295,6 +295,7 @@ function schemaError(schema: TSchema, value: unknown, path = ""): string {
 
 type Runtime = ReturnType<typeof createBridgeRuntime>;
 interface ThreadState {
+  threadId: string;
   runtime: Runtime;
   runtimeId: string;
   observationState: {
@@ -304,6 +305,8 @@ interface ThreadState {
   calls: Map<string, CallRecord>;
   pendingTool: boolean;
   expectedHistory: MessageParam[];
+  /** Fingerprint of expectedHistory's canonical form, compared against each request's prior history. */
+  servedHistory: string;
   requestSignature?: string;
   configurationFingerprint?: string;
   configurationFields?: Record<string, string>;
@@ -928,7 +931,7 @@ export function createHttpServer(options: HttpServerOptions): Server {
     log({
       event: "runtime_close",
       timestamp: new Date().toISOString(),
-      threadId: state.anonymous ? null : key,
+      threadId: state.anonymous ? null : state.threadId,
       runtimeId: state.runtimeId,
       reason,
     });
@@ -937,7 +940,7 @@ export function createHttpServer(options: HttpServerOptions): Server {
         log({
           event: "runtime_close_failed",
           timestamp: new Date().toISOString(),
-          threadId: state.anonymous ? null : key,
+          threadId: state.anonymous ? null : state.threadId,
           runtimeId: state.runtimeId,
           reason,
         });
@@ -960,9 +963,11 @@ export function createHttpServer(options: HttpServerOptions): Server {
       });
     if (!anonymous) void runtime.designateHost(threadId);
     return {
+      threadId,
       runtime,
       runtimeId: randomUUID(),
       observationState,
+      servedHistory: fingerprint(canonicalHistory([])),
     };
   };
   const waitForClose = async (promise: Promise<void>): Promise<void> => {
@@ -1093,7 +1098,6 @@ export function createHttpServer(options: HttpServerOptions): Server {
       const anonymous = conversationId === null;
       const threadId = conversationId ?? `anonymous:${randomUUID()}`;
       safeThreadId = conversationId;
-      reservationKey = threadId;
       stage = "prepare_request";
       // Validate history references before reserving scarce process capacity. Tool names are mapped
       // again below against the runtime's prior calls.
@@ -1135,26 +1139,57 @@ export function createHttpServer(options: HttpServerOptions): Server {
       const configurationFingerprint = fingerprint(`${model}\n${signature}`);
       const expectedPrior = body.messages.slice(0, -1) as MessageParam[];
       stage = "acquire_runtime";
+      const priorHistory = fingerprint(canonicalHistory(expectedPrior));
+      // A conversation may hold several runtimes: a client that abandons a request retries while
+      // the first still runs, and Amp's Oracle shares its parent thread's marker with a different
+      // configuration, sometimes several at once.
+      const laneKey = anonymous ? threadId : `${threadId}#${randomUUID()}`;
+      reservationKey = laneKey;
       let eviction: Promise<void> | undefined;
+      let previousConfiguration: { fingerprint?: string; fields?: Record<string, string> } = {};
       state = await registry(() => {
         if (shuttingDown) throw new RequestError("server is shutting down", 503);
-        if (closing.has(threadId) || pending.has(threadId))
-          throw new RequestError("another request for this conversation is active", 409);
-        const existing = states.get(threadId);
-        if (existing) {
-          if (existing.busy)
-            throw new RequestError("another request for this conversation is active", 409);
-          existing.busy = true;
-          return existing;
+        if (!anonymous) {
+          const latest = [...states.values()]
+            .filter((candidate) => candidate.threadId === threadId && candidate.configurationFields)
+            .sort((left, right) => right.lastActivity - left.lastActivity)[0];
+          previousConfiguration = {
+            fingerprint: latest?.configurationFingerprint,
+            fields: latest?.configurationFields,
+          };
+          const lanes = [...states.values()].filter(
+            (candidate) =>
+              candidate.threadId === threadId &&
+              !candidate.busy &&
+              (candidate.requestSignature === undefined ||
+                candidate.requestSignature === signature),
+          );
+          const continued = lanes.find(
+            (candidate) =>
+              candidate.servedHistory === priorHistory ||
+              (candidate.pendingTool &&
+                continuesWithSplitSteer(
+                  body.messages as MessageParam[],
+                  candidate.expectedHistory,
+                )),
+          );
+          const existing =
+            continued ?? lanes.sort((left, right) => left.lastActivity - right.lastActivity)[0];
+          if (existing) {
+            diagnostic.lane = continued ? "continued" : "reused";
+            existing.busy = true;
+            return existing;
+          }
         }
-        pending.add(threadId);
+        diagnostic.lane = "opened";
+        pending.add(laneKey);
         ownsReservation = true;
         if (
           states.size + closing.size + pending.size >
           (options.maxRuntimes ?? DEFAULT_RUNTIME_LIMIT)
         ) {
           if (anonymous) {
-            pending.delete(threadId);
+            pending.delete(laneKey);
             throw new RequestError("runtime capacity reached", 503);
           }
           const anonymousOccupancy =
@@ -1164,14 +1199,14 @@ export function createHttpServer(options: HttpServerOptions): Server {
             [...closing.keys()].some((key) => key.startsWith("anonymous:")) ||
             [...pending].some((key) => key.startsWith("anonymous:"));
           if (anonymousOccupancy) {
-            pending.delete(threadId);
+            pending.delete(laneKey);
             throw new RequestError("runtime capacity reached", 503);
           }
           const idle = [...states.entries()]
             .filter(([, candidate]) => !candidate.busy)
             .sort((left, right) => left[1].lastActivity - right[1].lastActivity)[0];
           if (!idle) {
-            pending.delete(threadId);
+            pending.delete(laneKey);
             throw new RequestError("runtime capacity reached", 503);
           }
           states.delete(idle[0]);
@@ -1189,12 +1224,12 @@ export function createHttpServer(options: HttpServerOptions): Server {
             lastActivity: now(),
             anonymous,
           };
-          pending.delete(threadId);
+          pending.delete(laneKey);
           ownsReservation = false;
-          states.set(threadId, created);
+          states.set(laneKey, created);
           return created;
         } catch (error) {
-          pending.delete(threadId);
+          pending.delete(laneKey);
           throw error;
         }
       });
@@ -1203,8 +1238,6 @@ export function createHttpServer(options: HttpServerOptions): Server {
           await waitForClose(eviction);
           state = await registry(() => {
             if (shuttingDown) throw new RequestError("server is shutting down", 503);
-            if (!pending.has(threadId))
-              throw new RequestError("another request for this conversation is active", 409);
             if (
               states.size + closing.size + pending.size >
               (options.maxRuntimes ?? DEFAULT_RUNTIME_LIMIT)
@@ -1220,12 +1253,12 @@ export function createHttpServer(options: HttpServerOptions): Server {
               lastActivity: now(),
               anonymous,
             };
-            pending.delete(threadId);
-            states.set(threadId, created);
+            pending.delete(laneKey);
+            states.set(laneKey, created);
             return created;
           });
         } finally {
-          pending.delete(threadId);
+          pending.delete(laneKey);
         }
       }
       if (!state) throw new RequestError("runtime capacity reached", 503);
@@ -1247,14 +1280,15 @@ export function createHttpServer(options: HttpServerOptions): Server {
             request: body,
           })}\n`,
         );
-      const changedConfigurationFields = state.configurationFields
+      const previousFields = previousConfiguration.fields;
+      const changedConfigurationFields = previousFields
         ? Object.keys(configurationFields).filter(
-            (field) => configurationFields[field] !== state.configurationFields?.[field],
+            (field) => configurationFields[field] !== previousFields[field],
           )
         : null;
-      const previousConfigurationFingerprint = state.configurationFingerprint ?? null;
+      const previousConfigurationFingerprint = previousConfiguration.fingerprint ?? null;
       const historyDiverged =
-        canonicalHistory(expectedPrior) !== canonicalHistory(state.expectedHistory) &&
+        priorHistory !== state.servedHistory &&
         !(
           state.pendingTool &&
           continuesWithSplitSteer(body.messages as MessageParam[], state.expectedHistory)
@@ -1281,6 +1315,8 @@ export function createHttpServer(options: HttpServerOptions): Server {
         toolNameToSdk,
       );
       Object.assign(diagnostic, {
+        threadRuntimes: [...states.values()].filter((candidate) => candidate.threadId === threadId)
+          .length,
         configurationFingerprint,
         previousConfigurationFingerprint,
         configurationFields,
@@ -1433,6 +1469,7 @@ export function createHttpServer(options: HttpServerOptions): Server {
         ...(structuredClone(body.messages) as MessageParam[]),
         { role: "assistant", content: structuredClone(final.message.content) },
       ];
+      state.servedHistory = fingerprint(canonicalHistory(state.expectedHistory));
       state.requestSignature = signature;
       state.configurationFingerprint = configurationFingerprint;
       state.configurationFields = configurationFields;

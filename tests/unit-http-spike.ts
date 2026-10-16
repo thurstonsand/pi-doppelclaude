@@ -170,8 +170,8 @@ async function harness(
     openCodeEnvironmentHeading: "Test environment heading:",
     log: (record) => logs.push(record),
     createRuntime(id) {
-      const seen: RuntimeRequest[] = [];
-      const marked: string[] = [];
+      const seen = requests.get(id) ?? [];
+      const marked = rebuilds.get(id) ?? [];
       requests.set(id, seen);
       rebuilds.set(id, marked);
       return fakeRuntime(seen, marked) as never;
@@ -1990,26 +1990,26 @@ describe("native HTTP frontend", () => {
     }
   });
 
-  it("isolates simultaneous threads, retains a same-thread lock, and rebuilds after abort", async () => {
+  it("isolates simultaneous threads, serves an overlapping same-thread request, and rebuilds after abort", async () => {
     const entered = deferred();
     const release = deferred();
     const interrupted = deferred();
     const rebuilds = new Map<string, string[]>();
-    const identities = new Map<string, object>();
+    const runtimes = new Map<string, object[]>();
+    const turns = new Map<string, number>();
     const server = createHttpServer({
       apiKey: KEY,
       supportedModels: [],
       createRuntime(id) {
         const identity = {};
-        identities.set(id, identity);
-        const marked: string[] = [];
+        runtimes.set(id, [...(runtimes.get(id) ?? []), identity]);
+        const marked = rebuilds.get(id) ?? [];
         rebuilds.set(id, marked);
-        let turns = 0;
         return {
           ...fakeRuntime([], marked),
           turn(request: RuntimeRequest) {
-            turns++;
-            if (id === A && turns === 1) {
+            turns.set(id, (turns.get(id) ?? 0) + 1);
+            if (id === A && turns.get(id) === 1) {
               request.signal?.addEventListener("abort", interrupted.resolve, { once: true });
               return (async function* () {
                 yield {
@@ -2055,11 +2055,13 @@ describe("native HTTP frontend", () => {
       });
       await entered.promise;
       const firstResponse = await firstA;
-      assert.equal((await post(body(A))).status, 409);
+      const overlapping = await post(body(A));
+      assert.equal(overlapping.status, 200);
+      assert.match(await overlapping.text(), /A next/);
+      assert.equal(runtimes.get(A)?.length, 2);
       const bText = await (await post(body(B))).text();
       assert.match(bText, /B literal/);
-      assert.notEqual(identities.get(A), identities.get(B));
-      assert.equal((await post(body(A))).status, 409);
+      assert.equal(runtimes.get(B)?.length, 1);
       const closed = once(firstResponse.socket, "close");
       firstResponse.socket.destroy();
       await closed;
@@ -2068,6 +2070,7 @@ describe("native HTTP frontend", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
       const next = await post(body(A));
       assert.match(await next.text(), /A next/);
+      assert.equal(runtimes.get(A)?.length, 2);
       assert.ok(
         rebuilds.get(A)?.some((reason) => reason.includes("previous request failed")),
         JSON.stringify(rebuilds.get(A)),
@@ -2135,7 +2138,7 @@ describe("native HTTP frontend", () => {
     }
   });
 
-  it("forces rebuilds for edited history and changed request signatures", async () => {
+  it("forces rebuilds for edited history and opens a runtime for a changed request signature", async () => {
     const app = await harness();
     try {
       await (await app.post(body(A))).text();
@@ -2149,6 +2152,8 @@ describe("native HTTP frontend", () => {
         )
       ).text();
       assert.match(app.rebuilds.get(A)?.[0] ?? "", /history diverged/);
+      assert.equal(app.logs.at(-1)?.lane, "reused");
+      assert.equal(app.logs.at(-1)?.threadRuntimes, 1);
       const continued = body(A, [
         { role: "user", content: "edited" },
         { role: "assistant", content: [{ type: "text", text: "old" }] },
@@ -2199,8 +2204,10 @@ describe("native HTTP frontend", () => {
           output_config: { effort: "high" },
         })
       ).text();
-      assert.ok(app.rebuilds.get(A)?.some((reason) => reason.includes("settings changed")));
-      assert.equal(app.logs.at(-1)?.reason, "configuration_changed");
+      assert.ok(!app.rebuilds.get(A)?.some((reason) => reason.includes("settings changed")));
+      assert.equal(app.logs.at(-1)?.lane, "opened");
+      assert.equal(app.logs.at(-1)?.threadRuntimes, 2);
+      assert.deepEqual(app.logs.at(-1)?.changedConfigurationFields, ["effort"]);
     } finally {
       await app.close();
     }
@@ -2240,7 +2247,7 @@ describe("native HTTP frontend", () => {
     }
   });
 
-  it("logs warm reuse and main/Oracle/main displacement without conflating cache reads", async () => {
+  it("keeps main and Oracle on separate warm runtimes without conflating cache reads", async () => {
     const logs: Array<Record<string, unknown>> = [];
     let spawns = 0;
     const server = createHttpServer({
@@ -2357,12 +2364,18 @@ describe("native HTTP frontend", () => {
       }
       const completed = logs.filter((record) => record.event === "request_complete");
       assert.equal(completed.length, 4);
-      assert.equal(spawns, 3);
+      assert.equal(spawns, 2);
       assert.deepEqual(
         completed.map((record) => record.reason),
-        ["first_request", "compatible", "configuration_changed", "configuration_changed"],
+        ["first_request", "compatible", "first_request", "compatible"],
       );
-      assert.equal(new Set(completed.map((record) => record.runtimeId)).size, 1);
+      assert.deepEqual(
+        completed.map((record) => record.lane),
+        ["opened", "continued", "opened", "continued"],
+      );
+      assert.equal(new Set(completed.map((record) => record.runtimeId)).size, 2);
+      assert.equal(completed[3].runtimeId, completed[0].runtimeId);
+      assert.notEqual(completed[2].runtimeId, completed[0].runtimeId);
       assert.equal(new Set(completed.map((record) => record.requestId)).size, 4);
       const executions = completed.map(
         (record) => record.executions as Array<{ event: string; queryId: string }>,
@@ -2371,11 +2384,11 @@ describe("native HTTP frontend", () => {
         executions.map((events) =>
           events.filter((event) => event.event !== "sdk_result").map((event) => event.event),
         ),
-        [["query_created"], ["query_reused"], ["query_created"], ["query_created"]],
+        [["query_created"], ["query_reused"], ["query_created"], ["query_reused"]],
       );
       assert.equal(executions[0][0].queryId, executions[1][0].queryId);
       assert.notEqual(executions[1][0].queryId, executions[2][0].queryId);
-      assert.notEqual(executions[2][0].queryId, executions[3][0].queryId);
+      assert.equal(executions[3][0].queryId, executions[0][0].queryId);
       assert.equal(completed[0].configurationFingerprint, completed[3].configurationFingerprint);
       assert.equal(
         completed[3].previousConfigurationFingerprint,

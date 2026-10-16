@@ -153,7 +153,7 @@ describe("HTTP runtime admission", () => {
       await (await app.post(body(ids[0]))).text();
       const first = app.post(body(ids[1]));
       while (!app.cleared.includes(ids[0])) await new Promise(setImmediate);
-      assert.equal((await app.post(body(ids[1]))).status, 409);
+      assert.equal((await app.post(body(ids[1]))).status, 503);
       oldClear.resolve();
       assert.equal((await first).status, 200);
       assert.deepEqual(app.made, [ids[0], ids[1]]);

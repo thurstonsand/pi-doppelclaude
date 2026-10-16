@@ -219,7 +219,7 @@ The follow-up capture observed an authenticated `GET /v1/models`; return Models 
 - **Tool set changes mid-conversation:** the existing live MCP reconciliation; with upfront loading this invalidates the prefix once.
 - **Malformed model id:** reject it at the HTTP boundary. A well-formed stable Claude model is forwarded even when absent from the discovery catalog.
 - **Pending tool handler abandoned by the client:** idle deadline closes the query; the doppel is dropped; a late request rebuilds.
-- **Two hits on the daemon for the same conversation concurrently:** reject the second with a conflict while preserving the first request's lock and state.
+- **Two hits on the daemon for the same conversation concurrently:** originally rejected with a conflict. Amp produces them routinely, by retrying a request whose connection dropped before the daemon saw a disconnect, and by running Oracle calls (sometimes in parallel) under the parent thread's marker, so the second now gets its own runtime within the thread. Requests pick the idle runtime that served exactly their prior history and settings, so main and Oracle no longer rebuild each other.
 
 ## Alternatives
 
