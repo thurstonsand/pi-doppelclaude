@@ -1094,10 +1094,47 @@ export function createHttpServer(options: HttpServerOptions): Server {
       const threadId = conversationId ?? `anonymous:${randomUUID()}`;
       safeThreadId = conversationId;
       reservationKey = threadId;
-      stage = "acquire_runtime";
+      stage = "prepare_request";
       // Validate history references before reserving scarce process capacity. Tool names are mapped
-      // again below once request tools have been prepared.
+      // again below against the runtime's prior calls.
       normalizeMessages(body.messages, new Map(), new Map());
+      diagnostic.resizedImages = await prepareImages(body.messages);
+      const toolNameToSdk = new Map<string, string>();
+      const toolNameToClient = new Map<string, string>();
+      const rawTools =
+        body.tool_choice?.type === "none"
+          ? []
+          : ((body.tools ?? []).map(({ cache_control: _cache, ...tool }) =>
+              structuredClone(tool),
+            ) as Tool[]);
+      const prepared = prepareToolDescriptions(
+        rawTools,
+        prompt,
+        options.toolDescriptionCap ?? false,
+      );
+      const tools = prepared.tools;
+      for (const tool of tools) {
+        const sdk = `mcp__custom-tools__${tool.name}`;
+        toolNameToSdk.set(tool.name, sdk);
+        toolNameToClient.set(sdk, tool.name);
+      }
+      const configuration = {
+        prompt: prepared.systemPrompt,
+        tools,
+        toolChoice: body.tool_choice,
+        effort: body.output_config?.effort,
+        thinking: body.thinking,
+      };
+      const signature = JSON.stringify(configuration);
+      const configurationFields = Object.fromEntries(
+        Object.entries({ model, ...configuration }).map(([field, value]) => [
+          field,
+          fingerprint(JSON.stringify({ value })),
+        ]),
+      );
+      const configurationFingerprint = fingerprint(`${model}\n${signature}`);
+      const expectedPrior = body.messages.slice(0, -1) as MessageParam[];
+      stage = "acquire_runtime";
       let eviction: Promise<void> | undefined;
       state = await registry(() => {
         if (shuttingDown) throw new RequestError("server is shutting down", 503);
@@ -1195,21 +1232,6 @@ export function createHttpServer(options: HttpServerOptions): Server {
       locked = true;
       state.observationState.observations = [];
       stage = "prepare_request";
-      diagnostic.resizedImages = await prepareImages(body.messages);
-      const toolNameToSdk = new Map<string, string>();
-      const toolNameToClient = new Map<string, string>();
-      const rawTools =
-        body.tool_choice?.type === "none"
-          ? []
-          : ((body.tools ?? []).map(({ cache_control: _cache, ...tool }) =>
-              structuredClone(tool),
-            ) as Tool[]);
-      const prepared = prepareToolDescriptions(
-        rawTools,
-        prompt,
-        options.toolDescriptionCap ?? false,
-      );
-      const tools = prepared.tools;
       if (options.recordRequestsPath)
         await appendFile(
           options.recordRequestsPath,
@@ -1225,33 +1247,12 @@ export function createHttpServer(options: HttpServerOptions): Server {
             request: body,
           })}\n`,
         );
-      for (const tool of tools) {
-        const sdk = `mcp__custom-tools__${tool.name}`;
-        toolNameToSdk.set(tool.name, sdk);
-        toolNameToClient.set(sdk, tool.name);
-      }
-      const configuration = {
-        prompt: prepared.systemPrompt,
-        tools,
-        toolChoice: body.tool_choice,
-        effort: body.output_config?.effort,
-        thinking: body.thinking,
-      };
-      const signature = JSON.stringify(configuration);
-      const configurationFields = Object.fromEntries(
-        Object.entries({ model, ...configuration }).map(([field, value]) => [
-          field,
-          fingerprint(JSON.stringify({ value })),
-        ]),
-      );
       const changedConfigurationFields = state.configurationFields
         ? Object.keys(configurationFields).filter(
             (field) => configurationFields[field] !== state.configurationFields?.[field],
           )
         : null;
-      const configurationFingerprint = fingerprint(`${model}\n${signature}`);
       const previousConfigurationFingerprint = state.configurationFingerprint ?? null;
-      const expectedPrior = body.messages.slice(0, -1) as MessageParam[];
       const historyDiverged =
         canonicalHistory(expectedPrior) !== canonicalHistory(state.expectedHistory) &&
         !(
