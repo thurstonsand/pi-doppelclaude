@@ -15,7 +15,7 @@ Point pi at a scratch agent dir whose `settings.json` carries your real `doppelc
 ```sh
 mise run build
 export PI_CODING_AGENT_DIR=$PWD/.test-output/agent-smoke
-pi -ne -e ./packages/pi-doppelclaude/dist/index.js -p --model doppelclaude/claude-haiku-4-5 \
+pi -ne -e ./packages/pi-doppelclaude/dist/index.js -p --model doppelclaude/haiku \
   'Read CHANGELOG.md and reply with its first heading, verbatim.'
 ```
 
@@ -34,7 +34,7 @@ Start the daemon with a key file and note its base URL. In an orb, `amp orb serv
 KEY=$(cat .test-output/http-state/api-key)
 curl -sS -H "x-api-key: $KEY" "$BASE/v1/models"
 curl -sS -N -X POST "$BASE/v1/messages" -H "x-api-key: $KEY" -H 'content-type: application/json' \
-  -d '{"model":"claude-haiku-4-5","max_tokens":64,"stream":true,"system":[{"type":"text","text":"Amp Thread URL: https://ampcode.com/threads/T-0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d"}],"messages":[{"role":"user","content":"Reply with exactly: http-ok"}]}'
+  -d '{"model":"haiku","max_tokens":64,"stream":true,"system":[{"type":"text","text":"Amp Thread URL: https://ampcode.com/threads/T-0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d"}],"messages":[{"role":"user","content":"Reply with exactly: http-ok"}]}'
 ```
 
 Pass:

@@ -52,7 +52,7 @@ async function terminalMessage(
   throw new Error("provider stream ended without a terminal event");
 }
 
-const model = bridgeModel("claude-haiku-4-5");
+const model = bridgeModel("claude-haiku-5-5");
 const store = new BlockingMirrorStore();
 const runtime = createBridgeRuntime({
   providerSettings: { systemPromptMode: "claude-code" },

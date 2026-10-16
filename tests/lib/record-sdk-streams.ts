@@ -105,7 +105,7 @@ for (const name of chosen) {
 
   const harness = createRpcHarness({
     name: `record-${name}`,
-    args: ["--model", "doppelclaude/claude-haiku-4-5"],
+    args: ["--model", "doppelclaude/haiku"],
     cwd: WORKDIR,
     env: { DOPPELCLAUDE_RECORD_STREAM: raw },
     defaultTimeout: 120_000,

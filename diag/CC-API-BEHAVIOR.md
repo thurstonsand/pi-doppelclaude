@@ -15,7 +15,7 @@ response stream.
 
 ```
 node diag/capture-proxy.mjs --out /tmp/cap &
-ANTHROPIC_BASE_URL=http://127.0.0.1:8787 pi --model doppelclaude/claude-haiku-4-5
+ANTHROPIC_BASE_URL=http://127.0.0.1:8787 pi --model doppelclaude/haiku
 node diag/diff-captures.mjs /tmp/cap
 ```
 

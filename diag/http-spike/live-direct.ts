@@ -6,7 +6,7 @@ const keyFile = process.env.DOPPELCLAUDE_HTTP_API_KEY_FILE;
 if (!keyFile) throw new Error("set DOPPELCLAUDE_HTTP_API_KEY_FILE");
 const apiKey = (await readFile(keyFile, "utf8")).trim();
 if (!apiKey) throw new Error("HTTP API key file is blank");
-const model = process.env.DOPPELCLAUDE_HTTP_CLIENT_MODEL ?? "claude-haiku-4-5";
+const model = process.env.DOPPELCLAUDE_HTTP_CLIENT_MODEL ?? "haiku";
 const threads = [
   { id: "T-a1111111-1111-4111-8111-111111111111", expected: "ALPHA_17", sibling: "BRAVO_92" },
   { id: "T-b2222222-2222-4222-8222-222222222222", expected: "BRAVO_92", sibling: "ALPHA_17" },

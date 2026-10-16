@@ -23,7 +23,7 @@ import { Server as McpLowLevelServer } from "@modelcontextprotocol/sdk/server/in
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 
 const UPSTREAM = "https://api.anthropic.com";
-const MODEL = "claude-haiku-4-5-20251001";
+const MODEL = "haiku";
 
 // Fat, stable description so the tool block is unmistakably many tokens.
 // Haiku's minimum cacheable prefix is 2048 tokens; the tool block alone must clear

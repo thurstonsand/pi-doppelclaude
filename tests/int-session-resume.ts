@@ -19,7 +19,7 @@ const OTHER_PROVIDER = requireEnv("DOPPELCLAUDE_TESTING_ALT_PROVIDER");
 const OTHER_MODEL = requireEnv("DOPPELCLAUDE_TESTING_ALT_MODEL");
 
 const TIMEOUT = 180_000;
-const BRIDGE_MODEL = "doppelclaude/claude-haiku-4-5";
+const BRIDGE_MODEL = "doppelclaude/claude-haiku-5-5";
 
 // Random words to avoid Claude memorizing test values across runs
 const WORD_A = `alpha${Math.random().toString(36).slice(2, 6)}`;

@@ -10,7 +10,7 @@ import { createSession, getSessionPath } from "cc-session-io";
 import { BridgeSessionStore } from "doppelclaude/session-store";
 
 const CWD = process.cwd();
-const MODEL = "claude-haiku-4-5";
+const MODEL = "haiku";
 
 function seed(store: BridgeSessionStore, sessionId: string, token: string) {
   const session = createSession({ sessionId, projectPath: CWD, model: MODEL });

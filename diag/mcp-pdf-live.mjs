@@ -53,7 +53,7 @@ async function run(label, content, mcpServers, resumeOptions = {}) {
     })(),
     options: {
       cwd,
-      model: "claude-haiku-4-5",
+      model: "haiku",
       tools: [],
       mcpServers,
       allowedTools: ["mcp__pdfsrv__get_pdf"],
@@ -128,7 +128,7 @@ try {
       ? "MCP PDF content reached the model; inspect toolResults for native document conversion."
       : "MCP PDF content did not reach the model; native PDF control passed.",
   );
-  const session = createSession({ projectPath: cwd, model: "claude-haiku-4-5" });
+  const session = createSession({ projectPath: cwd, model: "haiku" });
   session.addUserMessage(`Call get_pdf once, then: ${question}`);
   const pendingCall = session.addAssistantMessage(
     [{ type: "tool_use", id: "pdf_call", name: "mcp__pdfsrv__get_pdf", input: {} }],

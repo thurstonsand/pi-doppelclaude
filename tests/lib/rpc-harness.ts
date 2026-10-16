@@ -188,7 +188,7 @@ export function isolateAgentDir(name: string, logdir: string, customAgentDir?: s
     : {};
   modelsStore.doppelclaude = {
     models: [],
-    supportedModelIds: ["claude-haiku-4-5"],
+    supportedModelIds: ["claude-haiku-5-5"],
   };
   writeFileSync(modelsStorePath, JSON.stringify(modelsStore));
   const settingsPath = join(sandbox, "settings.json");

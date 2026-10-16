@@ -6,12 +6,12 @@ import { createHttpServer } from "http-doppelclaude";
 
 const configuredModel = process.env.DOPPELCLAUDE_HTTP_CLIENT_MODEL ?? "claude-opus-4-6";
 if (
-  configuredModel !== "claude-haiku-4-5" &&
+  configuredModel !== "haiku" &&
   configuredModel !== "claude-opus-4-6" &&
   configuredModel !== "claude-opus-5"
 )
   throw new Error("unsupported DOPPELCLAUDE_HTTP_CLIENT_MODEL");
-const MODEL: "claude-haiku-4-5" | "claude-opus-4-6" | "claude-opus-5" = configuredModel;
+const MODEL: "haiku" | "claude-opus-4-6" | "claude-opus-5" = configuredModel;
 
 const TURN_TIMEOUT_MS = 120_000;
 const tool = {

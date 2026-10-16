@@ -15,7 +15,7 @@ const TEST_TIMEOUT = 90_000;
 
 const harness = createRpcHarness({
   name: "rejection-smoke",
-  args: ["--model", "doppelclaude/claude-haiku-4-5"],
+  args: ["--model", "doppelclaude/haiku"],
   defaultTimeout: TEST_TIMEOUT,
 });
 

@@ -24,7 +24,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 
 const DIR = dirname(fileURLToPath(import.meta.url));
 const CAP = 2048;
-const MODEL = "claude-haiku-4-5-20251001";
+const MODEL = "haiku";
 
 const fullDescription = readFileSync(join(DIR, "mcp-description.txt"), "utf8");
 if (fullDescription.length <= CAP)

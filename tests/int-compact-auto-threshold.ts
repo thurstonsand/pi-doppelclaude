@@ -4,7 +4,9 @@
 // Unlike the manual /compact tests, this goes through pi's pre-prompt
 // AgentSession._checkCompaction() path and observes threshold compaction events.
 // keepRecentTokens=50 intentionally forces the split-turn dual-summary path that
-// used to hang through streamClaudeAgentSdk.
+// used to hang through streamClaudeAgentSdk. reserveTokens exceeds any context
+// window, so the first prompt after auto-compaction is enabled crosses the
+// threshold regardless of which model "haiku" resolves to.
 
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -15,7 +17,7 @@ import {
   parseCompactionEndEvent,
 } from "./lib/rpc-harness.js";
 
-const BRIDGE_MODEL = "doppelclaude/claude-haiku-4-5";
+const BRIDGE_MODEL = "doppelclaude/haiku";
 const COMPACT_TIMEOUT = 120_000;
 const TEST_TIMEOUT = 240_000;
 
@@ -23,7 +25,7 @@ const testAgentDir = mkdtempSync(join(tmpdir(), "compact-auto-agent-"));
 writeFileSync(
   join(testAgentDir, "settings.json"),
   JSON.stringify({
-    compaction: { enabled: false, reserveTokens: 198000, keepRecentTokens: 50 },
+    compaction: { enabled: false, reserveTokens: 2_000_000, keepRecentTokens: 50 },
   }),
 );
 

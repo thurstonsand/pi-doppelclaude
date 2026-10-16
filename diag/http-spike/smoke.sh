@@ -4,7 +4,7 @@ set -euo pipefail
 : "${DOPPELCLAUDE_HTTP_API_KEY:?set DOPPELCLAUDE_HTTP_API_KEY}"
 : "${AMP_THREAD_URL:?set AMP_THREAD_URL to https://ampcode.com/threads/T-...}"
 base_url="${DOPPELCLAUDE_HTTP_BASE_URL:-http://127.0.0.1:3456}"
-model="${DOPPELCLAUDE_HTTP_CLIENT_MODEL:-claude-haiku-4-5}"
+model="${DOPPELCLAUDE_HTTP_CLIENT_MODEL:-haiku}"
 
 curl --fail-with-body --no-buffer "$base_url/v1/messages" \
   -H "x-api-key: $DOPPELCLAUDE_HTTP_API_KEY" \

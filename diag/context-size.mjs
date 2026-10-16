@@ -32,7 +32,7 @@ const MODELS = [
   "claude-fable-5",
   "claude-sonnet-5",
   "claude-sonnet-4-6",
-  "claude-haiku-4-5",
+  "claude-haiku-5-5",
 ];
 const VARIANTS = ["bare", "1m"];
 const PER_CALL_MS = 120_000;

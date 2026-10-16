@@ -8,7 +8,7 @@
 // Rate limit: the usage endpoint is aggressively limited — don't run repeatedly.
 //
 // Usage: node --import tsx tests/usage-test.ts [model] [turns]
-//   model: claude-haiku-4-5 (default), claude-sonnet-4-6, claude-opus-4-6
+//   model: claude-haiku-5-5 (default), claude-sonnet-5-5, claude-opus-5-5
 //   turns: number of conversation turns (default: 10)
 
 import { execFileSync, spawn, spawnSync } from "node:child_process";
@@ -24,7 +24,7 @@ const DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const LOGDIR = join(DIR, ".test-output");
 const USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
 
-const MODEL = process.argv[2] ?? "claude-haiku-4-5";
+const MODEL = process.argv[2] ?? "claude-haiku-5-5";
 
 // The prompt corpus below has exactly MAX_TURNS entries; a turns argument beyond
 // it, or a non-integer, is a caller mistake and fails fast rather than silently

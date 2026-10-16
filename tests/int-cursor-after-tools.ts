@@ -15,7 +15,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { createRpcHarness } from "./lib/rpc-harness.js";
 
-const BRIDGE_MODEL = "doppelclaude/claude-haiku-4-5";
+const BRIDGE_MODEL = "doppelclaude/haiku";
 
 test("turn 2 reuses session after tool-using turn 1 (no spurious rebuild)", {
   timeout: 120_000,

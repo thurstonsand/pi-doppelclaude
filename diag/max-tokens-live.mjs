@@ -7,7 +7,7 @@
 // (max_tokens, model, message count) and the SSE stop_reason/usage. Bodies are
 // never written to disk.
 //
-//   node diag/max-tokens-live.mjs [--model claude-haiku-4-5]
+//   node diag/max-tokens-live.mjs [--model haiku]
 //
 // Costs subscription quota: four short turns, one deliberately truncated.
 
@@ -20,7 +20,7 @@ const flag = (name, fallback) => {
   const i = args.indexOf(`--${name}`);
   return i === -1 ? fallback : args[i + 1];
 };
-const MODEL = flag("model", "claude-haiku-4-5");
+const MODEL = flag("model", "haiku");
 const UPSTREAM = "api.anthropic.com";
 
 const wire = [];

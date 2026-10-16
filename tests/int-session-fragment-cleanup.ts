@@ -11,7 +11,7 @@ import { createRpcHarness } from "./lib/rpc-harness.js";
 const cwd = mkdtempSync(join(tmpdir(), "pi-doppelclaude-fragment-cleanup-"));
 const harness = createRpcHarness({
   name: "session-fragment-cleanup",
-  args: ["--model", "doppelclaude/claude-haiku-4-5"],
+  args: ["--model", "doppelclaude/haiku"],
   cwd,
   defaultTimeout: 120_000,
 });

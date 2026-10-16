@@ -73,5 +73,5 @@ mise run test:usage                                 # on-demand A/B subscription
 
 ```bash
 mise run build
-pi -ne -e ./packages/pi-doppelclaude/dist/index.js -p --model doppelclaude/claude-haiku-4-5 'Reply with exactly: bridge-ok'
+pi -ne -e ./packages/pi-doppelclaude/dist/index.js -p --model doppelclaude/haiku 'Reply with exactly: bridge-ok'
 ```

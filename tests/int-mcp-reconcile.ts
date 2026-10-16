@@ -7,7 +7,7 @@ const harness = createRpcHarness({
   name: "mcp-reconcile",
   args: [
     "--model",
-    "doppelclaude/claude-haiku-4-5",
+    "doppelclaude/haiku",
     "-e",
     `${process.cwd()}/tests/fixtures/tool-set-extension.ts`,
   ],

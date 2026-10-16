@@ -26,7 +26,7 @@ rm -f "$TMPFILE" "$DOPPELCLAUDE_DEBUG_PATH"
 
 echo "Running 5-turn conversation (text + tool use)..."
 timeout 180 pi --no-session -ne -e "$DIR" \
-  --model "doppelclaude/claude-haiku-4-5" \
+  --model "doppelclaude/haiku" \
   --mode json \
   -p "The secret number is 42. Acknowledge briefly." \
      "Write the secret number to $TMPFILE. Just the number, nothing else." \

@@ -73,10 +73,10 @@ JSON
 # `yesterday`, explanatory prose, or a `Not logged in · Please run /login` banner
 # all fail instead of passing.
 run "provider: print mode responds" \
-  bash -c "pi --no-session -ne -e '$DIR' --model 'doppelclaude/claude-haiku-4-5' -p 'Reply with only the word yes' 2>&1 | grep -qiE '^[[:space:]]*yes[[:space:]]*\$' && echo ok"
+  bash -c "pi --no-session -ne -e '$DIR' --model 'doppelclaude/haiku' -p 'Reply with only the word yes' 2>&1 | grep -qiE '^[[:space:]]*yes[[:space:]]*\$' && echo ok"
 
 run "provider: --provider flag works" \
-  bash -c "pi --no-session -ne -e '$DIR' --provider doppelclaude --model claude-haiku-4-5 -p 'Reply with only the word yes' 2>&1 | grep -qiE '^[[:space:]]*yes[[:space:]]*\$' && echo ok"
+  bash -c "pi --no-session -ne -e '$DIR' --provider doppelclaude --model haiku -p 'Reply with only the word yes' 2>&1 | grep -qiE '^[[:space:]]*yes[[:space:]]*\$' && echo ok"
 
 # Startup replays the cached catalog without asking Claude Code, so the sandbox must offer the
 # models its copied store recorded.
@@ -88,7 +88,7 @@ run "provider: dynamic model list includes Opus 5.5" \
 
 # Claude Code advertises Haiku only as a dated snapshot; it must be cached as the family model.
 run "provider: dated snapshot resolves to its family model" \
-  bash -c "output=\$(pi --no-session -ne -e '$DIR' --list-models 2>&1) && grep -Eq '^doppelclaude[[:space:]]+claude-haiku-4-5[[:space:]]' <<<\"\$output\" && ! grep -Eq '^doppelclaude[[:space:]]+claude-haiku-4-5-' <<<\"\$output\" && echo ok"
+  bash -c "output=\$(pi --no-session -ne -e '$DIR' --list-models 2>&1) && grep -Eq '^doppelclaude[[:space:]]+claude-haiku-5-5[[:space:]]' <<<\"\$output\" && ! grep -Eq '^doppelclaude[[:space:]]+claude-haiku-5-5-' <<<\"\$output\" && echo ok"
 
 run "provider: modelOverrides apply and additions stay hidden" \
   bash -c "output=\$(pi --no-session -ne -e '$DIR' --list-models 2>&1) && grep -Eq '^doppelclaude[[:space:]]+claude-sonnet-5-5[[:space:]]+200K[[:space:]]' <<<\"\$output\" && ! grep -q 'claude-future-9-9' <<<\"\$output\" && echo ok"
