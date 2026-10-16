@@ -1751,27 +1751,43 @@ describe("native HTTP frontend", () => {
     }
   });
 
-  it("resolves Sonnet through the SDK alias or a unique concrete family", async () => {
-    for (const value of ["sonnet", "claude-sonnet-5"]) {
-      const app = await harness([
-        {
-          value,
-          resolvedModel: "claude-sonnet-5",
-          displayName: "Sonnet",
-          description: "",
-        },
-      ]);
-      try {
-        const response = await app.post({ ...body(A), model: "doppelclaude/sonnet" });
+  it("resolves every family the SDK catalog reports, including unlisted ones", async () => {
+    const app = await harness([
+      {
+        value: "default",
+        resolvedModel: "claude-opus-5-5",
+        displayName: "Default",
+        description: "",
+      },
+      { value: "opus", resolvedModel: "claude-opus-5-5", displayName: "Opus", description: "" },
+      {
+        value: "sonnet",
+        resolvedModel: "claude-sonnet-5-5",
+        displayName: "Sonnet",
+        description: "",
+      },
+      { value: "haiku", resolvedModel: "claude-haiku-5-5", displayName: "Haiku", description: "" },
+      { value: "claude-haiku-4-5", displayName: "Haiku 4.5", description: "" },
+      { value: "claude-lyric-1", displayName: "Lyric", description: "" },
+    ]);
+    try {
+      for (const model of ["haiku", "anthropic/haiku", "sonnet", "doppelclaude/lyric"]) {
+        const response = await app.post({ ...body(A), model });
         assert.equal(response.status, 200);
         await response.text();
-        assert.equal(app.requests.get(A)?.[0]?.model, "claude-sonnet-5");
-        const haiku = await app.post({ ...body(B), model: "haiku" });
-        assert.equal(haiku.status, 400);
-        await haiku.text();
-      } finally {
-        await app.close();
       }
+      assert.deepEqual(
+        app.requests.get(A)?.map((request) => request.model),
+        ["claude-haiku-5-5", "claude-haiku-5-5", "claude-sonnet-5-5", "claude-lyric-1"],
+      );
+      const notFamily = await app.post({ ...body(B), model: "default" });
+      assert.equal(notFamily.status, 400);
+      assert.match(await notFamily.text(), /model alias default is unavailable/);
+      const prefixed = await app.post({ ...body(B), model: "claude-haiku" });
+      assert.equal(prefixed.status, 400);
+      assert.match(await prefixed.text(), /model must be a stable Claude model ID/);
+    } finally {
+      await app.close();
     }
   });
 

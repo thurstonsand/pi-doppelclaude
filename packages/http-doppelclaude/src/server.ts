@@ -361,8 +361,8 @@ export interface HttpModel {
   created_at: null;
 }
 
-const STABLE_CLAUDE_MODEL = /^claude-[a-z][a-z0-9]*-\d+(?:-\d+)*$/u;
-const REQUEST_MODEL_ALIASES = ["opus", "fable", "sonnet"];
+const STABLE_CLAUDE_MODEL = /^claude-([a-z][a-z0-9]*)-\d+(?:-\d+)*$/u;
+const MODEL_FAMILY_ALIAS = /^[a-z][a-z0-9]*$/u;
 
 function installedSdkVersion(): string {
   let directory = dirname(fileURLToPath(import.meta.resolve("@anthropic-ai/claude-agent-sdk")));
@@ -384,28 +384,23 @@ function installedSdkVersion(): string {
 }
 
 function snapshotModelAliases(models: readonly ModelInfo[]): Map<string, string> {
+  const families = new Map<string, Set<string>>();
+  for (const row of models) {
+    const concrete = row.resolvedModel ?? row.value;
+    const family = STABLE_CLAUDE_MODEL.exec(concrete)?.[1];
+    if (family) families.set(family, (families.get(family) ?? new Set()).add(concrete));
+  }
+
   const aliases = new Map<string, string>();
-  for (const alias of REQUEST_MODEL_ALIASES) {
+  for (const [family, candidates] of families) {
     const exact = models.find(
       (model) =>
-        model.value === alias &&
+        model.value === family &&
         model.resolvedModel !== undefined &&
         STABLE_CLAUDE_MODEL.test(model.resolvedModel),
     )?.resolvedModel;
-    if (exact) {
-      aliases.set(alias, exact);
-      continue;
-    }
-
-    const familyPrefix = `claude-${alias}-`;
-    const candidates = new Set<string>();
-    for (const row of models) {
-      const concrete = row.resolvedModel ?? row.value;
-      if (STABLE_CLAUDE_MODEL.test(concrete) && concrete.startsWith(familyPrefix)) {
-        candidates.add(concrete);
-      }
-    }
-    if (candidates.size === 1) aliases.set(alias, candidates.values().next().value as string);
+    if (exact) aliases.set(family, exact);
+    else if (candidates.size === 1) aliases.set(family, candidates.values().next().value as string);
   }
   return aliases;
 }
@@ -420,7 +415,7 @@ function requestModelId(model: string, aliases: ReadonlyMap<string, string>): st
         : undefined;
   if (!bare) return undefined;
   if (STABLE_CLAUDE_MODEL.test(bare)) return bare;
-  if (REQUEST_MODEL_ALIASES.includes(bare)) {
+  if (MODEL_FAMILY_ALIAS.test(bare)) {
     const resolved = aliases.get(bare);
     if (!resolved) {
       throw new RequestError(
