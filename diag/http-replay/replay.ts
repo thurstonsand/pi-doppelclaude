@@ -9,6 +9,7 @@ import { parseArgs } from "node:util";
 
 interface Recorded {
   requestId: string;
+  requestKind: string;
   threadId: string;
   resolvedModel: string;
   requestedModel: string;
@@ -35,6 +36,7 @@ interface Request {
   messageCount: number;
   prefixes: string[];
   synthesized: boolean;
+  openCode: boolean;
 }
 type Block = Record<string, unknown>;
 type Message = { role: string; content: string | Block[] };
@@ -46,6 +48,7 @@ const { values } = parseArgs({
     log: { type: "string" },
     out: { type: "string" },
     cap: { type: "string", default: "4096" },
+    "opencode-heading": { type: "string" },
   },
 });
 if (!values.server || !values.requests || !values.log || !values.out)
@@ -88,10 +91,20 @@ for await (const line of lines(values.log)) {
   if (record.threadId && record.httpStatus === 409) productionErrors.push(record);
 }
 
-const requests: Request[] = [];
+let requests: Request[] = [];
 const models = new Map<string, string>();
+const recordedIds = new Set<string>();
+let unreadableLines = 0;
 for await (const line of lines(values.requests)) {
-  const recorded = JSON.parse(line) as Recorded & { request: { messages: Message[] } };
+  let recorded: Recorded & { request: { messages: Message[] } };
+  try {
+    recorded = JSON.parse(line);
+  } catch {
+    // Concurrent appends of large records can interleave into unreadable lines.
+    unreadableLines++;
+    continue;
+  }
+  recordedIds.add(recorded.requestId);
   const log = production.get(recorded.requestId);
   if (!log || !recorded.threadId) continue;
   models.set(recorded.requestedModel, recorded.resolvedModel);
@@ -106,16 +119,32 @@ for await (const line of lines(values.requests)) {
     messageCount: recorded.request.messages.length,
     prefixes: prefixHashes(recorded.request.messages),
     synthesized: false,
+    openCode: recorded.requestKind === "opencode",
   });
 }
+// A thread missing an admitted request's body cannot be replayed faithfully past it, so it is
+// excluded whole rather than compared against a broken history.
+const incompleteThreads = new Set(
+  [...production.values()]
+    .filter(
+      (record) =>
+        record.threadId && record.reason !== undefined && !recordedIds.has(record.requestId ?? ""),
+    )
+    .map((record) => record.threadId as string),
+);
+requests = requests.filter((request) => !incompleteThreads.has(request.threadId));
 // A rejected request is never recorded. Amp's retry of a dropped stream resends the request still
 // running on that thread, so a 409 is replayed as a copy of the request in flight at the time.
+const unmatched409s: string[] = [];
 for (const rejected of productionErrors) {
   const at = Date.parse(rejected.timestamp);
   const running = requests.find(
     (request) => request.threadId === rejected.threadId && request.start <= at && at < request.end,
   );
-  if (!running) continue;
+  if (!running) {
+    unmatched409s.push(`${rejected.timestamp} ${rejected.threadId}`);
+    continue;
+  }
   requests.push({
     ...running,
     id: `synthesized-409-${rejected.requestId}`,
@@ -189,7 +218,8 @@ function fakeTurn(flight: Flight, signal?: AbortSignal) {
         signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true }),
       ),
     ]);
-    if (!["success"].includes(flight.request.production.outcome ?? ""))
+    // A synthesized 409 copies a request that succeeded; the retry it stands for should too.
+    if (!flight.request.synthesized && flight.request.production.outcome !== "success")
       throw new Error(`production outcome ${flight.request.production.outcome}`);
     const usage = {
       input_tokens: 1,
@@ -234,6 +264,7 @@ const server = createHttpServer({
     description: "",
   })),
   toolDescriptionCap: Number(values.cap),
+  openCodeEnvironmentHeading: values["opencode-heading"],
   maxRuntimes: 32,
   idleTtlMs: 3_600_000,
   now: () => clock,
@@ -289,7 +320,12 @@ for (const event of events) {
     admitting = flight;
     flight.response = fetch(url, {
       method: "POST",
-      headers: { "content-type": "application/json", "x-api-key": "replay" },
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "replay",
+        // The recorder does not capture headers; OpenCode keys its sessions by this one.
+        ...(event.request.openCode ? { "x-session-id": event.request.threadId } : {}),
+      },
       body: event.request.body,
       signal: flight.abort.signal,
     }).then(
@@ -370,7 +406,10 @@ const count = (values: Array<string | number | null | undefined>) =>
 const summary = {
   server: values.server,
   requests: rows.length,
+  unreadableLines,
+  excludedThreads: [...incompleteThreads],
   synthesized409s: rows.filter((row) => row.synthesized).length,
+  unmatched409s,
   matchingProduction: rows.filter((row) => row.differences.length === 0).length,
   differingFields: count(
     rows.flatMap((row) => row.differences.map((difference) => difference.field)),

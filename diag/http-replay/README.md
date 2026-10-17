@@ -9,7 +9,9 @@ Checks a change to the HTTP frontend's runtime routing against recorded producti
 - Requests start and finish in production's order (start = log timestamp − `durationMs`), so overlaps within a thread are reproduced exactly; the fake runtime holds each turn until its production end.
 - The server runs on a simulated clock, and the harness runs its idle-expiry sweep at every event, so expiry also matches production.
 - A request's reply is the assistant message the next request on that thread echoes back; a reply nobody echoed is a placeholder. Because the fake replies with Amp's echo, the replay cannot see differences between what Claude Code returned and what the client sends back; it tests routing, not representation.
-- A 409 is never recorded. It is replayed as a copy of the request then running on that thread, which is what Amp resends after a dropped stream.
+- A 409 is never recorded. It is replayed as a copy of the request then running on that thread, which is what Amp resends after a dropped stream, and the copy succeeds. `unmatched409s` lists any with no running request to copy.
+- The recorder does not capture headers, so OpenCode records are sent with `x-session-id` set from their thread; pass production's heading with `--opencode-heading`.
+- Concurrent appends of large records can interleave into unreadable lines. The summary counts them, and a thread missing any admitted request's body is excluded whole (`excludedThreads`).
 
 Capture and run, with the log covering the same window:
 
