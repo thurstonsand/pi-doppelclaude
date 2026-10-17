@@ -2,6 +2,12 @@
 
 # Changelog
 
+## 0.14.9 — 2026-10-17
+
+### Fixed
+
+- **HTTP: no more "another request for this conversation is active"** — a thread can now hold several warm runtimes. When Amp resends a request whose stream dropped before the daemon saw the disconnect, or runs Oracle calls (sometimes in parallel) under the parent thread's marker, the overlapping request gets its own runtime instead of a 409. Each request continues the idle runtime that last served exactly its history and settings, so switching between main and Oracle no longer rebuilds the main conversation. `request_complete` records gain `lane` (`continued`, `reused`, `opened`) and `threadRuntimes`.
+
 ## 0.14.8 — 2026-10-16
 
 ### Added
