@@ -53,6 +53,11 @@
       "minimumReleaseAge": null
     },
     {
+      "description": "Pi updates raise the package.json floors, not only the lockfile, so the declared range names the pi the bridge was built and tested against.",
+      "matchPackageNames": ["@earendil-works/**"],
+      "rangeStrategy": "bump"
+    },
+    {
       "matchDatasources": ["github-releases"],
       "matchPackageNames": ["jdx/hk"],
       "groupName": "hk",
