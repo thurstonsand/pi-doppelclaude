@@ -10,7 +10,7 @@ export interface SessionStoreWriter extends SessionStore {
   invalidate(): void;
 }
 
-type TranscriptEntry = { type: string; uuid?: string; timestamp?: string };
+type TranscriptEntry = { type: string; uuid?: string; timestamp?: string; attachment?: unknown };
 
 export class MalformedSessionTranscriptError extends Error {}
 
@@ -34,6 +34,16 @@ function cloneEntries(entries: readonly TranscriptEntry[]): SessionStoreEntry[] 
     if (entry.timestamp !== undefined && typeof entry.timestamp !== "string") {
       throw new MalformedSessionTranscriptError(
         `Malformed SessionStore transcript entry at index ${index}: timestamp must be a string`,
+      );
+    }
+    if (
+      entry.type === "attachment" &&
+      (typeof entry.attachment !== "object" ||
+        entry.attachment === null ||
+        typeof (entry.attachment as { type?: unknown }).type !== "string")
+    ) {
+      throw new MalformedSessionTranscriptError(
+        `Malformed SessionStore transcript entry at index ${index}: attachment needs a string type`,
       );
     }
   }

@@ -68,6 +68,12 @@ function textReply(text: string, stop: "end_turn" | "max_tokens"): SDKMessage[] 
 
 const RESULT = {
   type: "result",
+  usage: {
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_read_input_tokens: 0,
+    cache_creation_input_tokens: 0,
+  },
   subtype: "success",
   result: "",
   is_error: false,
@@ -299,7 +305,8 @@ describe("output ceiling", () => {
         completed.map((record) => record.reason),
         ["first_request", "compatible"],
       );
-      assert.deepEqual(executionEvents(completed[1]), ["tool_result_continuation"]);
+      // The continuation stops at the ceiling too, so its query retires with it.
+      assert.deepEqual(executionEvents(completed[1]), ["tool_result_continuation", "compensation"]);
     } finally {
       await app.close();
     }
@@ -376,10 +383,20 @@ describe("output ceiling", () => {
         completed.map((record) => record.outcome),
         ["success", "success"],
       );
-      assert.deepEqual(completed.map(executionEvents), [["query_created"], ["query_created"]]);
+      assert.deepEqual(completed.map(executionEvents), [
+        ["query_created", "compensation"],
+        ["query_created"],
+      ]);
+      const retired = (completed[0].executions as Array<{ event: string; kind?: string }>).find(
+        (execution) => execution.event === "compensation",
+      );
+      assert.equal(retired?.kind, "output_ceiling_retired");
       // Not a missing session: the retired query's, forced aside by the ceiling stop.
-      const rebuilt = (completed[1].executions as Array<{ syncReason?: string }>)[0];
+      const rebuilt = (
+        completed[1].executions as Array<{ syncReason?: string; forcedCause?: string }>
+      )[0];
       assert.equal(rebuilt.syncReason, "forced");
+      assert.equal(rebuilt.forcedCause, "force-close");
     } finally {
       await app.close();
     }

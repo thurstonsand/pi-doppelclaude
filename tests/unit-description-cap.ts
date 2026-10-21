@@ -191,6 +191,7 @@ describe("createDescriptionCapProbe", () => {
   it("caches a scan by path, mtime, and size", async () => {
     const path = await fixture(`cap=3072;${ANCHOR}`);
     let scans = 0;
+    const sources: string[] = [];
     const probe = createDescriptionCapProbe({
       cachePath: join(path, "..", "cache.json"),
       resolveBinaryPath: () => path,
@@ -200,11 +201,13 @@ describe("createDescriptionCapProbe", () => {
       },
       debug() {},
       warn() {},
+      observe: ({ source }) => sources.push(source),
     });
 
     assert.equal(await probe(), 3072);
     assert.equal(await probe(), 3072);
     assert.equal(scans, 1);
+    assert.deepEqual(sources, ["scan", "cache"]);
   });
 
   it("invalidates and replaces a path's cached entry when the binary changes", async () => {
@@ -284,15 +287,19 @@ describe("createDescriptionCapProbe", () => {
     assert.equal(warnings.length, 1);
     assert.match(warnings[0], /assuming 4096/);
 
+    // The warning is not repeated after a restart, so the fallback is only visible through observe.
+    const sources: string[] = [];
     const restartedProbe = createDescriptionCapProbe({
       cachePath,
       resolveBinaryPath: () => path,
       scanBinary: scanToolDescriptionCap,
       debug() {},
       warn: (message) => warnings.push(message),
+      observe: ({ source }) => sources.push(source),
     });
     assert.equal(await restartedProbe(), FALLBACK_TOOL_DESCRIPTION_CAP);
     assert.equal(warnings.length, 1);
+    assert.deepEqual(sources, ["fallback"]);
 
     await writeFile(path, "still no anchor, but a different binary version");
     assert.equal(await probe(), FALLBACK_TOOL_DESCRIPTION_CAP);

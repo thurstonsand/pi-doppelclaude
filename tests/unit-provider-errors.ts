@@ -36,6 +36,15 @@ describe("provider SDK result errors", () => {
     const observations: BridgeExecutionObservation[] = [];
     const failure = "Compaction failed: context too long. PRIVATE_SENTINEL";
     const messages = [
+      {
+        type: "system",
+        subtype: "api_retry",
+        attempt: 1,
+        max_retries: 10,
+        retry_delay_ms: 512,
+        error_status: 529,
+        error: "overloaded",
+      },
       { type: "system", subtype: "status", status: "compacting" },
       {
         type: "system",
@@ -51,6 +60,12 @@ describe("provider SDK result errors", () => {
       },
       {
         type: "result",
+        usage: {
+          input_tokens: 12,
+          output_tokens: 3,
+          cache_read_input_tokens: 7000,
+          cache_creation_input_tokens: 40,
+        },
         subtype: "error_during_execution",
         is_error: true,
         terminal_reason: "prompt_too_long",
@@ -81,8 +96,22 @@ describe("provider SDK result errors", () => {
       assert.ok(events.some((event) => event.type === "terminal_error"));
       assert.deepEqual(
         observations.map((event) => event.event),
-        ["query_created", "sdk_status", "sdk_compact_boundary", "sdk_status", "sdk_result"],
+        [
+          "query_created",
+          "sdk_api_retry",
+          "sdk_status",
+          "sdk_compact_boundary",
+          "sdk_status",
+          "sdk_result",
+        ],
       );
+      const retry = observations.find((event) => event.event === "sdk_api_retry");
+      assert.ok(retry?.event === "sdk_api_retry");
+      assert.deepEqual(
+        { attempt: retry.attempt, maxRetries: retry.maxRetries, delayMs: retry.delayMs },
+        { attempt: 1, maxRetries: 10, delayMs: 512 },
+      );
+      assert.equal(retry.status, 529);
       const status = observations.find(
         (event) => event.event === "sdk_status" && event.compactResult === "failed",
       );
@@ -92,6 +121,7 @@ describe("provider SDK result errors", () => {
       const result = observations.find((event) => event.event === "sdk_result");
       assert.ok(result?.event === "sdk_result");
       assert.equal(result.terminalReason, "prompt_too_long");
+      assert.deepEqual(result.usage, { input: 12, output: 3, cacheRead: 7000, cacheWrite: 40 });
       assert.equal(result.error?.fingerprint, status.error?.fingerprint);
       assert.doesNotMatch(JSON.stringify(observations), /PRIVATE_SENTINEL/);
     } finally {
@@ -104,6 +134,12 @@ describe("provider SDK result errors", () => {
     const sdkQuery = (async function* () {
       yield {
         type: "result",
+        usage: {
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+        },
         subtype: "error_during_execution",
         errors: [message],
         modelUsage: {},
@@ -156,6 +192,12 @@ describe("provider SDK result errors", () => {
       };
       yield {
         type: "result",
+        usage: {
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+        },
         subtype: "success",
         is_error: true,
         api_error_status: 401,
@@ -228,6 +270,12 @@ describe("provider stop reasons", () => {
     if (options.withResult !== false) {
       messages.push({
         type: "result",
+        usage: {
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+        },
         subtype: "success",
         result: "partial",
         is_error: false,
@@ -305,7 +353,19 @@ describe("provider stop reasons", () => {
   // carrying the text — are completed by the SDK result instead.
   it("completes a turn whose only terminal signal is the SDK result", async () => {
     const last = await runTurn([
-      { type: "result", subtype: "success", result: "answered", is_error: false, modelUsage: {} },
+      {
+        type: "result",
+        subtype: "success",
+        result: "answered",
+        is_error: false,
+        modelUsage: {},
+        usage: {
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+        },
+      },
     ]);
     assert.equal(last.type, "done");
     if (last.type !== "done") throw new Error("expected a trailing done event");
@@ -342,6 +402,12 @@ describe("native response completion", () => {
   const result = (overrides: Record<string, unknown> = {}) =>
     ({
       type: "result",
+      usage: {
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: 0,
+      },
       subtype: "success",
       result: "answer",
       is_error: false,

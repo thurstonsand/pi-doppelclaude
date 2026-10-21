@@ -125,19 +125,29 @@ transcript from pi's history one to two minutes apart, all hit the cache at
 strongest evidence so far that the cause sits on Claude Code's side of the
 boundary.
 
-Still open is what separates the two halves. Three hypotheses are already dead:
+**Resolved 2026-10-18: the import bytes did differ.** The capture proxy, diffing a
+live request against a rebuild of the same history (Claude Code 2.1.301), found
+the rebuilt prompt diverging at message 0. Claude Code stores its injected context
+as `attachment` records after the prompt it arrived with, and renders them as
+`<system-reminder>` blocks in that message on every request. On resume it injects
+whatever the transcript lacks at the new prompt. A rebuilt transcript had none, so
+all of it moved to the tail and message 0 changed. That explains both halves: the
+first rebuild after live turns is cold, and a rebuild after a rebuild is warm,
+because both put the context in the same place. Empty tool results differ too (live
+renders `(<tool> completed with no output)`), as do images and results over the
+persistence threshold, which live replaces or annotates with an on-disk path.
 
-- _Not a new session id._ Eight of the nine cold turns resumed a session that had
-  already completed a turn.
-- _Not context size._ The warmest turn is 222k on `claude-opus-5[1m]`; the coldest
-  is 74k.
-- _Not the model._ `claude-fable-5` appears five times warm and three times cold.
-
-The split clusters by session — `28d0ca94` cold six of six, `6bd6b7db` warm five
-of six — which points at something fixed when a session is created and carried
-afterwards. The log cannot see it. The cheapest next look is the `cc-cli-logs/`
-pair for the 04:22 warm and 04:34 cold spawns, before reaching for the capture
-proxy.
+**The proxy changes what it measures.** Against the first-party API, Claude Code
+also writes a `total_tokens_reminder` record (`<total_tokens>N tokens left</total_tokens>`)
+on nearly every user turn; behind a custom `ANTHROPIC_BASE_URL` it does not. A fix
+that carried only environment, model, `session_context`, and date measured warm
+through the proxy and cold on the direct path. The bridge therefore carries every
+attachment except `prompt_snapshot`, which is never rendered. Measured direct on
+Haiku with `tests/int-rebuild-cache.ts`, a rebuild after five warm turns read the
+same 7,087 cached tokens as the warm request before it and wrote only its new
+tail; without carrying it read 5,811 (system and tools), and without the
+empty-result rendering it read 6,613, the prefix up to that result. Confirm any
+cache conclusion drawn behind the proxy on the direct path.
 
 ## Also worth knowing
 

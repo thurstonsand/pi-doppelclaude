@@ -955,11 +955,27 @@ export function createHttpServer(options: HttpServerOptions): Server {
     const observationState = {
       observations: null as BridgeExecutionObservation[] | null,
     };
-    const runtime =
+    const runtime: Runtime =
       options.createRuntime?.(threadId) ??
       createBridgeRuntime({
         queryFactory: options.queryFactory ?? query,
         observeExecution: (observation) => observationState.observations?.push(observation),
+        // A lane opened beside a busy one rebuilds the same thread; the sibling's transcript
+        // shows where Claude Code put its context, so the rebuild renders the same prefix.
+        ...(anonymous
+          ? {}
+          : {
+              hostSiblingTranscript: () => {
+                for (const sibling of [...states.values()].sort(
+                  (left, right) => right.lastActivity - left.lastActivity,
+                )) {
+                  if (sibling.threadId !== threadId || sibling.runtime === runtime) continue;
+                  const transcript = sibling.runtime.hostTranscript();
+                  if (transcript) return transcript;
+                }
+                return null;
+              },
+            }),
       });
     if (!anonymous) void runtime.designateHost(threadId);
     return {
@@ -1324,6 +1340,11 @@ export function createHttpServer(options: HttpServerOptions): Server {
         maxTokens: body.max_tokens,
         thinkingBudget: body.thinking?.type === "enabled" ? body.thinking.budget_tokens : null,
         promptCharacters: prepared.systemPrompt.length,
+        relocatedToolDescriptions: prepared.relocations.length,
+        relocatedDescriptionCharacters: prepared.relocations.reduce(
+          (total, relocation) => total + relocation.description.length,
+          0,
+        ),
         toolDefinitionCharacters: JSON.stringify(tools).length,
         historyCharacters: JSON.stringify(normalized.messages).length,
         messageCount: normalized.messages.length,

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { AccountSnapshot } from "doppelclaude/account-probe";
 import { createDefaultAccountProbe } from "doppelclaude/account-probe";
 import { configureDebug, debug } from "doppelclaude/debug";
-import { createDefaultDescriptionCapProbe } from "doppelclaude/description-cap";
+import { type CapResolution, createDefaultDescriptionCapProbe } from "doppelclaude/description-cap";
 import {
   createHttpServer,
   type HttpEnvironmentConfig,
@@ -100,9 +100,17 @@ export async function runHttpDaemon(
     if (!account.available)
       throw new Error("Claude Code is not authenticated with a first-party account subscription");
     const cachePath = join(config.stateDir, "description-cap-cache.json");
+    const capReport: { resolution: CapResolution | null } = { resolution: null };
     const capProbe =
       dependencies.descriptionCapProbe ??
-      ((_path, signal) => createDefaultDescriptionCapProbe({ cachePath, debug })(signal));
+      ((_path, signal) =>
+        createDefaultDescriptionCapProbe({
+          cachePath,
+          debug,
+          observe: (resolution) => {
+            capReport.resolution = resolution;
+          },
+        })(signal));
     const capTimeout = setTimeout(
       () => startupController.abort(new Error("Description-cap probe timed out after 15 seconds")),
       15_000,
@@ -134,6 +142,16 @@ export async function runHttpDaemon(
       }),
     );
     process.stderr.write(`doppelclaude HTTP server listening on ${config.host}:${config.port}\n`);
+    // A fallback cap moves different tools into the system prompt than the real one would, so
+    // each start records which it runs with.
+    process.stderr.write(
+      `${JSON.stringify({
+        event: "startup",
+        timestamp: new Date().toISOString(),
+        toolDescriptionCap,
+        toolDescriptionCapSource: capReport.resolution?.source ?? null,
+      })}\n`,
+    );
     server.once("close", cleanupSignals);
     return server;
   } catch (error) {

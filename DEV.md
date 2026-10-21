@@ -32,7 +32,7 @@ mise run test:usage                                 # on-demand A/B subscription
 ## Tests
 
 - `unit-*.ts` run offline against mocked SDK query factories.
-- `tests/fixtures/sdk-streams/` holds verbatim recorded CC message streams (scrubbed) that `unit-stream-replay.ts` replays through the real `consumeQuery`. Re-record with `node --import tsx tests/lib/record-sdk-streams.ts` on an SDK bump (costs quota), then read the fixture diff — it is the SDK's contract change.
+- `tests/fixtures/sdk-streams/` holds verbatim recorded CC message streams (scrubbed) that `unit-stream-replay.ts` replays through the real `consumeQuery`. Re-record with `node --import tsx tests/lib/record-sdk-streams.ts` on an SDK bump (costs quota), then read the fixture diff — it is the SDK's contract change. Also run `node --import tsx --test tests/int-rebuild-cache.ts` on an SDK bump: rebuilds stay warm only while they imitate how Claude Code stores and renders its context, and this fails when they stop.
 - `int-*.{sh,ts}` hit the real Claude Code binary and consume real subscription quota — run deliberately. They need local Claude auth (`claude auth login`).
 - `.env.test` supplies `DOPPELCLAUDE_TESTING_ALT_PROVIDER`/`DOPPELCLAUDE_TESTING_ALT_MODEL` — an authenticated non-bridge provider used by the session-resume test.
 - `tests/int-rejection-smoke.ts` depends on the model misbehaving on request.

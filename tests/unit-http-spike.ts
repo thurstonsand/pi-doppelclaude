@@ -1304,7 +1304,18 @@ describe("native HTTP frontend", () => {
                   event: { type: "message_delta", delta: { stop_reason: "end_turn" } },
                 },
                 { type: "stream_event", event: { type: "message_stop" } },
-                { type: "result", subtype: "success", is_error: false, modelUsage: {} },
+                {
+                  type: "result",
+                  subtype: "success",
+                  is_error: false,
+                  modelUsage: {},
+                  usage: {
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    cache_read_input_tokens: 0,
+                    cache_creation_input_tokens: 0,
+                  },
+                },
               ] as unknown as SDKMessage[];
               await closed.promise;
             } finally {
@@ -2305,6 +2316,12 @@ describe("native HTTP frontend", () => {
                 { type: "stream_event", event: { type: "message_stop" } },
                 {
                   type: "result",
+                  usage: {
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    cache_read_input_tokens: 0,
+                    cache_creation_input_tokens: 0,
+                  },
                   subtype: "success",
                   result: "ok",
                   is_error: false,
@@ -2451,6 +2468,12 @@ describe("native HTTP frontend", () => {
           { type: "stream_event", event: { type: "message_stop" } },
           {
             type: "result",
+            usage: {
+              input_tokens: 0,
+              output_tokens: 0,
+              cache_read_input_tokens: 0,
+              cache_creation_input_tokens: 0,
+            },
             subtype: "success",
             result: "replayed",
             is_error: false,

@@ -32,12 +32,19 @@ export interface CapResult {
   reason?: string;
 }
 
+export interface CapResolution {
+  cap: number;
+  source: "scan" | "cache" | "fallback";
+}
+
 export interface DescriptionCapProbeDependencies {
   cachePath: string;
   resolveBinaryPath(pathToClaudeCodeExecutable: string | undefined): string;
   scanBinary(path: string, signal?: AbortSignal): Promise<CapResult>;
   debug(...args: unknown[]): void;
   warn(message: string): void;
+  /** Every resolution, including cached ones, for callers that log which cap they run with. */
+  observe?(resolution: CapResolution): void;
 }
 
 function escapeRegex(value: string): string {
@@ -178,7 +185,7 @@ export function resolveClaudeCodeBinary(pathToClaudeCodeExecutable: string | und
 export function createDescriptionCapProbe(
   dependencies: DescriptionCapProbeDependencies,
 ): (pathToClaudeCodeExecutable?: string, signal?: AbortSignal) => Promise<number> {
-  const { cachePath, resolveBinaryPath, scanBinary, debug: log, warn } = dependencies;
+  const { cachePath, resolveBinaryPath, scanBinary, debug: log, warn, observe } = dependencies;
   const cache = new Map<string, CachedVersion>();
   let cacheLoaded: Promise<void> | undefined;
 
@@ -272,6 +279,7 @@ export function createDescriptionCapProbe(
       if (cache.get(binaryPath) === entry) needsPersist = true;
     }
     if (needsPersist) await persistCache();
+    observe?.({ cap: entry.cap, source: entry.fallback ? "fallback" : cached ? "cache" : "scan" });
     return entry.cap;
   };
 }
@@ -281,6 +289,7 @@ export function createDefaultDescriptionCapProbe(input: {
   pathToClaudeCodeExecutable?: string;
   debug?: (...args: unknown[]) => void;
   warn?: (message: string) => void;
+  observe?: (resolution: CapResolution) => void;
 }): (signal?: AbortSignal) => Promise<number> {
   const probe = createDescriptionCapProbe({
     cachePath: input.cachePath,
@@ -288,6 +297,7 @@ export function createDefaultDescriptionCapProbe(input: {
     scanBinary: scanToolDescriptionCap,
     debug: input.debug ?? (() => {}),
     warn: input.warn ?? (() => {}),
+    observe: input.observe,
   });
   return (signal) => probe(input.pathToClaudeCodeExecutable, signal);
 }

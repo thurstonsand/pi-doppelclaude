@@ -17,6 +17,10 @@ import {
   type SimpleStreamOptions,
   type Tool,
 } from "@earendil-works/pi-ai";
+import {
+  type BridgeExecutionObservation,
+  createBridgeRuntime as createCoreBridgeRuntime,
+} from "doppelclaude/bridge-runtime";
 import { PushQueue } from "doppelclaude/query-state";
 import { projectCatalogModels } from "pi-doppelclaude/models";
 import { createPiBridgeRuntime as createBridgeRuntime } from "pi-doppelclaude/pi-runtime";
@@ -279,6 +283,43 @@ describe("dead query retry", () => {
       turn.events.filter((event) => event.type === "start").length,
       1,
       "pi saw the turn start twice",
+    );
+  });
+
+  it("records the retry and the query it spawned", async () => {
+    const observations: BridgeExecutionObservation[] = [];
+    let spawns = 0;
+    const core = createCoreBridgeRuntime({
+      observeExecution: (event) => observations.push(event),
+      queryFactory: () => {
+        const first = spawns++ === 0;
+        return {
+          async *[Symbol.asyncIterator]() {
+            if (first) throw new Error(QUERY_CLOSED);
+            yield* [...textEvents("alive"), successResult];
+          },
+          initializationResult: async () => {
+            if (first) throw new Error(QUERY_CLOSED);
+            return {};
+          },
+          interrupt: async () => ({}),
+          close() {},
+        } as unknown as Query;
+      },
+    });
+    for await (const _event of core.turn({
+      model: "claude-haiku-4-5",
+      messages: [{ role: "user", content: "test" }],
+      cwd: process.cwd(),
+    }));
+
+    const retries = observations.flatMap((event) =>
+      event.event === "compensation" && event.kind === "dead_query_retry" ? [event.detail] : [],
+    );
+    assert.deepEqual(retries, ["retried"]);
+    assert.deepEqual(
+      observations.flatMap((event) => (event.event === "query_created" ? [event.trigger] : [])),
+      ["turn", "dead_query_retry"],
     );
   });
 

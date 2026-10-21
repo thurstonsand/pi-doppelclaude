@@ -1,5 +1,6 @@
 import type {
   Query,
+  SDKAPIRetryMessage,
   SDKAssistantMessage,
   SDKCompactBoundaryMessage,
   SDKMessage,
@@ -49,6 +50,9 @@ export interface QueryConsumerHooks {
   /** The model stopped at the output ceiling and the reply has closed on that stop. */
   onOutputCeiling(): void;
   onMirrorError?(message: SDKMirrorErrorMessage): void;
+  /** Claude Code is retrying an API request itself, invisible to the caller otherwise. */
+  onApiRetry?(message: SDKAPIRetryMessage): void;
+  onRefusal?(message: SDKModelRefusalFallbackMessage | SDKModelRefusalNoFallbackMessage): void;
   onCompaction?(message: SDKStatusMessage | SDKCompactBoundaryMessage): void;
 }
 
@@ -531,6 +535,7 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
           hooks.onCompaction?.(message);
         else if (message.subtype === "mirror_error") hooks.onMirrorError?.(message);
         else if (message.subtype === "api_retry") {
+          hooks.onApiRetry?.(message);
           if (message.error_status !== null)
             c.currentResponse?.stream.push({ type: "api_retry", status: message.error_status });
           const failure =
@@ -543,8 +548,10 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
         } else if (
           message.subtype === "model_refusal_fallback" ||
           message.subtype === "model_refusal_no_fallback"
-        )
+        ) {
+          hooks.onRefusal?.(message);
           announceRefusal(message, c);
+        }
         break;
       case "rate_limit_event": {
         const text = formatRateLimitMessage(message.rate_limit_info);

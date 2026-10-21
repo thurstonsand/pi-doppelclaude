@@ -138,6 +138,8 @@ describe("HTTP daemon lifecycle", () => {
       assert.ok(record.systemPrompt.endsWith(sent.system));
       assert.ok(record.systemPrompt.includes(tool.description));
       assert.notEqual(record.tools[0].description, tool.description);
+      assert.equal(completed?.relocatedToolDescriptions, 1);
+      assert.equal(completed?.relocatedDescriptionCharacters, 52);
       assert.deepEqual(record.request.messages, sent.messages);
       assert.deepEqual(record.request.tools, [tool]);
       assert.ok(!JSON.stringify(logs).includes("secret history"));

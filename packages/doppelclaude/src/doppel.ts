@@ -10,8 +10,15 @@
 // against.
 
 import { randomUUID } from "node:crypto";
-import type { MessageParam } from "@anthropic-ai/sdk/resources";
-import { type ContentBlock, createSession, repairToolPairing, type Session } from "cc-session-io";
+import type { SessionStoreEntry } from "@anthropic-ai/claude-agent-sdk";
+import type { MessageParam, ToolResultBlockParam } from "@anthropic-ai/sdk/resources";
+import {
+  type ContentBlock,
+  createSession,
+  type ImportAttachment,
+  repairToolPairing,
+  type Session,
+} from "cc-session-io";
 import { debug } from "./debug.js";
 import { QueryContext } from "./query-state.js";
 import type { BridgeSessionStore } from "./session-store.js";
@@ -91,6 +98,24 @@ export type SyncPlan =
 export interface SyncResult {
   sessionId: string | null;
   path: SyncPath;
+  /** What a rebuild changed on the way into Claude Code's transcript; null on every other path. */
+  rebuild: RebuildRendering | null;
+}
+
+/** Counts of the compensations a rebuild's import applied, so each can be tracked in production. */
+interface ImportCompensations {
+  contextAttachments: number;
+  emptyToolResults: number;
+  sanitizedToolIds: number;
+  /** Error results the tool-pairing repair wrote for calls the history never answered. */
+  synthesizedToolResults: number;
+  /** Results the tool-pairing repair dropped because no call precedes them. */
+  droppedToolResults: number;
+}
+
+export interface RebuildRendering extends ImportCompensations {
+  /** Whose transcript the carried context records came from. */
+  contextSource: "own" | "sibling" | "none";
 }
 
 export class Doppel {
@@ -250,6 +275,8 @@ export function applySessionSync(input: {
   cwd: string;
   sessionStore: BridgeSessionStore;
   modelId?: string;
+  /** Another transcript of this same conversation, read when the doppel has none of its own. */
+  siblingTranscript?: () => readonly SessionStoreEntry[] | null;
 }): SyncResult {
   const { doppel, plan, cwd, sessionStore, modelId } = input;
   const why = describeSyncReason(plan.reason);
@@ -264,24 +291,31 @@ export function applySessionSync(input: {
     debug(
       `syncResult: path=reuse doppel=${doppel.label} reason=${why} sessionId=${previous.sessionId} cursor=${doppel.session.cursor}`,
     );
-    return { sessionId: previous.sessionId, path: "reuse" };
+    return { sessionId: previous.sessionId, path: "reuse", rebuild: null };
   }
   if (plan.path === "clean-start") {
     debug(
       `Case 1: doppel=${doppel.label} clean start, ${plan.priorMessages.length + 1} total messages`,
     );
     debug(`syncResult: path=clean-start doppel=${doppel.label} reason=${why}`);
-    return { sessionId: null, path: "clean-start" };
+    return { sessionId: null, path: "clean-start", rebuild: null };
   }
 
   const previousSessionId = plan.previousSession?.sessionId;
   const previousCursor = plan.previousSession?.cursor ?? 0;
+  const ownTranscript = previousSessionId ? sessionStore.load(previousSessionId) : null;
+  const siblingTranscript = previousSessionId ? null : (input.siblingTranscript?.() ?? null);
+  const source = ownTranscript ?? siblingTranscript;
   const session = createSession({
     projectPath: cwd,
     ...(previousSessionId ? { sessionId: previousSessionId } : {}),
     ...(modelId ? { model: modelId } : {}),
   });
-  importMessages(session, plan.priorMessages);
+  const imported = importMessages(
+    session,
+    plan.priorMessages,
+    source ? contextAttachments(source) : [],
+  );
   sessionStore.replace(session.sessionId, session.records);
   doppel.session = { sessionId: session.sessionId, cursor: plan.priorMessages.length };
   if (previousSessionId === undefined) {
@@ -297,22 +331,113 @@ export function applySessionSync(input: {
   debug(
     `syncResult: path=rebuild doppel=${doppel.label} reason=${why} sessionId=${session.sessionId} priors=${plan.priorMessages.length} cursor=${previousCursor} ${previousSessionId === undefined ? "first" : "preserved"}`,
   );
-  return { sessionId: session.sessionId, path: "rebuild" };
+  return {
+    sessionId: session.sessionId,
+    path: "rebuild",
+    rebuild: {
+      contextSource: ownTranscript ? "own" : siblingTranscript ? "sibling" : "none",
+      ...imported,
+    },
+  };
+}
+
+/** Claude Code keeps its injected context (environment, model, date, token budget, …) as
+ *  attachment records after the message it rode in on, renders them back into that message on
+ *  every request, and on resume injects whatever the transcript lacks at the new prompt. A rebuilt
+ *  transcript without them gets that context at the tail instead, so the cached prefix breaks at
+ *  message 0. Every attachment is carried rather than a known list, because which ones appear
+ *  depends on the Claude Code version and endpoint: the first-party API adds a token-budget
+ *  reminder on nearly every user turn that a custom base URL never sees. */
+const UNRENDERED_ATTACHMENTS = new Set(["prompt_snapshot"]);
+
+interface ContextPayload {
+  type: string;
+  [key: string]: unknown;
+}
+
+interface ContextAttachment {
+  /** Which run of consecutive same-role messages the attachment followed. */
+  group: number;
+  attachment: ContextPayload;
+}
+
+function contextAttachments(entries: readonly SessionStoreEntry[]): ContextAttachment[] {
+  const attachments: ContextAttachment[] = [];
+  let group = -1;
+  let role: string | null = null;
+  for (const entry of entries) {
+    if (entry.type === "user" || entry.type === "assistant") {
+      if (entry.type !== role) group++;
+      role = entry.type;
+      continue;
+    }
+    if (entry.type !== "attachment" || group < 0) continue;
+    // The store admits an attachment record only with a string type.
+    const attachment = entry.attachment as ContextPayload;
+    if (!UNRENDERED_ATTACHMENTS.has(attachment.type)) attachments.push({ group, attachment });
+  }
+  return attachments;
+}
+
+/** Each context attachment after the last message of its role group in `messages`. */
+function placeAttachments(
+  messages: ReadonlyArray<{ role: string }>,
+  attachments: readonly ContextAttachment[],
+): ImportAttachment[] {
+  const groupEnds: number[] = [];
+  messages.forEach((message, index) => {
+    if (index > 0 && message.role === messages[index - 1].role)
+      groupEnds[groupEnds.length - 1] = index;
+    else groupEnds.push(index);
+  });
+  return attachments.flatMap(({ group, attachment }) =>
+    group < groupEnds.length ? [{ afterIndex: groupEnds[group], attachment }] : [],
+  );
+}
+
+/** Claude Code's test for an empty tool result, which it renders as a fixed sentence on the live
+ *  MCP path. */
+function isEmptyToolResult(block: ToolResultBlockParam): boolean {
+  if (!block.content) return true;
+  if (typeof block.content === "string") return block.content.trim() === "";
+  return block.content.every((item) => item.type === "text" && item.text.trim() === "");
+}
+
+function toolResultIds(messages: ReadonlyArray<{ content: unknown }>): Set<string> {
+  const ids = new Set<string>();
+  for (const { content } of messages)
+    if (Array.isArray(content))
+      for (const block of content as Array<{ type: string; tool_use_id?: string }>)
+        if (block.type === "tool_result" && block.tool_use_id) ids.add(block.tool_use_id);
+  return ids;
 }
 
 /** Prepare Messages API history for Claude Code's session store. Native tool names
- * are already normalized at the frontend boundary; this layer only sanitizes ids
- * and repairs pairing. */
-function importMessages(session: Session, messages: MessageParam[]): void {
+ * are already normalized at the frontend boundary; this layer sanitizes ids, repairs
+ * pairing, and renders what Claude Code renders differently on the live path. */
+function importMessages(
+  session: Session,
+  messages: MessageParam[],
+  attachments: readonly ContextAttachment[],
+): ImportCompensations {
   const sanitizedIds = new Map<string, string>();
+  const toolNames = new Map<string, string>();
+  let emptyToolResults = 0;
   const anthropicMessages = messages.map((message) => {
     if (typeof message.content === "string") return message;
     const content = message.content.map((block) => {
       if (block.type === "tool_use") {
+        toolNames.set(block.id, block.name);
         return { ...block, id: sanitizeToolId(block.id, sanitizedIds) };
       }
       if (block.type === "tool_result") {
-        return { ...block, tool_use_id: sanitizeToolId(block.tool_use_id, sanitizedIds) };
+        const tool_use_id = sanitizeToolId(block.tool_use_id, sanitizedIds);
+        const name = toolNames.get(block.tool_use_id);
+        if (!block.is_error && name && isEmptyToolResult(block)) {
+          emptyToolResults++;
+          return { ...block, tool_use_id, content: `(${name} completed with no output)` };
+        }
+        return { ...block, tool_use_id };
       }
       return block;
     });
@@ -339,7 +464,7 @@ function importMessages(session: Session, messages: MessageParam[]): void {
         .join(", "),
     );
   }
-  // Pre-repair for debug logging; importMessages also repairs internally (idempotent).
+  // Repaired here to count what changed; importMessages also repairs internally (idempotent).
   const repaired = repairToolPairing(
     anthropicMessages as Array<{
       role: "user" | "assistant";
@@ -351,8 +476,20 @@ function importMessages(session: Session, messages: MessageParam[]): void {
       `importMessages: repairToolPairing ${anthropicMessages.length} → ${repaired.length} msgs`,
     );
   }
+  const importedResults = toolResultIds(anthropicMessages);
+  const repairedResults = toolResultIds(repaired);
+  const placed = placeAttachments(repaired, attachments);
+  if (placed.length) debug(`importMessages: carried ${placed.length} context attachments`);
   if (repaired.length)
     session.importMessages(
       repaired as Array<{ role: "user" | "assistant"; content: string | ContentBlock[] }>,
+      { attachments: placed },
     );
+  return {
+    contextAttachments: placed.length,
+    emptyToolResults,
+    sanitizedToolIds: [...sanitizedIds].filter(([original, clean]) => original !== clean).length,
+    synthesizedToolResults: [...repairedResults].filter((id) => !importedResults.has(id)).length,
+    droppedToolResults: [...importedResults].filter((id) => !repairedResults.has(id)).length,
+  };
 }
