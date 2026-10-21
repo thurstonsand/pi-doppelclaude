@@ -157,3 +157,23 @@ describe("replaying a recorded parallel-tool turn", () => {
     }
   });
 });
+
+describe("replaying a recorded thinking turn", () => {
+  it("streams the signed thinking block to pi ahead of the answer", async () => {
+    const { ctx, events } = await replay("thinking");
+
+    const content = ctx.turnOutput.message.content;
+    assert.deepEqual(
+      content.map((b) => b.type),
+      ["thinking", "text"],
+    );
+    const [thinking] = blocks(ctx, "thinking");
+    assert.match(thinking.thinking, /1048576/);
+    assert.ok(thinking.signature.length > 0, "the signature must survive for replay to the API");
+    assert.equal(blocks(ctx, "text")[0].text.trim(), "31");
+    assert.ok(
+      events.some((e) => e.type === "thinking_delta"),
+      "pi should have seen streaming thinking deltas",
+    );
+  });
+});

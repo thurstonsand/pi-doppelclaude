@@ -33,15 +33,26 @@ const FILES: Record<string, string> = {
   "three.txt": "THREE\n",
 };
 
-const SCENARIOS: Record<string, string> = {
+const SCENARIOS: Record<string, { prompt: string; args?: string[] }> = {
   // Plain text turn: no tools, no thinking. The baseline shape.
-  text: "Reply with exactly the word ALPHA and nothing else.",
+  text: { prompt: "Reply with exactly the word ALPHA and nothing else." },
   // One tool call, then a text answer — the two-request tool boundary.
-  "single-tool": "Read the file one.txt and reply with exactly its contents, nothing else.",
+  "single-tool": {
+    prompt: "Read the file one.txt and reply with exactly its contents, nothing else.",
+  },
   // The shape that broke rebuilds: several tool_use blocks in one assistant
   // message and several tool_result blocks in one user message.
-  "parallel-tools":
-    "Read one.txt, two.txt and three.txt in a single parallel batch, then reply with the three contents separated by commas.",
+  "parallel-tools": {
+    prompt:
+      "Read one.txt, two.txt and three.txt in a single parallel batch, then reply with the three contents separated by commas.",
+  },
+  // Thinking blocks and their deltas ahead of the answer. A trivial prompt gets
+  // no thinking even at high effort, so this one needs a few steps of arithmetic.
+  thinking: {
+    prompt:
+      "Think it through step by step before answering: what is the sum of the digits of 2^20? Reply with only the number.",
+    args: ["--thinking", "high"],
+  },
 };
 
 const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
@@ -94,8 +105,8 @@ mkdirSync(WORKDIR, { recursive: true });
 for (const [name, body] of Object.entries(FILES)) writeFileSync(join(WORKDIR, name), body);
 
 for (const name of chosen) {
-  const prompt = SCENARIOS[name];
-  if (!prompt)
+  const scenario = SCENARIOS[name];
+  if (!scenario)
     throw new Error(`unknown scenario "${name}"; known: ${Object.keys(SCENARIOS).join(", ")}`);
 
   const target = join(FIXTURES, `${name}.jsonl`);
@@ -105,14 +116,14 @@ for (const name of chosen) {
 
   const harness = createRpcHarness({
     name: `record-${name}`,
-    args: ["--model", "doppelclaude/haiku"],
+    args: ["--model", "doppelclaude/haiku", ...(scenario.args ?? [])],
     cwd: WORKDIR,
     env: { DOPPELCLAUDE_RECORD_STREAM: raw },
     defaultTimeout: 120_000,
   });
   await harness.startAndWait();
   try {
-    const text = await harness.promptAndWait(prompt, 180_000);
+    const text = await harness.promptAndWait(scenario.prompt, 180_000);
     const ids = new Map<string, string>();
     const messages = readFileSync(raw, "utf8")
       .split("\n")
