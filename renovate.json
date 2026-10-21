@@ -2,6 +2,8 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:recommended", "customManagers:biomeVersions"],
   "dependencyDashboard": true,
+  "minimumReleaseAge": "3 days",
+  "internalChecksFilter": "strict",
   "forkProcessing": "enabled",
   "timezone": "America/New_York",
   "labels": ["dependencies"],
@@ -40,13 +42,14 @@
       "enabled": false
     },
     {
-      "description": "The harnesses this bridge joins always take their latest release, whatever minimumReleaseAge any preset or rule sets elsewhere: the bridge tracks them closely and drops workarounds as soon as they catch up.",
+      "description": "The harnesses this bridge joins always take their latest release, exempt from the global minimumReleaseAge: the bridge tracks them closely and drops workarounds as soon as they catch up.",
       "matchPackageNames": [
-        "@earendil-works/pi-*",
+        "@earendil-works/**",
         "@anthropic-ai/claude-agent-sdk",
         "@anthropic-ai/claude-code",
         "@openai/codex",
-        "npm:@earendil-works/pi-*",
+        "@openai/codex-sdk",
+        "npm:@earendil-works/**",
         "npm:@anthropic-ai/claude-code",
         "npm:@openai/codex"
       ],
