@@ -2,6 +2,16 @@
 
 # Changelog
 
+## 0.14.11 — 2026-10-21
+
+### Added
+
+- **HTTP: every workaround reports when it fires** — so their frequency and effect on the cache can be tracked in production, where debug logging is off. `query_created` executions carry `rebuild` counts (where the context records came from, how many were carried, empty tool results rendered, tool ids sanitized, tool results the pairing repair wrote or dropped), the `trigger` that spawned the query, and a forced rebuild's `forcedCause`. New `compensation` executions record output-ceiling retirement, dead-query retries, interrupt outcomes, session invalidation, and unexpected exits; `sdk_api_retry` and `model_refusal` record Claude Code's own retries and refusal fallbacks; `sdk_result` carries each query's own usage. Request records count relocated tool descriptions, and a `startup` record names the tool-description cap and whether it was scanned, cached, or a fallback.
+
+### Fixed
+
+- **Rebuilds keep the prompt cache** — a rebuilt transcript now renders the prompt the live query sent, so a rebuild reads the cached history instead of re-caching everything after the system prompt and tools. Claude Code keeps its injected context (environment, model, date, token budget) as transcript records after the prompt it arrived with; a rebuild without them got that context injected at the new tail, which changed message 0. Rebuilds now carry those records from the conversation's previous transcript, or, for a new HTTP runtime beside a busy one, from that sibling's, and render empty tool results the way Claude Code does live. Images and results large enough for Claude Code to persist to disk still render differently, so a rebuild re-caches from the first of those.
+
 ## 0.14.10 — 2026-10-21
 
 ### Changed
