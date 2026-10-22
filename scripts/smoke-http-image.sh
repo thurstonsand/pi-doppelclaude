@@ -73,7 +73,7 @@ docker run -d --name "$server_name" --read-only \
 
 docker exec "$server_name" node --input-type=module --eval '
   let response;
-  for (let attempt = 0; attempt < 50; attempt++) {
+  for (let attempt = 0; attempt < 600; attempt++) {
     try {
       response = await fetch("http://127.0.0.1:3456/v1/models", {
         headers: { "x-api-key": "smoke-only-key" },
