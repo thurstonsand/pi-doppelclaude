@@ -7,6 +7,9 @@
  * A reply the model stops at the ceiling ends there. Claude Code would otherwise ask the model
  * to carry on, up to three more API requests the client never asked for; the query is retired
  * before the first of those, and the next request rebuilds.
+ *
+ * The model is applied the same way: a switch mid-thread goes through `setModel` on the warm
+ * query rather than a respawn.
  */
 
 import assert from "node:assert/strict";
@@ -20,9 +23,9 @@ import { createHttpServer } from "http-doppelclaude";
 const KEY = "test-key";
 const THREAD = "T-11111111-1111-4111-8111-111111111111";
 
-function body(messages: unknown[], maxTokens: number) {
+function body(messages: unknown[], maxTokens: number, model = "claude-haiku-4-5") {
   return {
-    model: "claude-haiku-4-5",
+    model,
     max_tokens: maxTokens,
     stream: true,
     system: `x\nAmp Thread URL: https://ampcode.com/threads/${THREAD}`,
@@ -83,6 +86,7 @@ const RESULT = {
 interface FakeQuery {
   spawnCeiling: string | undefined;
   applied: unknown[];
+  models: string[];
   closed: boolean;
 }
 
@@ -99,6 +103,7 @@ function replyingQuery(text: string) {
     const fake: FakeQuery = {
       spawnCeiling: options?.env?.CLAUDE_CODE_MAX_OUTPUT_TOKENS,
       applied: [],
+      models: [],
       closed: false,
     };
     fakes.push(fake);
@@ -112,7 +117,9 @@ function replyingQuery(text: string) {
       },
       initializationResult: async () => ({}),
       setMcpServers: async () => ({ added: [] as string[], removed: [] as string[], errors: {} }),
-      setModel: async () => {},
+      setModel: async (model: string) => {
+        fake.models.push(model);
+      },
       applyFlagSettings: async (settings: unknown) => {
         fake.applied.push(settings);
       },
@@ -195,8 +202,32 @@ describe("output ceiling", () => {
     }
   });
 
+  it("switches the model on the live query, without a respawn", async () => {
+    const { fakes, queryFactory } = replyingQuery("ok");
+    const app = await serve({ apiKey: KEY, supportedModels: [], queryFactory });
+    try {
+      const history: unknown[] = [{ role: "user", content: "go" }];
+      for (const model of ["claude-haiku-4-5", "claude-sonnet-4-5", "claude-sonnet-4-5"]) {
+        assert.match(await app.post(body(history, 32_000, model)), /ok/);
+        history.push(
+          { role: "assistant", content: [{ type: "text", text: "ok" }] },
+          { role: "user", content: `again ${model}` },
+        );
+      }
+      assert.equal(fakes.length, 1);
+      assert.deepEqual(fakes[0].models, ["claude-sonnet-4-5"]);
+      assert.deepEqual(app.completed().map(executionEvents), [
+        ["query_created"],
+        ["query_reused"],
+        ["query_reused"],
+      ]);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("moves the ceiling before a tool result continues the blocked turn", async () => {
-    const fake: FakeQuery = { spawnCeiling: undefined, applied: [], closed: false };
+    const fake: FakeQuery = { spawnCeiling: undefined, applied: [], models: [], closed: false };
     let spawns = 0;
     const appliedBeforeResult: unknown[][] = [];
     const app = await serve({
@@ -322,6 +353,7 @@ describe("output ceiling", () => {
         const fake: FakeQuery = {
           spawnCeiling: options?.env?.CLAUDE_CODE_MAX_OUTPUT_TOKENS,
           applied: [],
+          models: [],
           closed: false,
         };
         fakes.push(fake);

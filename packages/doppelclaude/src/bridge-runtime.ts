@@ -1103,7 +1103,6 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies = {}
         queryOptions.env = { ...queryOptions.env, ...outputCeilingEnv(outputCeiling) };
       const spawnSignature = JSON.stringify({
         cwd,
-        cliModel,
         systemPrompt: request.systemPrompt,
         effort: request.effort,
       });
