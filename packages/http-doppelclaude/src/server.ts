@@ -37,8 +37,6 @@ const DEFAULT_RUNTIME_LIMIT = 32;
 const DEFAULT_IDLE_TTL = 3_600_000;
 const DEFAULT_REQUEST_TIMEOUT = 600_000;
 const DEFAULT_SHUTDOWN_TIMEOUT = 15_000;
-const ANONYMOUS_MAX_CONTEXT_BYTES = 32_768;
-const ANONYMOUS_MAX_TOKENS = 4_096;
 const CacheControl = Type.Optional(
   Type.Union([Type.Record(Type.String(), Type.Unknown()), Type.Null()]),
 );
@@ -537,20 +535,6 @@ function isOneShot(body: ApiRequest): boolean {
     textOnly &&
     (body.tools === undefined || body.tools.length === 0)
   );
-}
-
-function anonymousEligibility(body: ApiRequest): { eligible: boolean; contextBytes: number } {
-  const contextBytes = Buffer.byteLength(
-    JSON.stringify({ system: body.system, messages: body.messages }),
-    "utf8",
-  );
-  return {
-    eligible:
-      isOneShot(body) &&
-      contextBytes <= ANONYMOUS_MAX_CONTEXT_BYTES &&
-      body.max_tokens <= ANONYMOUS_MAX_TOKENS,
-    contextBytes,
-  };
 }
 
 function fingerprint(value: string): string {
@@ -1088,13 +1072,9 @@ export function createHttpServer(options: HttpServerOptions): Server {
       } else {
         const extracted = extractThread(prompt);
         markerCount = extracted.markerCount;
-        const eligibility = anonymousEligibility(body);
-        const unkeyed = extracted.markerCount === 0;
-        Object.assign(diagnostic, {
-          requestKind: unkeyed ? "anonymous" : "keyed",
-          anonymousEligible: unkeyed ? eligibility.eligible && !extracted.malformed : null,
-          anonymousContextBytes: unkeyed ? eligibility.contextBytes : null,
-        });
+        const oneShot = isOneShot(body);
+        diagnostic.requestKind =
+          extracted.markerCount > 0 ? "keyed" : oneShot ? "anonymous" : "derived";
         if (extracted.markerCount > 1)
           throw new RequestError(
             "system must contain exactly one Amp Thread URL line",
@@ -1103,13 +1083,13 @@ export function createHttpServer(options: HttpServerOptions): Server {
           );
         if (extracted.malformed)
           throw new RequestError("system contains a malformed Amp Thread URL line", 400, 0);
-        if (unkeyed && !eligibility.eligible)
-          throw new RequestError(
-            "unkeyed requests require one nonempty text-only user message, no tools, at most 32768 context bytes, and max_tokens at most 4096",
-            400,
-            0,
-          );
-        conversationId = extracted.threadId;
+        // Amp's subagents and Oracle send no marker, header, or metadata, so the conversation's
+        // opening (its prompt and first message) is the only identity their later turns repeat.
+        conversationId =
+          extracted.threadId ??
+          (oneShot
+            ? null
+            : `derived:${fingerprint(`${prompt}\n${canonicalHistory(body.messages.slice(0, 1) as MessageParam[])}`)}`);
       }
       const anonymous = conversationId === null;
       const threadId = conversationId ?? `anonymous:${randomUUID()}`;
@@ -1157,8 +1137,7 @@ export function createHttpServer(options: HttpServerOptions): Server {
       stage = "acquire_runtime";
       const priorHistory = fingerprint(canonicalHistory(expectedPrior));
       // A conversation may hold several runtimes: a client that abandons a request retries while
-      // the first still runs, and Amp's Oracle shares its parent thread's marker with a different
-      // configuration, sometimes several at once.
+      // the first still runs, and markerless conversations with an identical opening share a key.
       const laneKey = anonymous ? threadId : `${threadId}#${randomUUID()}`;
       reservationKey = laneKey;
       let eviction: Promise<void> | undefined;

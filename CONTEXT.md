@@ -54,6 +54,6 @@
 
 - **Core**: the `doppelclaude` package — doppels, sync planning, session store, MCP bridge, query lifecycle, retry, refusal, usage, model catalog — speaking Messages API shapes.
 - **Frontend**: a package that adapts one client to core. The **pi frontend** is the `pi-doppelclaude` provider; the **HTTP frontend** is a daemon serving `POST /v1/messages`.
-- **Conversation match**: how the HTTP frontend finds a request's doppel without a key — the longest canonical-history prefix among live doppels.
+- **Conversation match**: how the HTTP frontend finds a request's doppel without an `Amp Thread URL:` marker — a `derived:` key fingerprinting its system prompt and first message, which every later turn repeats. Within a key, a lane continues when its served canonical history is the request's prior history.
 - **Canonical history**: a Messages API history normalized for comparison: `cache_control` dropped, tool ids replaced by position within their turn.
   _Avoid_: "session" for an Amp thread; Amp has threads, pi has sessions, Claude Code has sessions, a doppel joins one of the first two to one of the third.

@@ -325,7 +325,6 @@ describe("native HTTP frontend", () => {
     const app = await harness();
     try {
       assert.equal((await app.post("bad", "wrong")).status, 401);
-      assert.equal((await app.post({ ...body(A), system: "none" })).status, 400);
       assert.equal(
         (
           await app.post({
@@ -346,7 +345,7 @@ describe("native HTTP frontend", () => {
       );
       assert.deepEqual(
         app.logs.map((record) => record.markerCount),
-        [0, 0, 2],
+        [0, 2],
       );
       assert.ok(app.logs.every((record) => record.outcome === "error"));
     } finally {
@@ -480,65 +479,84 @@ describe("native HTTP frontend", () => {
     }
   });
 
-  it("serves only bounded text-only requests without an Amp thread marker", async () => {
+  it("runs markerless one-shots ephemerally and keys markerless conversations by their opening", async () => {
     const app = await harness();
-    const anonymous = (content: string | unknown[], maxTokens = 4_096) => ({
-      model: "claude-haiku-4-5",
-      max_tokens: maxTokens,
-      stream: true,
-      messages: [{ role: "user", content }],
+    const { system: _, ...markerless } = body(A);
+    const subagent = (messages: unknown[]) => ({
+      ...markerless,
+      max_tokens: 128_000,
+      system: "You are a subagent.",
+      messages,
     });
+    const oneShot = (text: string) => ({
+      model: "claude-haiku-4-5",
+      max_tokens: 128_000,
+      stream: true,
+      system: "You are Thread Reader.",
+      messages: [{ role: "user", content: text }],
+    });
+    const turn = (opening: string) => [
+      { role: "user", content: opening },
+      { role: "assistant", content: [{ type: "text", text: "looking" }] },
+      { role: "user", content: [{ type: "text", text: "continue" }] },
+    ];
     try {
-      const exactOverhead = Buffer.byteLength(
-        JSON.stringify({ messages: [{ role: "user", content: "" }] }),
-      );
-      const exact = "x".repeat(32_768 - exactOverhead);
-      const accepted = await app.post(anonymous(exact));
-      assert.equal(accepted.status, 200);
-      assert.match(await accepted.text(), /event: message_stop/);
-      const callsAfterAccepted = [...app.requests.values()].flat().length;
-
-      const violations = [
-        anonymous(`${exact}x`),
-        anonymous("go", 4_097),
-        { ...anonymous("go"), tools: [body(A).tools[0]] },
+      for (const value of [
+        oneShot("x".repeat(40_000)),
+        subagent([{ role: "user", content: "task one" }]),
+        subagent(turn("task one")),
+        subagent([{ role: "user", content: "task two" }]),
+        { ...subagent(turn("task one")), system: "You are another subagent." },
+      ]) {
+        const response = await app.post(value);
+        assert.equal(response.status, 200);
+        assert.match(await response.text(), /event: message_stop/);
+      }
+      for (const violation of [
+        { ...oneShot("go"), system: "Amp Thread URL: malformed" },
+        { ...oneShot("go"), system: "  Amp Thread URL: malformed" },
         {
-          ...anonymous("go"),
-          messages: [
-            { role: "user", content: "one" },
-            { role: "user", content: "two" },
-          ],
-        },
-        anonymous([
-          { type: "image", source: { type: "base64", media_type: "image/png", data: "eA==" } },
-        ]),
-        { ...anonymous("go"), system: "Amp Thread URL: malformed" },
-        { ...anonymous("go"), system: "  Amp Thread URL: malformed" },
-        {
-          ...anonymous("go"),
+          ...oneShot("go"),
           system: `Amp Thread URL: https://ampcode.com/threads/${A}\nAmp Thread URL: malformed`,
         },
         {
-          ...anonymous("go"),
+          ...subagent([{ role: "user", content: "go" }]),
           system: `Amp Thread URL: https://ampcode.com/threads/${A}\nAmp Thread URL: https://ampcode.com/threads/${A}`,
         },
-      ];
-      for (const violation of violations) {
+      ]) {
         const response = await app.post(violation);
         assert.equal(response.status, 400);
         assert.match(await response.text(), /invalid_request_error/);
       }
-      assert.equal([...app.requests.values()].flat().length, callsAfterAccepted);
 
+      const derived = [...app.requests.entries()].filter(([key]) => key.startsWith("derived:"));
+      assert.deepEqual(
+        derived.map(([, requests]) => requests.length),
+        [2, 1, 1],
+      );
+      assert.equal(
+        [...app.requests.keys()].filter((key) => key.startsWith("anonymous:")).length,
+        1,
+      );
       const records = app.logs.filter((record) => record.event === "request_complete");
-      assert.equal(records[0].requestKind, "anonymous");
+      assert.deepEqual(
+        records.map((record) => [record.requestKind, record.outcome, record.markerCount]),
+        [
+          ["anonymous", "success", 0],
+          ["derived", "success", 0],
+          ["derived", "success", 0],
+          ["derived", "success", 0],
+          ["derived", "success", 0],
+          ["anonymous", "error", 0],
+          ["anonymous", "error", 0],
+          ["keyed", "error", 1],
+          ["keyed", "error", 2],
+        ],
+      );
       assert.equal(records[0].threadId, null);
-      assert.equal(records[0].anonymousContextBytes, 32_768);
-      assert.equal(records[0].declaredMaxTokens, 4_096);
-      assert.equal(records[1].anonymousEligible, false);
-      assert.equal(records.at(-3)?.markerCount, 0);
-      assert.equal(records.at(-2)?.markerCount, 1);
-      assert.equal(records.at(-1)?.markerCount, 2);
+      assert.equal(records[1].threadId, derived[0][0]);
+      assert.equal(records[2].threadId, derived[0][0]);
+      assert.equal(records[2].lane, "reused");
       assert.ok(
         app.logs
           .filter((record) => record.event === "runtime_close")
