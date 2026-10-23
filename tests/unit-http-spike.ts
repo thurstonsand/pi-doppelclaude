@@ -556,7 +556,10 @@ describe("native HTTP frontend", () => {
       assert.equal(records[0].threadId, null);
       assert.equal(records[1].threadId, derived[0][0]);
       assert.equal(records[2].threadId, derived[0][0]);
-      assert.equal(records[2].lane, "reused");
+      // The same key, but this history does not continue the idle lane: it may be another
+      // conversation with the same opening, whose warm lane must not be rebuilt.
+      assert.equal(records[2].lane, "opened");
+      assert.notEqual(records[2].runtimeId, records[1].runtimeId);
       assert.ok(
         app.logs
           .filter((record) => record.event === "runtime_close")

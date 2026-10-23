@@ -1168,8 +1168,13 @@ export function createHttpServer(options: HttpServerOptions): Server {
                   candidate.expectedHistory,
                 )),
           );
+          // A derived key can be shared by different conversations with the same opening, so an idle
+          // lane that does not continue this history may be another conversation's warm cache.
           const existing =
-            continued ?? lanes.sort((left, right) => left.lastActivity - right.lastActivity)[0];
+            continued ??
+            (threadId.startsWith("derived:")
+              ? undefined
+              : lanes.sort((left, right) => left.lastActivity - right.lastActivity)[0]);
           if (existing) {
             diagnostic.lane = continued ? "continued" : "reused";
             existing.busy = true;
