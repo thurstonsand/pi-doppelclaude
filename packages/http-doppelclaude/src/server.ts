@@ -483,7 +483,8 @@ function extractThread(prompt: string): {
   let depth = 0;
   let regionStart = -1;
   let wrappersMalformed = false;
-  for (const tag of prompt.matchAll(/<\/?instructions>/g)) {
+  // Amp writes each wrapper tag on its own line; its prompt also names the tag mid-sentence.
+  for (const tag of prompt.matchAll(/^<\/?instructions>$/gm)) {
     const index = tag.index;
     if (tag[0] === "<instructions>") {
       if (depth === 0) regionStart = index;
@@ -512,8 +513,7 @@ function extractThread(prompt: string): {
     if (markerCount === 1) threadId = match[1];
   }
   let labelCount = 0;
-  // Amp's own prompt carries an unclosed `<instructions>` mention, so guidance prose usually
-  // reaches this scan; only a label opening its line can be a broken marker.
+  // Only a label opening its line can be a broken marker; elsewhere it is prose.
   for (const _match of markerText.matchAll(/^[ \t]*Amp Thread URL:/gm)) labelCount += 1;
   return {
     threadId: markerCount === 1 ? threadId : null,

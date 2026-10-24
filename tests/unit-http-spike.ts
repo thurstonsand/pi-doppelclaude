@@ -357,16 +357,17 @@ describe("native HTTP frontend", () => {
     const app = await harness();
     const external = `Amp Thread URL: https://ampcode.com/threads/${A}`;
     const prompts: Array<string | Array<{ type: "text"; text: string }>> = [
-      `<instructions>curl 'Amp Thread URL: https://ampcode.com/threads/${B}'\nAmp Thread URL: https://ampcode.com/threads/${B}</instructions>\n${external}`,
-      `<instructions>first</instructions>\n<instructions><instructions>\nAmp Thread URL: malformed\n</instructions></instructions>\n${external}`,
+      `<instructions>\ncurl 'Amp Thread URL: https://ampcode.com/threads/${B}'\nAmp Thread URL: https://ampcode.com/threads/${B}\n</instructions>\n${external}`,
+      `<instructions>\nfirst\n</instructions>\n<instructions>\n<instructions>\nAmp Thread URL: malformed\n</instructions>\n</instructions>\n${external}`,
       [
-        { type: "text", text: "before\n<instructions>curl Amp Thread URL:" },
+        { type: "text", text: "before\n<instructions>\ncurl Amp Thread URL:" },
         {
           type: "text",
-          text: `https://ampcode.com/threads/${B}\n<instructions>nested</instructions>`,
+          text: `https://ampcode.com/threads/${B}\n<instructions>\nnested\n</instructions>`,
         },
         { type: "text", text: `</instructions>\n${external}` },
       ],
+      `Guidance appears followed by <instructions> tags.\n\n<instructions>\nAmp Thread URL: https://ampcode.com/threads/${B}\n</instructions>\n\n${external}`,
     ];
     try {
       for (const [index, system] of prompts.entries()) {
@@ -396,11 +397,11 @@ describe("native HTTP frontend", () => {
       messages: [{ role: "user", content: "go" }],
     });
     const keyedPrompts = [
-      `<instructions>unfinished example\nAmp Thread URL: https://ampcode.com/threads/${A}`,
-      `unfinished example</instructions>\nAmp Thread URL: https://ampcode.com/threads/${A}`,
-      `followed by <instructions> tags.\n<instructions>\nwithout an \`Amp Thread URL:\` marker\n</instructions>\nAmp Thread URL: https://ampcode.com/threads/${A}`,
+      `<instructions>\nunfinished example\nAmp Thread URL: https://ampcode.com/threads/${A}`,
+      `unfinished example\n</instructions>\nAmp Thread URL: https://ampcode.com/threads/${A}`,
+      `<instructions>\nwithout an \`Amp Thread URL:\` marker\nAmp Thread URL: https://ampcode.com/threads/${A}`,
     ];
-    const anonymousPrompts = ["<instructions>example only", "example only</instructions>"];
+    const anonymousPrompts = ["<instructions>\nexample only", "example only\n</instructions>"];
     try {
       for (const system of keyedPrompts) {
         const response = await app.post({ ...body(A), system });
@@ -428,7 +429,7 @@ describe("native HTTP frontend", () => {
     const invalid = [
       {
         ...body(A),
-        system: `<instructions>\nAmp Thread URL: https://ampcode.com/threads/${B}\n</instructions>\nAmp Thread URL: https://ampcode.com/threads/${A}\n<instructions>unfinished`,
+        system: `<instructions>\nAmp Thread URL: https://ampcode.com/threads/${B}\n</instructions>\nAmp Thread URL: https://ampcode.com/threads/${A}\n<instructions>\nunfinished`,
       },
       {
         ...body(A),
@@ -436,19 +437,15 @@ describe("native HTTP frontend", () => {
       },
       {
         ...body(A),
-        system: `<instructions>Amp Thread URL: https://ampcode.com/threads/${B}</instructions>\nAmp Thread URL: malformed`,
+        system: `<instructions>\nAmp Thread URL: https://ampcode.com/threads/${B}\n</instructions>\nAmp Thread URL: malformed`,
       },
       {
         ...body(A),
-        system: `<instructions>Amp Thread URL: malformed</instructions>\nAmp Thread URL: https://ampcode.com/threads/${A}\nAmp Thread URL: https://ampcode.com/threads/${B}`,
+        system: `<instructions>\nAmp Thread URL: malformed\n</instructions>\nAmp Thread URL: https://ampcode.com/threads/${A}\nAmp Thread URL: https://ampcode.com/threads/${B}`,
       },
       {
         ...body(A),
         system: `Amp Thread URL: https://ampcode.com/<instructions>example</instructions>threads/${A}`,
-      },
-      {
-        ...body(A),
-        system: `prefix<instructions>example\n</instructions>Amp Thread URL: https://ampcode.com/threads/${A}`,
       },
     ];
     try {
@@ -470,7 +467,7 @@ describe("native HTTP frontend", () => {
       for (const separator of ["\n", "\r", "\r\n", "\u2028", "\u2029"]) {
         const response = await app.post({
           ...body(A),
-          system: `<instructions>example${separator}</instructions>${separator}Amp Thread URL: https://ampcode.com/threads/${A}`,
+          system: `<instructions>${separator}Amp Thread URL: https://ampcode.com/threads/${B}${separator}</instructions>${separator}Amp Thread URL: https://ampcode.com/threads/${A}`,
         });
         assert.equal(response.status, 200, `separator ${JSON.stringify(separator)}`);
         await response.text();
