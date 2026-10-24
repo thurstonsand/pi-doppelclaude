@@ -12,6 +12,7 @@
 
 - **Model switches no longer restart Claude Code** — switching models mid-conversation now calls `setModel` on the running query instead of closing and respawning it, as documented since the persistent query landed. Since 0.12.0 every switch paid a fresh process spawn; the next turn now starts about a second and a half sooner. Pi and the HTTP frontend both benefit.
 - **HTTP: Amp subagents, the Oracle, and the thread reader work again** — Amp no longer puts the parent's `Amp Thread URL:` line in their prompts, so they arrived markerless and failed the bounded one-shot gate with `400 unkeyed requests require …`. A markerless one-shot (one text-only user message, no tools) now runs ephemerally at any size or output limit, and any other markerless request is a conversation keyed by its system prompt and first message, so a subagent's later turns continue its warm runtime. Conversations that share an opening share the key but never rebuild each other's runtime. `request_complete` gains `requestKind: "derived"`; `anonymousEligible` and `anonymousContextBytes` are gone.
+- **HTTP: guidance that mentions `Amp Thread URL:` no longer fails the thread with 400** — Amp's own prompt carries an unclosed `<instructions>` mention, so instruction filtering never applies to real Amp prompts, and any guidance prose naming the label counted as a malformed marker. Only a line opening with the label is validated as a marker now.
 
 ## 0.14.11 — 2026-10-21
 

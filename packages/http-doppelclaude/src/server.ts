@@ -512,7 +512,9 @@ function extractThread(prompt: string): {
     if (markerCount === 1) threadId = match[1];
   }
   let labelCount = 0;
-  for (const _match of markerText.matchAll(/Amp Thread URL:/g)) labelCount += 1;
+  // Amp's own prompt carries an unclosed `<instructions>` mention, so guidance prose usually
+  // reaches this scan; only a label opening its line can be a broken marker.
+  for (const _match of markerText.matchAll(/^[ \t]*Amp Thread URL:/gm)) labelCount += 1;
   return {
     threadId: markerCount === 1 ? threadId : null,
     markerCount,

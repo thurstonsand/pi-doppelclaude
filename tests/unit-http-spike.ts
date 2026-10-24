@@ -398,6 +398,7 @@ describe("native HTTP frontend", () => {
     const keyedPrompts = [
       `<instructions>unfinished example\nAmp Thread URL: https://ampcode.com/threads/${A}`,
       `unfinished example</instructions>\nAmp Thread URL: https://ampcode.com/threads/${A}`,
+      `followed by <instructions> tags.\n<instructions>\nwithout an \`Amp Thread URL:\` marker\n</instructions>\nAmp Thread URL: https://ampcode.com/threads/${A}`,
     ];
     const anonymousPrompts = ["<instructions>example only", "example only</instructions>"];
     try {
@@ -427,11 +428,11 @@ describe("native HTTP frontend", () => {
     const invalid = [
       {
         ...body(A),
-        system: `<instructions>Amp Thread URL: https://ampcode.com/threads/${B}</instructions>\nAmp Thread URL: https://ampcode.com/threads/${A}\n<instructions>unfinished`,
+        system: `<instructions>\nAmp Thread URL: https://ampcode.com/threads/${B}\n</instructions>\nAmp Thread URL: https://ampcode.com/threads/${A}\n<instructions>unfinished`,
       },
       {
         ...body(A),
-        system: `<instructions>Amp Thread URL: https://ampcode.com/threads/${B}</instructions>\n<instructions>Amp Thread URL: malformed`,
+        system: `<instructions>\nAmp Thread URL: https://ampcode.com/threads/${B}\n</instructions>\n<instructions>\nAmp Thread URL: malformed`,
       },
       {
         ...body(A),
