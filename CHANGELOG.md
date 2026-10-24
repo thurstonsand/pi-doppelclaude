@@ -2,6 +2,16 @@
 
 # Changelog
 
+## UNRELEASED
+
+### Changed
+
+- Upgrade to **Pi 1.4.0** and **Agent SDK 0.3.308** (Claude Code 2.1.308).
+
+### Fixed
+
+- **Model switches no longer restart Claude Code** — switching models mid-conversation now calls `setModel` on the running query instead of closing and respawning it, as documented since the persistent query landed. Since 0.12.0 every switch paid a fresh process spawn; the next turn now starts about a second and a half sooner. Pi and the HTTP frontend both benefit.
+
 ## 0.14.11 — 2026-10-21
 
 ### Added
