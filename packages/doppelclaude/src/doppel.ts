@@ -111,6 +111,10 @@ interface ImportCompensations {
   synthesizedToolResults: number;
   /** Results the tool-pairing repair dropped because no call precedes them. */
   droppedToolResults: number;
+  /** Replay turn boundaries put back where the previous transcript had them. */
+  turnBoundaries: number;
+  /** Boundaries the previous transcript had that this history no longer lines up with. */
+  skippedTurnBoundaries: number;
 }
 
 export interface RebuildRendering extends ImportCompensations {
@@ -315,6 +319,7 @@ export function applySessionSync(input: {
     session,
     plan.priorMessages,
     source ? contextAttachments(source) : [],
+    source ? turnBoundaries(source) : [],
   );
   sessionStore.replace(session.sessionId, session.records);
   doppel.session = { sessionId: session.sessionId, cursor: plan.priorMessages.length };
@@ -379,20 +384,107 @@ function contextAttachments(entries: readonly SessionStoreEntry[]): ContextAttac
   return attachments;
 }
 
+/** The index of the last message in each run of consecutive same-role messages. */
+function groupEnds(messages: ReadonlyArray<{ role: string }>): number[] {
+  const ends: number[] = [];
+  messages.forEach((message, index) => {
+    if (index > 0 && message.role === messages[index - 1].role) ends[ends.length - 1] = index;
+    else ends.push(index);
+  });
+  return ends;
+}
+
 /** Each context attachment after the last message of its role group in `messages`. */
 function placeAttachments(
   messages: ReadonlyArray<{ role: string }>,
   attachments: readonly ContextAttachment[],
 ): ImportAttachment[] {
-  const groupEnds: number[] = [];
-  messages.forEach((message, index) => {
-    if (index > 0 && message.role === messages[index - 1].role)
-      groupEnds[groupEnds.length - 1] = index;
-    else groupEnds.push(index);
-  });
+  const ends = groupEnds(messages);
   return attachments.flatMap(({ group, attachment }) =>
-    group < groupEnds.length ? [{ afterIndex: groupEnds[group], attachment }] : [],
+    group < ends.length ? [{ afterIndex: ends[group], attachment }] : [],
   );
+}
+
+/** Claude Code resumes a transcript that ends in a user message by writing a synthetic
+ *  `No response requested.` turn before the new prompt. A query started on tool results the
+ *  history already holds (a replay) therefore leaves that turn and the replay prompt between the
+ *  results and the reply, in every live request after it. A rebuild without them matches the
+ *  cached prefix only through the system prompt and tools. */
+const SYNTHETIC_TURN = "No response requested.";
+
+interface TurnBoundary {
+  /** The role group of the synthetic assistant turn; the replay prompt is the next group. */
+  group: number;
+  /** Tool results in the user group the boundary follows. */
+  results: number;
+  prompt: string | ContentBlock[];
+}
+
+function turnBoundaries(entries: readonly SessionStoreEntry[]): TurnBoundary[] {
+  const boundaries: TurnBoundary[] = [];
+  /** Tool results per role group, counted the way `contextAttachments` numbers the groups. */
+  const results: number[] = [];
+  let role: string | null = null;
+  let synthetic = -1;
+  for (const entry of entries) {
+    if (entry.type !== "user" && entry.type !== "assistant") continue;
+    if (entry.type !== role) results.push(0);
+    role = entry.type;
+    const group = results.length - 1;
+    const message = entry.message as { model?: string; content: string | ContentBlock[] };
+    const content = message.content;
+    if (entry.type === "user") {
+      if (typeof content !== "string")
+        results[group] += content.filter((block) => block.type === "tool_result").length;
+      if (synthetic >= 0 && synthetic === group - 1)
+        boundaries.push({ group: synthetic, results: results[synthetic - 1], prompt: content });
+      synthetic = -1;
+    } else {
+      synthetic =
+        message.model === "<synthetic>" &&
+        Array.isArray(content) &&
+        content.length === 1 &&
+        content[0].type === "text" &&
+        content[0].text === SYNTHETIC_TURN &&
+        (results[group - 1] ?? 0) > 0
+          ? group
+          : -1;
+    }
+  }
+  return boundaries;
+}
+
+/** Put each boundary back between the tool results it followed and the reply after them. A
+ *  boundary is restored only where this history still has those results, alone in their user
+ *  group and answered by an assistant turn; the first that does not line up ends the restoring,
+ *  because every later group would be numbered one turn off. */
+function restoreTurnBoundaries<M extends { role: string; content: string | ContentBlock[] }>(
+  messages: M[],
+  boundaries: readonly TurnBoundary[],
+): { messages: M[]; restored: number } {
+  const restored = [...messages];
+  for (const [index, boundary] of boundaries.entries()) {
+    const ends = groupEnds(restored);
+    const resultsEnd = ends[boundary.group - 1];
+    const resultsStart = boundary.group - 2 >= 0 ? ends[boundary.group - 2] + 1 : 0;
+    const group = resultsEnd === undefined ? [] : restored.slice(resultsStart, resultsEnd + 1);
+    const blocks = group.flatMap((message) =>
+      typeof message.content === "string" ? [{ type: "text" }] : message.content,
+    );
+    const linesUp =
+      group[0]?.role === "user" &&
+      blocks.length === boundary.results &&
+      blocks.every((block) => block.type === "tool_result") &&
+      restored[resultsEnd + 1]?.role === "assistant";
+    if (!linesUp) return { messages: restored, restored: index };
+    restored.splice(
+      resultsEnd + 1,
+      0,
+      { role: "assistant", content: [{ type: "text", text: SYNTHETIC_TURN }] } as M,
+      { role: "user", content: boundary.prompt } as M,
+    );
+  }
+  return { messages: restored, restored: boundaries.length };
 }
 
 /** Claude Code's test for an empty tool result, which it renders as a fixed sentence on the live
@@ -419,6 +511,7 @@ function importMessages(
   session: Session,
   messages: MessageParam[],
   attachments: readonly ContextAttachment[],
+  boundaries: readonly TurnBoundary[],
 ): ImportCompensations {
   const sanitizedIds = new Map<string, string>();
   const toolNames = new Map<string, string>();
@@ -464,13 +557,19 @@ function importMessages(
         .join(", "),
     );
   }
-  // Repaired here to count what changed; importMessages also repairs internally (idempotent).
-  const repaired = repairToolPairing(
+  const bounded = restoreTurnBoundaries(
     anthropicMessages as Array<{
       role: "user" | "assistant";
       content: string | ContentBlock[];
     }>,
+    boundaries,
   );
+  if (boundaries.length)
+    debug(
+      `importMessages: restored ${bounded.restored} of ${boundaries.length} replay turn boundaries`,
+    );
+  // Repaired here to count what changed; importMessages also repairs internally (idempotent).
+  const repaired = repairToolPairing(bounded.messages);
   if (repaired.length !== anthropicMessages.length) {
     debug(
       `importMessages: repairToolPairing ${anthropicMessages.length} → ${repaired.length} msgs`,
@@ -491,5 +590,7 @@ function importMessages(
     sanitizedToolIds: [...sanitizedIds].filter(([original, clean]) => original !== clean).length,
     synthesizedToolResults: [...repairedResults].filter((id) => !importedResults.has(id)).length,
     droppedToolResults: [...importedResults].filter((id) => !repairedResults.has(id)).length,
+    turnBoundaries: bounded.restored,
+    skippedTurnBoundaries: boundaries.length - bounded.restored,
   };
 }

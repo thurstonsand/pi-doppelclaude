@@ -224,6 +224,8 @@ describe("rebuild rendering", () => {
     sanitizedToolIds: 1,
     synthesizedToolResults: 0,
     droppedToolResults: 0,
+    turnBoundaries: 0,
+    skippedTurnBoundaries: 0,
   };
 
   const expected = [
@@ -270,6 +272,90 @@ describe("rebuild rendering", () => {
     assert.deepEqual(result.rebuild, { contextSource: "sibling", ...counts });
     assert.ok(result.sessionId);
     assert.deepEqual(shape(store.load(result.sessionId) ?? []), expected);
+  });
+
+  // A query started on tool results the history already held: Claude Code wrote its synthetic
+  // turn and the replay prompt between those results and the reply, as a live query did.
+  function replayTranscript() {
+    const live = createSession({ projectPath: cwd });
+    live.addUserMessage([{ type: "text", text: "first" }]);
+    live.addUserMessage([{ type: "text", text: "and a steer" }]);
+    live.addAssistantMessage([
+      { type: "tool_use", id: "toolu.1", name: "mcp__custom-tools__lookup", input: {} },
+    ]);
+    live.addToolResults([{ toolUseId: "toolu_1", content: "(lookup completed with no output)" }]);
+    live.addAssistantMessage([{ type: "text", text: "No response requested." }], {
+      model: "<synthetic>",
+    });
+    live.addUserMessage("Continue the pending task.");
+    live.addAttachment({ type: "date", date: "2026-10-18" });
+    live.addAssistantMessage([{ type: "text", text: "nothing there" }]);
+    live.addUserMessage([{ type: "text", text: "next" }]);
+    return live;
+  }
+
+  it("puts a replay's turn boundary back where the transcript had it", () => {
+    const store = new BridgeSessionStore();
+    const live = replayTranscript();
+    store.replace(live.sessionId, live.records);
+    const runtime = createCoreRuntime({ sessionStore: store });
+    void runtime.designateHost("host-session-id");
+    runtime.test.setHostSession({ sessionId: live.sessionId, cursor: 4, rebuildReason: "test" });
+
+    const result = runtime.test.syncHostSession(history, cwd);
+
+    assert.equal(result.rebuild?.turnBoundaries, 1);
+    assert.equal(result.rebuild?.skippedTurnBoundaries, 0);
+    assert.deepEqual(shape(store.load(live.sessionId) ?? []), [
+      "user",
+      "user",
+      "assistant",
+      'user:tool_result:"(mcp__custom-tools__lookup completed with no output)"',
+      "assistant",
+      "user",
+      "attachment:date",
+      "assistant",
+    ]);
+    const restored = (store.load(live.sessionId) ?? []).filter(
+      (record) => record.type === "user" || record.type === "assistant",
+    );
+    assert.deepEqual(
+      restored.slice(4, 6).map((record) => (record.message as { content: unknown }).content),
+      [[{ type: "text", text: "No response requested." }], "Continue the pending task."],
+    );
+  });
+
+  it("leaves a boundary out when the history's results no longer stand alone", () => {
+    const store = new BridgeSessionStore();
+    const live = replayTranscript();
+    store.replace(live.sessionId, live.records);
+    const runtime = createCoreRuntime({ sessionStore: store });
+    void runtime.designateHost("host-session-id");
+    runtime.test.setHostSession({ sessionId: live.sessionId, cursor: 4, rebuildReason: "test" });
+    // The client folded a steer into the results message, so the live boundary has no place.
+    const steered = history.map((message, index) =>
+      index === 3
+        ? {
+            ...message,
+            content: [...(message.content as unknown[]), { type: "text", text: "a steer" }],
+          }
+        : message,
+    ) as MessageParam[];
+
+    const result = runtime.test.syncHostSession(steered, cwd);
+
+    assert.equal(result.rebuild?.turnBoundaries, 0);
+    assert.equal(result.rebuild?.skippedTurnBoundaries, 1);
+    assert.equal(
+      (store.load(live.sessionId) ?? []).filter(
+        (record) =>
+          record.type === "assistant" &&
+          JSON.stringify((record.message as { content: unknown }).content).includes(
+            "No response requested.",
+          ),
+      ).length,
+      0,
+    );
   });
 
   it("counts the results the tool-pairing repair wrote and dropped", () => {

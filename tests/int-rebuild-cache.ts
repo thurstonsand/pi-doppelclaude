@@ -3,8 +3,9 @@
 //
 // A rebuild only stays warm while it renders the same prompt prefix Claude Code sent live, and
 // that depends on Claude Code internals the bridge imitates: where it keeps its injected context
-// records, and how it renders an empty tool result. When an SDK bump changes either, this fails
-// with the rebuild reading less than the warm request before it.
+// records, how it renders an empty tool result, the turn it writes when a query starts on tool
+// results, and that it mirrors an unfinished turn into the store. When an SDK bump changes any of
+// them, this fails with the rebuild reading less than the request before it cached.
 
 console.log("=== int-rebuild-cache.ts ===");
 
@@ -52,6 +53,7 @@ const lookup = {
 async function post(
   label: string,
   messages: unknown[],
+  threadId = thread,
 ): Promise<{ blocks: Block[]; record: CompleteRecord }> {
   const before = logs.length;
   const response = await fetch(`http://127.0.0.1:${port}/v1/messages`, {
@@ -62,7 +64,7 @@ async function post(
       max_tokens: 8000,
       stream: true,
       thinking: { type: "enabled", budget_tokens: 2048 },
-      system: `You are the main agent.\n${filler.join("\n")}\nAmp Thread URL: https://ampcode.com/threads/${thread}`,
+      system: `You are the main agent.\n${filler.join("\n")}\nAmp Thread URL: https://ampcode.com/threads/${threadId}`,
       tools: [lookup],
       messages,
     }),
@@ -192,6 +194,68 @@ try {
   if (siblingRead < ownRead)
     throw new Error(
       `sibling rebuild read ${siblingRead} cached tokens, less than the ${ownRead} the own rebuild read`,
+    );
+
+  // A lane whose first request ends in a tool result starts by replaying it, and Claude Code
+  // writes its own turn boundary into the transcript there. Every later live request carries that
+  // boundary, so a rebuild that leaves it out reads nothing past the system prompt and tools. The
+  // rebuild here arrives while the replayed turn still waits on a tool call, as Amp's usually do,
+  // so it also needs Claude Code to have mirrored that unfinished turn into the store.
+  const replayThread = `T-0000000d-${String(Date.now()).slice(-4)}-4000-8000-00000000000d`;
+  const resultAt = messages
+    .map((message) =>
+      (message as { content: Block[] }).content.some((block) => block.type === "tool_result"),
+    )
+    .lastIndexOf(true);
+  const replayed = messages.slice(0, resultAt) as Array<{ role: string; content: Block[] }>;
+  const answered = messages[resultAt] as { content: Block[] };
+  replayed.push({
+    role: "user",
+    content: answered.content.map((block) => ({
+      ...block,
+      content: [
+        {
+          type: "text",
+          text: "Only half of the value is here: 7. Call lookup again with key k-rest for the other half.",
+        },
+      ],
+    })),
+  });
+  const start = await post("replay start", replayed, replayThread);
+  if (rebuildOf(start.record) === null)
+    throw new Error("the replay start did not import the history");
+  const pending = start.blocks.filter((block) => block.type === "tool_use");
+  if (!pending.length) throw new Error("the replay start did not call the tool again");
+  const replayRebuild = await post(
+    "replay own rebuild",
+    [
+      ...replayed,
+      { role: "assistant", content: start.blocks },
+      {
+        role: "user",
+        content: pending.map((call) => ({
+          type: "tool_result",
+          tool_use_id: call.id,
+          content: [{ type: "text", text: "9" }],
+        })),
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Noted; the value is fabricated-79." }],
+      },
+      text("Now say only: ok."),
+    ],
+    replayThread,
+  );
+  const replayOwn = rebuildOf(replayRebuild.record);
+  if (replayRebuild.record.sync !== "rebuild" || replayOwn?.contextSource !== "own")
+    throw new Error(`expected an own-transcript rebuild, got ${JSON.stringify(replayOwn)}`);
+  const startCached =
+    (start.record.usage?.cache_read ?? 0) + (start.record.usage?.cache_creation ?? 0);
+  const replayRead = replayRebuild.record.usage?.cache_read ?? 0;
+  if (replayRead < startCached)
+    throw new Error(
+      `rebuild of a replay-started lane read ${replayRead} cached tokens, less than the ${startCached} its replay request cached: the replay's turn boundary is missing`,
     );
   console.log("PASS: rebuilds read the cached history");
 } finally {

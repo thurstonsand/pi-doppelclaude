@@ -741,7 +741,10 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies = {}
       const queryOptions: Options = {
         ...request.queryOptions,
         sessionStore: storeWriter,
-        sessionStoreFlush: "batched",
+        // A rebuild renders its prefix from this transcript, and one usually arrives mid-turn,
+        // while the query waits on a tool call. Batched mirroring holds the whole turn until its
+        // result, and a forced close fences the late flush, so the rebuild would see none of it.
+        sessionStoreFlush: "eager",
         loadTimeoutMs: SESSION_STORE_LOAD_TIMEOUT_MS,
         ...(mcpTools.length > 0 ? { mcpServers } : {}),
         ...(syncResult.sessionId ? { resume: syncResult.sessionId } : {}),
