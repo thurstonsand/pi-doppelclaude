@@ -212,6 +212,10 @@ describe("rewritePiSystemPrompt", () => {
     assert.ok(systemPrompt.startsWith(" Custom identity."));
   });
 
+  it("sends no whitespace-only prompt when the call has no system message", () => {
+    assert.equal(buildClaudeSystemPrompt(undefined, "pi", REPLACEMENTS), "");
+  });
+
   it("appends the rewritten Pi system prompt to Claude Code's preset", () => {
     const systemPrompt = buildClaudeSystemPrompt(SYSTEM_MESSAGE, "append", REPLACEMENTS);
 

@@ -153,7 +153,9 @@ export function buildClaudeSystemPrompt(
     : rewrittenPiPrompt;
   // Claude Code puts its own identity in a separate system block right before ours and
   // joins nothing between them, so without this the two run together as "…Agent SDK.You are".
-  const separatedPiPrompt = ` ${promptWithRelocations}`;
+  // A call with no prompt of its own, like working-vibes, must stay empty: a lone space becomes a
+  // whitespace-only system block, which the API rejects.
+  const separatedPiPrompt = promptWithRelocations.trim() ? ` ${promptWithRelocations}` : "";
   return mode === "pi"
     ? separatedPiPrompt
     : { type: "preset", preset: "claude_code", append: separatedPiPrompt };
