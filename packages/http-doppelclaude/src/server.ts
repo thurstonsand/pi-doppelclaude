@@ -17,7 +17,6 @@ import {
 import type { CoreResponseEvent, CoreResponseRecord } from "doppelclaude/core-response";
 import { canonicalClaudeModelId } from "doppelclaude/model-id";
 import type { RuntimeRequest } from "doppelclaude/runtime-request";
-import { prepareToolDescriptions } from "doppelclaude/tool-description-relocation";
 import sharp from "sharp";
 import { type Static, type TSchema, Type } from "typebox";
 import { Value } from "typebox/value";
@@ -333,7 +332,6 @@ export interface HttpServerOptions {
   now?: () => number;
   retryAttempts?: number;
   retryDelay?: (attempt: number, signal: AbortSignal) => Promise<void>;
-  toolDescriptionCap?: number | false;
   allowExtraUsage?: boolean;
   queryFactory?: BridgeRuntimeDependencies["queryFactory"];
   createRuntime?: (threadId: string) => Runtime;
@@ -1106,25 +1104,19 @@ export function createHttpServer(options: HttpServerOptions): Server {
       diagnostic.resizedImages = await prepareImages(body.messages);
       const toolNameToSdk = new Map<string, string>();
       const toolNameToClient = new Map<string, string>();
-      const rawTools =
+      const tools =
         body.tool_choice?.type === "none"
           ? []
           : ((body.tools ?? []).map(({ cache_control: _cache, ...tool }) =>
               structuredClone(tool),
             ) as Tool[]);
-      const prepared = prepareToolDescriptions(
-        rawTools,
-        prompt,
-        options.toolDescriptionCap ?? false,
-      );
-      const tools = prepared.tools;
       for (const tool of tools) {
         const sdk = `mcp__custom-tools__${tool.name}`;
         toolNameToSdk.set(tool.name, sdk);
         toolNameToClient.set(sdk, tool.name);
       }
       const configuration = {
-        prompt: prepared.systemPrompt,
+        prompt: prompt,
         tools,
         toolChoice: body.tool_choice,
         effort: body.output_config?.effort,
@@ -1280,7 +1272,7 @@ export function createHttpServer(options: HttpServerOptions): Server {
             requestKind: diagnostic.requestKind,
             requestedModel: diagnostic.requestedModel,
             resolvedModel: model,
-            systemPrompt: prepared.systemPrompt,
+            systemPrompt: prompt,
             tools,
             request: body,
           })}\n`,
@@ -1328,12 +1320,7 @@ export function createHttpServer(options: HttpServerOptions): Server {
         changedConfigurationFields,
         maxTokens: body.max_tokens,
         thinkingBudget: body.thinking?.type === "enabled" ? body.thinking.budget_tokens : null,
-        promptCharacters: prepared.systemPrompt.length,
-        relocatedToolDescriptions: prepared.relocations.length,
-        relocatedDescriptionCharacters: prepared.relocations.reduce(
-          (total, relocation) => total + relocation.description.length,
-          0,
-        ),
+        promptCharacters: prompt.length,
         toolDefinitionCharacters: JSON.stringify(tools).length,
         historyCharacters: JSON.stringify(normalized.messages).length,
         messageCount: normalized.messages.length,
@@ -1390,7 +1377,7 @@ export function createHttpServer(options: HttpServerOptions): Server {
         model,
         messages: normalized.messages,
         tools,
-        systemPrompt: prepared.systemPrompt,
+        systemPrompt: prompt,
         effort: body.output_config?.effort,
         maxTokens: body.max_tokens,
         signal: abort.signal,

@@ -7,7 +7,6 @@ import { REFUSAL_CUSTOM_TYPE, type RefusalEntryData } from "doppelclaude/refusal
 import { createDefaultAccountProbe } from "./account-probe.js";
 import { acquireBridgeOwner } from "./bridge-owner.js";
 import { createCompaction } from "./compaction.js";
-import { createDefaultToolDescriptionCap } from "./description-cap.js";
 import { createBridgeModelCatalog } from "./model-catalog.js";
 import { PROVIDER_ID } from "./models.js";
 import { resolveOauthToken, runShellCommand } from "./oauth-token.js";
@@ -30,7 +29,6 @@ export default function activate(pi: ExtensionAPI): void {
     runCommand: runShellCommand,
     debug,
   });
-  const toolDescriptionCap = createDefaultToolDescriptionCap(providerSettings);
 
   const compaction = createCompaction({
     queryFactory: query,
@@ -46,7 +44,6 @@ export default function activate(pi: ExtensionAPI): void {
     const runtime = createPiBridgeRuntime({
       providerSettings,
       modelCatalog,
-      getToolDescriptionCap: toolDescriptionCap.get,
     });
     const provider = createAnthropicAgentSdkProvider({
       stream: runtime.stream,
@@ -101,10 +98,7 @@ export default function activate(pi: ExtensionAPI): void {
 
   if (!ownsLifecycle) return;
 
-  void toolDescriptionCap.start();
-
   pi.on("session_start", async (event, ctx) => {
-    toolDescriptionCap.onSessionStart((message) => ctx.ui?.notify?.(message, "warning"));
     runtime.setHost({
       ui: ctx.ui,
       appendEntry: (customType, data) => pi.appendEntry(customType, data),
@@ -115,7 +109,6 @@ export default function activate(pi: ExtensionAPI): void {
     }
   });
   pi.on("session_shutdown", async () => {
-    toolDescriptionCap.onSessionShutdown();
     await runtime.clear("session_shutdown");
     release();
   });

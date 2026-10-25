@@ -25,7 +25,6 @@ export interface PiBridgeRuntimeDependencies {
   queryFactory?(request: { prompt: AsyncIterable<SDKUserMessage>; options?: Options }): Query;
   sessionStore?: BridgeSessionStore;
   modelCatalog?: BridgeModelCatalog;
-  getToolDescriptionCap?(): number | false;
 }
 
 export interface BridgeHost {
@@ -62,8 +61,7 @@ export function createPiBridgeRuntime(dependencies: PiBridgeRuntimeDependencies)
   ): AssistantMessageEventStream {
     models.set(model.id, model);
     const transcript = readPiTranscript(context);
-    const toolCap = dependencies.getToolDescriptionCap?.() ?? false;
-    const turnTools = resolveMcpTools(transcript.tools, toolCap, options?.toolChoice);
+    const turnTools = resolveMcpTools(transcript.tools, options?.toolChoice);
     const nativeMessages = convertPiMessages(transcript.messages, turnTools.customToolNameToSdk)
       .anthropicMessages as import("@anthropic-ai/sdk/resources/messages/messages").MessageParam[];
     const persistent = Boolean(options?.sessionId);
@@ -73,7 +71,6 @@ export function createPiBridgeRuntime(dependencies: PiBridgeRuntimeDependencies)
       options,
       providerSettings: dependencies.providerSettings,
       oneShot: !persistent,
-      relocations: turnTools.relocations,
     });
     const {
       cwd,

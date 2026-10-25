@@ -60,7 +60,6 @@ mise run test:usage                                 # on-demand A/B subscription
 - **Compaction**: `packages/pi-doppelclaude/src/compaction.ts` — isolated summary subprocess, file-op carry-forward.
 - **Account probe**: `packages/pi-doppelclaude/src/account-probe.ts` — auth/first-party gate.
 - **System prompt**: `packages/pi-doppelclaude/src/system-prompt.ts` — all prompt-rewrite behavior stays isolated here.
-- **Description cap**: `packages/pi-doppelclaude/src/description-cap.ts` — probes the Claude Code binary for its tool-description cap and orchestrates relocation of oversized descriptions.
 - **Settings**: `packages/pi-doppelclaude/src/settings.ts` — `doppelclaude` block in Pi's shared settings, env overrides.
 - **Diagnostics**: `diag/` — one-off measurement scripts and findings.
 

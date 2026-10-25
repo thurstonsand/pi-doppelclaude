@@ -9,6 +9,10 @@
 - **Extra Usage guard** — a turn Claude Code reports as billed to Extra Usage instead of your plan limits fails with a non-retryable billing error, and the query stops before Claude Code sends another request. Opt out with `doppelclaude.provider.allowExtraUsage` in pi or `DOPPELCLAUDE_ALLOW_EXTRA_USAGE=1` for the HTTP daemon. Pi's compaction summary is not guarded.
 - **Pi labels doppelclaude cost as a subscription's** — the footer shows `(sub)` after the list-price cost. Login stays with `claude auth login`; pi stores no credential.
 
+### Changed
+
+- **Long tool descriptions reach Claude whole without relocation** — the bridge sets Claude Code's `CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH` for every subprocess instead of moving oversized descriptions into the system prompt. The binary probe, its cache file, the cap fields in the HTTP `startup` record, the `relocatedToolDescriptions` request fields, and the `toolDescriptionCap` setting are gone; a leftover `toolDescriptionCap` in settings is ignored. Needs Claude Code 2.1.280 or later, which the bundled SDK ships.
+
 ### Fixed
 
 - **Every Claude Code subprocess gets the same environment** — the runtime now owns the child environment and spawn policy for both frontends, so a flag can no longer reach one and miss the other. The HTTP daemon now disables Claude Code's nonessential traffic (telemetry and error reporting) as pi did, pi now disables tool search as the daemon did, and both turn off Claude Code's moving total-tokens countdown.

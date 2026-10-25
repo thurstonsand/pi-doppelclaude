@@ -17,7 +17,6 @@ const logs: Array<Record<string, unknown>> = [];
 const server = createHttpServer({
   apiKey: "live",
   supportedModels: [],
-  toolDescriptionCap: 4096,
   stateDir: await mkdtemp(join(tmpdir(), "doppelclaude-live-")),
   log: (record) => logs.push(record),
 });

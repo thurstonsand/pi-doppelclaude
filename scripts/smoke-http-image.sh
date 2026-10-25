@@ -61,7 +61,6 @@ await runHttpDaemon({
     available: true,
     supportedModels: [{ value: "claude-haiku-4-5", displayName: "Haiku", description: "" }],
   }),
-  descriptionCapProbe: async () => 8192,
 });
 JS
 )

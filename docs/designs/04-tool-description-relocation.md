@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Superseded. Claude Code 2.1.280 made the cap configurable with `CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH`; the bridge sets it for every subprocess, and relocation, the binary probe, and `toolDescriptionCap` were removed.
 
 ## Decision Summary
 

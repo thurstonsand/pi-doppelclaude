@@ -1,13 +1,6 @@
 import type { SettingSource } from "@anthropic-ai/claude-agent-sdk";
 import { getSystemMessageText, type SystemMessage } from "@earendil-works/pi-ai";
-import {
-  formatRelocatedToolDescriptions,
-  insertRelocatedToolDescriptions,
-  type ToolDescriptionRelocation,
-} from "doppelclaude/tool-description-relocation";
 import type { SystemPromptReplacements } from "./settings.js";
-
-export type { ToolDescriptionRelocation } from "doppelclaude/tool-description-relocation";
 
 // "pi" mode isolates Claude Code's filesystem settings ([] = no setting sources);
 // every other mode keeps Claude Code's defaults (undefined).
@@ -131,16 +124,8 @@ export function buildClaudeSystemPrompt(
   piSystemMessage: SystemMessage | undefined,
   mode: "claude-code" | "pi" | "append",
   replacements: SystemPromptReplacements | undefined,
-  relocations: ToolDescriptionRelocation[] = [],
 ): ClaudeSystemPrompt {
-  const relocationBlock = formatRelocatedToolDescriptions(relocations);
-  if (mode === "claude-code") {
-    return {
-      type: "preset",
-      preset: "claude_code",
-      ...(relocationBlock ? { append: ` ${relocationBlock}` } : {}),
-    };
-  }
+  if (mode === "claude-code") return { type: "preset", preset: "claude_code" };
   if (!replacements) {
     throw new Error("doppelclaude: system prompt replacements are required");
   }
@@ -148,14 +133,11 @@ export function buildClaudeSystemPrompt(
   const rewrittenPiPrompt = piSystemMessage
     ? rewritePiSystemPrompt(piSystemMessage, replacements)
     : "";
-  const promptWithRelocations = relocationBlock
-    ? insertRelocatedToolDescriptions(rewrittenPiPrompt, relocationBlock)
-    : rewrittenPiPrompt;
   // Claude Code puts its own identity in a separate system block right before ours and
   // joins nothing between them, so without this the two run together as "…Agent SDK.You are".
   // A call with no prompt of its own, like working-vibes, must stay empty: a lone space becomes a
   // whitespace-only system block, which the API rejects.
-  const separatedPiPrompt = promptWithRelocations.trim() ? ` ${promptWithRelocations}` : "";
+  const separatedPiPrompt = rewrittenPiPrompt.trim() ? ` ${rewrittenPiPrompt}` : "";
   return mode === "pi"
     ? separatedPiPrompt
     : { type: "preset", preset: "claude_code", append: separatedPiPrompt };

@@ -3,8 +3,7 @@ import type { Server } from "node:http";
 import { join } from "node:path";
 import type { AccountSnapshot } from "doppelclaude/account-probe";
 import { createDefaultAccountProbe } from "doppelclaude/account-probe";
-import { configureDebug, debug } from "doppelclaude/debug";
-import { type CapResolution, createDefaultDescriptionCapProbe } from "doppelclaude/description-cap";
+import { configureDebug } from "doppelclaude/debug";
 import { createRecordLog } from "./record-log.js";
 import {
   createHttpServer,
@@ -16,7 +15,6 @@ export interface HttpStartupDependencies {
   environment?: NodeJS.ProcessEnv;
   loadConfig?: (env: NodeJS.ProcessEnv) => Promise<HttpEnvironmentConfig>;
   accountProbe?: (signal?: AbortSignal) => Promise<AccountSnapshot>;
-  descriptionCapProbe?: (cachePath: string, signal?: AbortSignal) => Promise<number>;
   createServer?: typeof createHttpServer;
   installSignal?: (signal: "SIGINT" | "SIGTERM", listener: () => void) => unknown;
   exit?: (code: number) => void;
@@ -103,35 +101,10 @@ export async function runHttpDaemon(
     );
     if (!account.available)
       throw new Error("Claude Code is not authenticated with a first-party account subscription");
-    const cachePath = join(config.stateDir, "description-cap-cache.json");
-    const capReport: { resolution: CapResolution | null } = { resolution: null };
-    const capProbe =
-      dependencies.descriptionCapProbe ??
-      ((_path, signal) =>
-        createDefaultDescriptionCapProbe({
-          cachePath,
-          debug,
-          observe: (resolution) => {
-            capReport.resolution = resolution;
-          },
-        })(signal));
-    const capTimeout = setTimeout(
-      () => startupController.abort(new Error("Description-cap probe timed out after 15 seconds")),
-      15_000,
-    );
-    capTimeout.unref();
-    let toolDescriptionCap: number;
-    try {
-      toolDescriptionCap = await duringStartup(capProbe(cachePath, startupController.signal));
-    } finally {
-      clearTimeout(capTimeout);
-    }
-
     const log = createRecordLog(config.logFilePath, LOG_FILE_MAX_BYTES, LOG_FILE_KEEP);
     server = (dependencies.createServer ?? createHttpServer)({
       ...config,
       supportedModels: account.supportedModels,
-      toolDescriptionCap,
       log,
     });
     await duringStartup(
@@ -148,14 +121,7 @@ export async function runHttpDaemon(
       }),
     );
     process.stderr.write(`doppelclaude HTTP server listening on ${config.host}:${config.port}\n`);
-    // A fallback cap moves different tools into the system prompt than the real one would, so
-    // each start records which it runs with.
-    log({
-      event: "startup",
-      timestamp: new Date().toISOString(),
-      toolDescriptionCap,
-      toolDescriptionCapSource: capReport.resolution?.source ?? null,
-    });
+    log({ event: "startup", timestamp: new Date().toISOString() });
     server.once("close", cleanupSignals);
     return server;
   } catch (error) {

@@ -41,13 +41,11 @@ class FakeServer extends EventEmitter {
 }
 
 describe("HTTP startup", () => {
-  it("probes before bind, secures state, and passes the discovered cap", async () => {
+  it("probes before bind, secures state, and passes the discovered models", async () => {
     const stateDir = join(await mkdtemp(join(tmpdir(), "http-startup-")), "state");
     const order: string[] = [];
     const fake = new FakeServer();
-    let serverOptions:
-      | { toolDescriptionCap?: number; supportedModels?: readonly { value: string }[] }
-      | undefined;
+    let serverOptions: { supportedModels?: readonly { value: string }[] } | undefined;
     const supportedModels = [{ value: "claude-opus-5", displayName: "Opus", description: "" }];
     await runHttpDaemon({
       environment: {},
@@ -57,20 +55,14 @@ describe("HTTP startup", () => {
         order.push("account");
         return { available: true, supportedModels };
       },
-      descriptionCapProbe: async (path) => {
-        order.push("cap");
-        assert.equal(path, join(stateDir, "description-cap-cache.json"));
-        return 8192;
-      },
-      createServer: ((options: { toolDescriptionCap?: number }) => {
+      createServer: ((options: { supportedModels?: readonly { value: string }[] }) => {
         order.push("create");
         serverOptions = options;
         return fake as unknown as Server;
       }) as never,
     });
-    assert.deepEqual(order, ["account", "cap", "create"]);
+    assert.deepEqual(order, ["account", "create"]);
     assert.equal(fake.listened, true);
-    assert.equal(serverOptions?.toolDescriptionCap, 8192);
     assert.equal(serverOptions?.supportedModels, supportedModels);
     assert.equal((await stat(stateDir)).mode & 0o777, 0o700);
   });
@@ -82,7 +74,6 @@ describe("HTTP startup", () => {
       loadConfig: async () => ({ ...config(stateDir), host: "0.0.0.0", port: 0 }),
       installSignal: () => {},
       accountProbe: async () => ({ available: true, supportedModels: [] }),
-      descriptionCapProbe: async () => 8192,
       createServer: (() => createServer()) as never,
     });
     assert.ok(server);
@@ -103,7 +94,6 @@ describe("HTTP startup", () => {
         loadConfig: async () => config(stateDir),
         installSignal: () => {},
         accountProbe: async () => ({ available: false, supportedModels: [] }),
-        descriptionCapProbe: async () => 8192,
         createServer: (() => {
           created = true;
           return new FakeServer() as unknown as Server;
@@ -127,10 +117,9 @@ describe("HTTP startup", () => {
         listeners.set(signal, listener);
         return () => listeners.delete(signal);
       },
-      accountProbe: async () => ({ available: true, supportedModels: [] }),
-      descriptionCapProbe: (_path, signal) => {
+      accountProbe: (signal) => {
         observedSignal = signal;
-        return new Promise<number>(() => {});
+        return new Promise(() => {});
       },
       createServer: (() => {
         created = true;
@@ -159,7 +148,6 @@ describe("HTTP startup", () => {
         loadConfig: async () => ({ ...config(stateDir), logFilePath }),
         installSignal: () => {},
         accountProbe: async () => ({ available: true, supportedModels: [] }),
-        descriptionCapProbe: async () => 8192,
         createServer: ((options: { log: typeof log }) => {
           log = options.log;
           return new FakeServer() as unknown as Server;

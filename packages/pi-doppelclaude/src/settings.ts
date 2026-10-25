@@ -23,9 +23,6 @@ const PROVIDER_SETTINGS_SCHEMA = Type.Object({
   systemPromptReplacements: Type.Optional(SYSTEM_PROMPT_REPLACEMENTS_SCHEMA),
   pathToClaudeCodeExecutable: Type.Optional(Type.String()),
   oauthTokenCommand: Type.Optional(NONBLANK),
-  toolDescriptionCap: Type.Optional(
-    Type.Union([Type.Integer({ minimum: 1 }), Type.Literal(false)]),
-  ),
   allowExtraUsage: Type.Optional(Type.Boolean()),
 });
 
@@ -49,7 +46,6 @@ export interface ProviderSettings {
   systemPromptReplacements?: SystemPromptReplacements;
   pathToClaudeCodeExecutable?: string;
   oauthTokenCommand?: string;
-  toolDescriptionCap?: number | false;
   allowExtraUsage?: boolean;
 }
 type BridgeFileSettings = Static<typeof BRIDGE_FILE_SETTINGS_SCHEMA>;

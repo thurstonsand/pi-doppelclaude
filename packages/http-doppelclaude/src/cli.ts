@@ -7,7 +7,7 @@ import { runHttpDaemon } from "./startup.js";
 const HELP = `Usage: doppelclaude-serve [--help | --version]
 
 Serve the Anthropic Messages API (default bind: 127.0.0.1:3456).
-Startup account and binary-cap probes have a combined 30-second deadline.
+The startup account probe has a 30-second deadline.
 
 Environment:
   DOPPELCLAUDE_HTTP_API_KEY       API key accepted from clients (required*)

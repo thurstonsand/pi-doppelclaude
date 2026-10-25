@@ -14,19 +14,12 @@ import type {
 } from "@earendil-works/pi-ai";
 import { makeCliDebugOptions } from "doppelclaude/debug";
 import { MCP_TOOL_PREFIX } from "doppelclaude/skills";
-import { descriptionExceedsCap } from "doppelclaude/tool-description-relocation";
 import { claudeCodeModelId, resolveThinkingEffort } from "./models.js";
 import type { ProviderSettings } from "./settings.js";
-import {
-  buildClaudeSystemPrompt,
-  settingSourcesFor,
-  type ToolDescriptionRelocation,
-} from "./system-prompt.js";
+import { buildClaudeSystemPrompt, settingSourcesFor } from "./system-prompt.js";
 
 export interface TurnTools {
   mcpTools: Tool[];
-  originalMcpTools: Tool[];
-  relocations: ToolDescriptionRelocation[];
   customToolNameToSdk: Map<string, string>;
   customToolNameToPi: Map<string, string>;
 }
@@ -35,45 +28,23 @@ export interface TurnTools {
  *  (`tools: []` below), so a turn with no MCP tools is a turn Claude Code cannot call one on.
  *  That makes this the single place where `toolChoice: "none"` has to be honored: every SDK
  *  request, spawned or reconciled, takes its tool set from here. */
-export function resolveMcpTools(
-  tools: Tool[],
-  toolDescriptionCap: number | false,
-  toolChoice: ToolChoice | undefined,
-): TurnTools {
+export function resolveMcpTools(tools: Tool[], toolChoice: ToolChoice | undefined): TurnTools {
   const mcpTools: Tool[] = [];
-  const originalMcpTools: Tool[] = [];
-  const relocations: ToolDescriptionRelocation[] = [];
   const customToolNameToSdk = new Map<string, string>();
   const customToolNameToPi = new Map<string, string>();
 
-  if (toolChoice === "none")
-    return {
-      mcpTools,
-      originalMcpTools,
-      relocations,
-      customToolNameToSdk,
-      customToolNameToPi,
-    };
+  if (toolChoice === "none") return { mcpTools, customToolNameToSdk, customToolNameToPi };
 
   for (const tool of tools) {
     const sdkName = `${MCP_TOOL_PREFIX}${tool.name}`;
-    originalMcpTools.push(tool);
-    if (descriptionExceedsCap(tool.description, toolDescriptionCap)) {
-      mcpTools.push({ ...tool, description: "" });
-      relocations.push({
-        name: sdkName,
-        description: tool.description,
-      });
-    } else {
-      mcpTools.push(tool);
-    }
+    mcpTools.push(tool);
     customToolNameToSdk.set(tool.name, sdkName);
     customToolNameToSdk.set(tool.name.toLowerCase(), sdkName);
     customToolNameToPi.set(sdkName, tool.name);
     customToolNameToPi.set(sdkName.toLowerCase(), tool.name);
   }
 
-  return { mcpTools, originalMcpTools, relocations, customToolNameToSdk, customToolNameToPi };
+  return { mcpTools, customToolNameToSdk, customToolNameToPi };
 }
 
 /** The tool set a live query was handed. A change means the servers are reconciled,
@@ -104,16 +75,14 @@ export function planTurn(input: {
   providerSettings: ProviderSettings;
   /** Only the host's own query outlives its turn; its CLI log is the root one. */
   oneShot: boolean;
-  relocations: ToolDescriptionRelocation[];
 }): TurnPlan {
-  const { model, piSystemMessage, options, providerSettings, oneShot, relocations } = input;
+  const { model, piSystemMessage, options, providerSettings, oneShot } = input;
   const cwd = (options as { cwd?: string } | undefined)?.cwd ?? process.cwd();
   const systemPromptMode = providerSettings.systemPromptMode;
   const systemPrompt = buildClaudeSystemPrompt(
     piSystemMessage,
     systemPromptMode,
     providerSettings.systemPromptReplacements,
-    relocations,
   );
   const settingSources = settingSourcesFor(systemPromptMode);
   const claudeExecutable = providerSettings.pathToClaudeCodeExecutable;

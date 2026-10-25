@@ -34,6 +34,9 @@ export function sdkChildEnv(): NodeJS.ProcessEnv {
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
     // The caller owns its tools; deferring them behind a search tool hides them from the model.
     ENABLE_TOOL_SEARCH: "false",
+    // Claude Code cuts MCP tool descriptions at 4096 characters; the caller's tools are its own,
+    // so they reach the model whole.
+    CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH: "1000000",
     // The caller owns context, and the countdown it appends to tool results moves every turn.
     CLAUDE_CODE_TOTAL_TOKENS_REMINDER: "off",
     // The caller owns context management; Claude Code compacting on its own would desync it.

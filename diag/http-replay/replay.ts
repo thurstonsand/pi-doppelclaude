@@ -47,7 +47,6 @@ const { values } = parseArgs({
     requests: { type: "string" },
     log: { type: "string" },
     out: { type: "string" },
-    cap: { type: "string", default: "4096" },
     "opencode-heading": { type: "string" },
   },
 });
@@ -263,7 +262,6 @@ const server = createHttpServer({
     displayName: value,
     description: "",
   })),
-  toolDescriptionCap: Number(values.cap),
   openCodeEnvironmentHeading: values["opencode-heading"],
   maxRuntimes: 32,
   idleTtlMs: 3_600_000,

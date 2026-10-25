@@ -164,6 +164,7 @@ describe("toolChoice", () => {
     const env = harness.spawned[0].options?.env;
     assert.equal(env?.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, "1");
     assert.equal(env?.ENABLE_TOOL_SEARCH, "false");
+    assert.equal(env?.CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH, "1000000");
     assert.equal(env?.CLAUDE_CODE_TOTAL_TOKENS_REMINDER, "off");
     assert.equal(env?.DISABLE_AUTO_COMPACT, "1");
   });

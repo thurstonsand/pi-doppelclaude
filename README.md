@@ -81,7 +81,6 @@ Configuration lives under the `doppelclaude` key in pi's global settings at `~/.
 - `systemPromptMode` — `"claude-code"` sends only Claude Code's preset (not recommended), `"pi"` sends only the rewritten pi prompt, `"append"` sends Claude Code's preset with the rewritten pi prompt appended. Default `"pi"`.
 - `systemPromptReplacements` — the prose that makes your prompt yours. Required in `"pi"` and `"append"` modes. See [System prompt](#system-prompt).
 - `pathToClaudeCodeExecutable` — path to the `claude` binary. Use only when the SDK's binaries can't run on your filesystem for whatever reason.
-- `toolDescriptionCap` — the character count at which Claude Code truncates a tool description. Unset probes the actual Claude Code binary for the current value (falling back to 4096 with a warning); a number pins it; `false` disables description relocation entirely. See [How this actually works](#how-this-actually-works).
 - `allowExtraUsage` — when Claude Code reports a turn billed to Extra Usage instead of your plan limits, the turn fails and the conversation stops before Claude Code sends another request. `true` keeps going on Extra Usage. Pi's compaction summary is a single request and is not guarded.
 - `debug.enabled` / `debug.logPath` — see [Debugging](#debugging).
 
@@ -219,7 +218,7 @@ Under normal operation, it can keep the prompt cache warm, but as you can see, t
 
 The bridge actually disables ALL normal tools to Claude Code, and instead advertises all of pi's tools through an internal MCP server. So when the model decides to read a file, the call travels out from Claude Code, through the MCP, and lands in pi, which executes it, renders it in the TUI, and returns the result through all those layers back to the model.
 
-One quirk of that path: Claude Code truncates every MCP tool description to 4096 chars (as of CC 2.1.296), and pi has no cap. So the bridge detects if that would happen, and moves the tool descriptions into a different part of the system prompt that doesn't get capped.
+One quirk of that path: Claude Code truncates every MCP tool description to 4096 chars (as of CC 2.1.296), and pi has no cap. So the bridge raises that limit with Claude Code's own `CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH` (Claude Code 2.1.280 or later; an older `pathToClaudeCodeExecutable` cuts them again), and pi's descriptions reach the model whole.
 
 ## Debugging
 

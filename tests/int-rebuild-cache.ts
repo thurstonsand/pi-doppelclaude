@@ -28,7 +28,6 @@ const logs: CompleteRecord[] = [];
 const server = createHttpServer({
   apiKey: "int",
   supportedModels: [],
-  toolDescriptionCap: 4096,
   stateDir: await mkdtemp(join(tmpdir(), "int-rebuild-cache-")),
   log: (record) => logs.push(record as CompleteRecord),
 });
