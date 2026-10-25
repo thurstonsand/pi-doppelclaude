@@ -18,6 +18,8 @@ Resource controls are `DOPPELCLAUDE_MAX_RUNTIMES` (32), `DOPPELCLAUDE_IDLE_TTL_M
 `DOPPELCLAUDE_MAX_BODY_BYTES` (32000000, 32 MB), `DOPPELCLAUDE_REQUEST_TIMEOUT_MS` (600000),
 `DOPPELCLAUDE_SHUTDOWN_TIMEOUT_MS` (15000), and `DOPPELCLAUDE_RETRY_ATTEMPTS` (2).
 
+A turn Claude Code reports as billed to Extra Usage instead of plan limits fails, and the thread's query is retired before Claude Code sends another request. Set `DOPPELCLAUDE_ALLOW_EXTRA_USAGE=1` to keep serving on Extra Usage.
+
 The body limit covers the entire JSON request, including base64 images and conversation history. Requests above it return 413 before invoking Claude Code. Claude Code also limits each image to 5 MiB of base64, not decoded bytes. Oversized attachments and tool-result images are re-encoded as WebP at quality 90, fitting within 2000 × 2000 pixels without enlargement, then reduced further only if necessary to meet that encoded-size limit. Smaller images pass through unchanged. This transforms the bridge's request copy, not the client's original attachment or history. Model-specific limits still apply.
 
 Clients call `GET /v1/models` or streaming-only `POST /v1/messages`, authenticating with either

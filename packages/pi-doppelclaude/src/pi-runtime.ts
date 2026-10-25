@@ -41,6 +41,7 @@ export function createPiBridgeRuntime(dependencies: PiBridgeRuntimeDependencies)
   const core = createBridgeRuntime({
     queryFactory: dependencies.queryFactory,
     sessionStore: dependencies.sessionStore,
+    allowExtraUsage: dependencies.providerSettings.allowExtraUsage,
     notify: (message, level) => host?.ui.notify(message, level),
     refusal: (customType, data) => host?.appendEntry(customType, data),
     observeServedModel: (id) => dependencies.modelCatalog?.noteServedModel(id),

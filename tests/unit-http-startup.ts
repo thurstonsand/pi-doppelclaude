@@ -23,6 +23,7 @@ function config(stateDir: string): HttpEnvironmentConfig {
     requestTimeoutMs: 1000,
     shutdownTimeoutMs: 1000,
     retryAttempts: 0,
+    allowExtraUsage: false,
   };
 }
 

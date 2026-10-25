@@ -112,6 +112,15 @@ export function formatRateLimitMessage(info: SDKRateLimitInfo): string {
   return parts.join(" — ");
 }
 
+/** "billing" keeps pi's retry classifier from replaying a request that would be charged again. */
+export function extraUsageChargeMessage(rateLimitText: string): string {
+  return (
+    `Claude Code billing: this turn was charged to Extra Usage instead of your plan limits (${rateLimitText}). ` +
+    "Stopped before Claude Code sends another request. Turn off Extra Usage at claude.ai/settings/usage, " +
+    "or set doppelclaude's allowExtraUsage to keep going."
+  );
+}
+
 export function assistantApiFailure(error: SDKAssistantMessageError | undefined): string | null {
   switch (assistantRetryableStatus(error)) {
     case 429:

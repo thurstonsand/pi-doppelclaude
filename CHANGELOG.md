@@ -4,6 +4,10 @@
 
 ## UNRELEASED
 
+### Added
+
+- **Extra Usage guard** — a turn Claude Code reports as billed to Extra Usage instead of your plan limits fails with a non-retryable billing error, and the query stops before Claude Code sends another request. Opt out with `doppelclaude.provider.allowExtraUsage` in pi or `DOPPELCLAUDE_ALLOW_EXTRA_USAGE=1` for the HTTP daemon. Pi's compaction summary is not guarded.
+
 ### Fixed
 
 - **Every Claude Code subprocess gets the same environment** — the runtime now owns the child environment and spawn policy for both frontends, so a flag can no longer reach one and miss the other. The HTTP daemon now disables Claude Code's nonessential traffic (telemetry and error reporting) as pi did, pi now disables tool search as the daemon did, and both turn off Claude Code's moving total-tokens countdown.

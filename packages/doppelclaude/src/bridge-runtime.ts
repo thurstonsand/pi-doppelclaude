@@ -64,6 +64,8 @@ export interface BridgeRuntimeDependencies {
   observeServedModel?(id: string): void | Promise<void>;
   observeCommandUsage?(observation: CommandUsageObservation): void;
   observeExecution?(observation: BridgeExecutionObservation): void;
+  /** Absent means a turn Claude Code reports as billed to Extra Usage fails instead. */
+  allowExtraUsage?: boolean;
   /** Another runtime's transcript of the host conversation, for a host rebuild with none of its own. */
   hostSiblingTranscript?(): SessionStoreEntry[] | null;
 }
@@ -248,6 +250,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies = {}
     debug,
     notify: dependencies.notify,
     appendEntry: dependencies.refusal,
+    allowExtraUsage: dependencies.allowExtraUsage ?? false,
     observeServedModel: (id) => {
       Promise.resolve(dependencies.observeServedModel?.(id)).catch((error) =>
         debug("provider: recording the served model failed", error),
@@ -1179,6 +1182,8 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies = {}
         claimCurrentResponse(resultCtx.currentResponse, "tool-result-error", resultCtx);
         resultCtx.observeCommandUsage = dependencies.observeCommandUsage;
         emitTerminalError(resultCtx, "error", resultCtx.fatalError);
+        // Claude Code is still waiting on these results; answering them would be its next request.
+        discardQuery(resultCtx, resultCtx.fatalError, "rebuild");
         return stream;
       }
       resultCtx.activeModel = model;

@@ -31,6 +31,7 @@ import {
   assistantApiFailure,
   assistantRetryableStatus,
   classifyResult,
+  extraUsageChargeMessage,
   formatRateLimitMessage,
   isSyntheticModelId,
 } from "./sdk-signals.js";
@@ -42,6 +43,7 @@ interface ProviderStreamDependencies {
   notify?(message: string, level: "warning"): void;
   appendEntry?(customType: string, data: RefusalEntryData): void;
   observeServedModel?(id: string): void;
+  allowExtraUsage: boolean;
 }
 
 export interface QueryConsumerHooks {
@@ -72,7 +74,7 @@ function parsePartialJson(
 }
 
 export function createProviderStreamRuntime(dependencies: ProviderStreamDependencies) {
-  const { debug, notify, appendEntry, observeServedModel } = dependencies;
+  const { debug, notify, appendEntry, observeServedModel, allowExtraUsage } = dependencies;
   const completedResponses = new WeakSet<object>();
 
   function claimCurrentResponse(
@@ -558,6 +560,15 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
         if (message.rate_limit_info.status === "rejected") {
           c.turnRateLimitRejection = text;
           c.turnRetryableStatus = 429;
+        }
+        if (message.rate_limit_info.isUsingOverage && !allowExtraUsage) {
+          const charge = extraUsageChargeMessage(text);
+          // Claude Code reports a changed limit once, after the response that changed it. A turn
+          // already closed on a tool call fails when pi returns its results, before they are sent.
+          if (c.currentResponse) c.turnRateLimitRejection = charge;
+          else c.fatalError = charge;
+          c.turnRetryableStatus = null;
+          break;
         }
         if (message.rate_limit_info.status !== "allowed") notify?.(text, "warning");
         break;

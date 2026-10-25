@@ -26,6 +26,7 @@ const PROVIDER_SETTINGS_SCHEMA = Type.Object({
   toolDescriptionCap: Type.Optional(
     Type.Union([Type.Integer({ minimum: 1 }), Type.Literal(false)]),
   ),
+  allowExtraUsage: Type.Optional(Type.Boolean()),
 });
 
 const DEBUG_SETTINGS_SCHEMA = Type.Object({
@@ -49,6 +50,7 @@ export interface ProviderSettings {
   pathToClaudeCodeExecutable?: string;
   oauthTokenCommand?: string;
   toolDescriptionCap?: number | false;
+  allowExtraUsage?: boolean;
 }
 type BridgeFileSettings = Static<typeof BRIDGE_FILE_SETTINGS_SCHEMA>;
 

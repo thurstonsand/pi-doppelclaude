@@ -334,6 +334,7 @@ export interface HttpServerOptions {
   retryAttempts?: number;
   retryDelay?: (attempt: number, signal: AbortSignal) => Promise<void>;
   toolDescriptionCap?: number | false;
+  allowExtraUsage?: boolean;
   queryFactory?: BridgeRuntimeDependencies["queryFactory"];
   createRuntime?: (threadId: string) => Runtime;
   log?: (record: Record<string, unknown>) => void;
@@ -353,6 +354,7 @@ export interface HttpEnvironmentConfig {
   requestTimeoutMs: number;
   shutdownTimeoutMs: number;
   retryAttempts: number;
+  allowExtraUsage: boolean;
 }
 
 export interface HttpModel {
@@ -945,6 +947,7 @@ export function createHttpServer(options: HttpServerOptions): Server {
       options.createRuntime?.(threadId) ??
       createBridgeRuntime({
         queryFactory: options.queryFactory ?? query,
+        allowExtraUsage: options.allowExtraUsage,
         observeExecution: (observation) => observationState.observations?.push(observation),
         // A lane opened beside a busy one rebuilds the same thread; the sibling's transcript
         // shows where Claude Code put its context, so the rebuild renders the same prefix.
@@ -1682,6 +1685,13 @@ function integerOption(
   return value;
 }
 
+function flagOption(env: NodeJS.ProcessEnv, name: string): boolean {
+  const raw = env[name];
+  if (raw === undefined || raw === "0") return false;
+  if (raw === "1") return true;
+  throw new Error(`${name} must be "1" or "0"`);
+}
+
 /** Parse and validate daemon configuration once, before opening a socket. */
 export async function httpConfigFromEnvironment(
   env: NodeJS.ProcessEnv = process.env,
@@ -1714,5 +1724,6 @@ export async function httpConfigFromEnvironment(
     requestTimeoutMs: integerOption(env, "DOPPELCLAUDE_REQUEST_TIMEOUT_MS", 600_000),
     shutdownTimeoutMs: integerOption(env, "DOPPELCLAUDE_SHUTDOWN_TIMEOUT_MS", 15_000),
     retryAttempts: integerOption(env, "DOPPELCLAUDE_RETRY_ATTEMPTS", 2, 0, 10),
+    allowExtraUsage: flagOption(env, "DOPPELCLAUDE_ALLOW_EXTRA_USAGE"),
   };
 }
