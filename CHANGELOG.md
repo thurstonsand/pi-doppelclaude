@@ -2,6 +2,12 @@
 
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **HTTP: telemetry that survives restarts** — `DOPPELCLAUDE_LOG_FILE=<path>` also appends the daemon's structured records (`startup`, `request_complete`, `runtime_close`) to a JSONL file that rotates at 64 MiB and keeps eight older files. Records written only to stderr lasted as long as the log driver kept them: Docker's default driver deletes them with the container, and a shared journal can evict them within hours.
+
 ## 0.14.12 — 2026-10-24
 
 ### Changed

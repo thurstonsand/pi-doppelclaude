@@ -286,6 +286,7 @@ describe("HTTP daemon configuration", () => {
     assert.equal(parsed.retryAttempts, 0);
     assert.equal(parsed.host, "127.0.0.1");
     assert.equal(parsed.recordRequestsPath, undefined);
+    assert.equal(parsed.logFilePath, undefined);
   });
 
   it("accepts IPv4 and IPv6 bind address literals", async () => {
@@ -330,6 +331,7 @@ describe("HTTP daemon configuration", () => {
       { ...base, DOPPELCLAUDE_RETRY_ATTEMPTS: "11" },
       { ...base, DOPPELCLAUDE_STATE_DIR: "  " },
       { ...base, DOPPELCLAUDE_RECORD_REQUESTS: " " },
+      { ...base, DOPPELCLAUDE_LOG_FILE: " " },
     ])
       await assert.rejects(httpConfigFromEnvironment(env));
   });

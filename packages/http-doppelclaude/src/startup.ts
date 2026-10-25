@@ -5,6 +5,7 @@ import type { AccountSnapshot } from "doppelclaude/account-probe";
 import { createDefaultAccountProbe } from "doppelclaude/account-probe";
 import { configureDebug, debug } from "doppelclaude/debug";
 import { type CapResolution, createDefaultDescriptionCapProbe } from "doppelclaude/description-cap";
+import { createRecordLog } from "./record-log.js";
 import {
   createHttpServer,
   type HttpEnvironmentConfig,
@@ -22,6 +23,9 @@ export interface HttpStartupDependencies {
 }
 
 const STARTUP_TIMEOUT_MS = 30_000;
+// Records run about 1.5 KB each, a few MB a day, so nine files hold months of telemetry.
+const LOG_FILE_MAX_BYTES = 64 * 1024 * 1024;
+const LOG_FILE_KEEP = 8;
 
 /** Validate and probe everything before binding the configured socket. */
 export async function runHttpDaemon(
@@ -123,10 +127,12 @@ export async function runHttpDaemon(
       clearTimeout(capTimeout);
     }
 
+    const log = createRecordLog(config.logFilePath, LOG_FILE_MAX_BYTES, LOG_FILE_KEEP);
     server = (dependencies.createServer ?? createHttpServer)({
       ...config,
       supportedModels: account.supportedModels,
       toolDescriptionCap,
+      log,
     });
     await duringStartup(
       new Promise<void>((resolve, reject) => {
@@ -144,14 +150,12 @@ export async function runHttpDaemon(
     process.stderr.write(`doppelclaude HTTP server listening on ${config.host}:${config.port}\n`);
     // A fallback cap moves different tools into the system prompt than the real one would, so
     // each start records which it runs with.
-    process.stderr.write(
-      `${JSON.stringify({
-        event: "startup",
-        timestamp: new Date().toISOString(),
-        toolDescriptionCap,
-        toolDescriptionCapSource: capReport.resolution?.source ?? null,
-      })}\n`,
-    );
+    log({
+      event: "startup",
+      timestamp: new Date().toISOString(),
+      toolDescriptionCap,
+      toolDescriptionCapSource: capReport.resolution?.source ?? null,
+    });
     server.once("close", cleanupSignals);
     return server;
   } catch (error) {

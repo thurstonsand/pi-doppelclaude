@@ -347,6 +347,7 @@ export interface HttpEnvironmentConfig {
   port: number;
   stateDir: string;
   recordRequestsPath: string | undefined;
+  logFilePath: string | undefined;
   maxRuntimes: number;
   idleTtlMs: number;
   maxBodyBytes: number;
@@ -1699,6 +1700,9 @@ export async function httpConfigFromEnvironment(
   const recordRequestsPath = env.DOPPELCLAUDE_RECORD_REQUESTS;
   if (recordRequestsPath !== undefined && !recordRequestsPath.trim())
     throw new Error("DOPPELCLAUDE_RECORD_REQUESTS must not be blank");
+  const logFilePath = env.DOPPELCLAUDE_LOG_FILE;
+  if (logFilePath !== undefined && !logFilePath.trim())
+    throw new Error("DOPPELCLAUDE_LOG_FILE must not be blank");
   return {
     apiKey: await apiKeyFromEnvironment(env),
     openCodeEnvironmentHeading: await valueOrFileFromEnvironment(
@@ -1709,6 +1713,7 @@ export async function httpConfigFromEnvironment(
     port: integerOption(env, "PORT", 3456, 1, 65_535),
     stateDir,
     recordRequestsPath,
+    logFilePath,
     maxRuntimes: integerOption(env, "DOPPELCLAUDE_MAX_RUNTIMES", 32),
     idleTtlMs: integerOption(env, "DOPPELCLAUDE_IDLE_TTL_MS", 3_600_000),
     maxBodyBytes: integerOption(env, "DOPPELCLAUDE_MAX_BODY_BYTES", DEFAULT_BODY_LIMIT),

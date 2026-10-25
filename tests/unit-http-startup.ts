@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { mkdtemp, stat } from "node:fs/promises";
+import { mkdtemp, readFile, stat } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, it } from "node:test";
+import { describe, it, mock } from "node:test";
 import type { HttpEnvironmentConfig } from "http-doppelclaude";
 import { runHttpDaemon } from "http-doppelclaude/startup";
 
@@ -16,6 +16,7 @@ function config(stateDir: string): HttpEnvironmentConfig {
     port: 3456,
     stateDir,
     recordRequestsPath: undefined,
+    logFilePath: undefined,
     maxRuntimes: 32,
     idleTtlMs: 1000,
     maxBodyBytes: 1000,
@@ -144,5 +145,50 @@ describe("HTTP startup", () => {
     assert.equal(created, false);
     assert.deepEqual(exits, [0]);
     assert.equal(listeners.size, 0);
+  });
+
+  it("keeps records in a log file that rotates at its size cap across restarts", async () => {
+    mock.method(process.stderr, "write", () => true);
+    const stateDir = await mkdtemp(join(tmpdir(), "http-startup-log-"));
+    const logFilePath = join(stateDir, "records.jsonl");
+    const start = async () => {
+      let log: ((record: Record<string, unknown>) => void) | undefined;
+      await runHttpDaemon({
+        environment: {},
+        loadConfig: async () => ({ ...config(stateDir), logFilePath }),
+        installSignal: () => {},
+        accountProbe: async () => ({ available: true, supportedModels: [] }),
+        descriptionCapProbe: async () => 8192,
+        createServer: ((options: { log: typeof log }) => {
+          log = options.log;
+          return new FakeServer() as unknown as Server;
+        }) as never,
+      });
+      assert.ok(log);
+      return log;
+    };
+    const events = async (path: string) =>
+      (await readFile(path, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line).event);
+    const filler = "x".repeat(1024 * 1024);
+    try {
+      const first = await start();
+      for (let index = 0; index < 63; index++) first({ event: "before", filler });
+      // A restarted daemon must count the bytes already in the file, or it would never rotate.
+      const second = await start();
+      second({ event: "rotates", filler });
+      second({ event: "after", filler });
+
+      const rotated = await events(`${logFilePath}.1`);
+      assert.deepEqual(rotated, ["startup", ...Array(63).fill("before"), "startup"]);
+      assert.ok((await stat(`${logFilePath}.1`)).size <= 64 * 1024 * 1024);
+      assert.deepEqual(await events(logFilePath), ["rotates", "after"]);
+      await assert.rejects(stat(`${logFilePath}.2`));
+      assert.equal((await stat(logFilePath)).mode & 0o777, 0o600);
+    } finally {
+      mock.restoreAll();
+    }
   });
 });
