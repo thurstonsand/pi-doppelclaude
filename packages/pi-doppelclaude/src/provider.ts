@@ -74,10 +74,14 @@ export function createAnthropicAgentSdkProvider(
       );
     }
   };
+  // Reported as OAuth so Pi labels list-price usage as a subscription's; the subscription gate
+  // is the account probe's first-party check, not a credential Pi holds.
   const check = async () => {
     requireAuthentication();
-    return { type: "api_key" as const, source: "Claude Code" };
+    return { type: "oauth" as const, source: "Claude Code" };
   };
+  const loginRemedy = () =>
+    new Error("Claude Code manages its own login: run `claude auth login`, then restart pi.");
   const resolve = async () => {
     requireAuthentication();
     return { auth: {}, source: "Claude Code" };
@@ -105,6 +109,18 @@ export function createAnthropicAgentSdkProvider(
         name: "Claude Code CLI authentication — run `claude auth login`",
         check,
         resolve,
+      },
+      // Never a request path: Pi only reads isSubscription from it. No credential is ever stored.
+      oauth: {
+        name: "Claude Code subscription — run `claude auth login`",
+        isSubscription: true,
+        login: async () => {
+          throw loginRemedy();
+        },
+        refresh: async () => {
+          throw loginRemedy();
+        },
+        toAuth: async () => ({}),
       },
     },
     getModels: catalog.getModels,

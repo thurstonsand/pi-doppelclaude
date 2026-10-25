@@ -7,6 +7,7 @@
 ### Added
 
 - **Extra Usage guard** — a turn Claude Code reports as billed to Extra Usage instead of your plan limits fails with a non-retryable billing error, and the query stops before Claude Code sends another request. Opt out with `doppelclaude.provider.allowExtraUsage` in pi or `DOPPELCLAUDE_ALLOW_EXTRA_USAGE=1` for the HTTP daemon. Pi's compaction summary is not guarded.
+- **Pi labels doppelclaude cost as a subscription's** — the footer shows `(sub)` after the list-price cost. Login stays with `claude auth login`; pi stores no credential.
 
 ### Fixed
 

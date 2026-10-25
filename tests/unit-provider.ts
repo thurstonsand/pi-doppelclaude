@@ -121,6 +121,8 @@ describe("native Provider shape", () => {
     assert.equal(provider.name, PROVIDER_NAME);
     assert.equal(provider.baseUrl, PROVIDER_BASE_URL);
     assert.equal(provider.auth.apiKey?.login, undefined);
+    // Pi labels usage "(sub)" only for an OAuth-checked provider whose OAuth method is a subscription.
+    assert.equal(provider.auth.oauth?.isSubscription, true);
     assert.match(
       required(provider.auth.apiKey, "ambient apiKey auth").name,
       /Claude Code CLI.*claude auth login/,
@@ -160,7 +162,7 @@ describe("ambient Claude Code auth", () => {
     const apiKey = required(provider.auth.apiKey, "ambient apiKey auth");
 
     assert.deepEqual(await apiKey.check(authInput), {
-      type: "api_key",
+      type: "oauth",
       source: "Claude Code",
     });
     assert.deepEqual(await apiKey.resolve(authInput), {
@@ -196,7 +198,7 @@ describe("ambient Claude Code auth", () => {
     await provider.refreshModels(refreshContext(true));
     assert.equal(probes, 2);
     assert.deepEqual(await apiKey.check(authInput), {
-      type: "api_key",
+      type: "oauth",
       source: "Claude Code",
     });
   });
@@ -209,7 +211,7 @@ describe("ambient Claude Code auth", () => {
     });
     await assert.rejects(provider.refreshModels(refreshContext(true)), /claude auth login/);
     assert.deepEqual(await required(provider.auth.apiKey, "ambient apiKey auth").check(authInput), {
-      type: "api_key",
+      type: "oauth",
       source: "Claude Code",
     });
   });
