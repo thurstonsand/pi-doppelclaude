@@ -160,6 +160,12 @@ describe("toolChoice", () => {
       "a toolChoice:none turn was handed pi's tools anyway",
     );
     assert.deepEqual(harness.spawned[0].options?.tools, [], "Claude Code's own tools were left on");
+    // The runtime owns the child environment for every frontend.
+    const env = harness.spawned[0].options?.env;
+    assert.equal(env?.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, "1");
+    assert.equal(env?.ENABLE_TOOL_SEARCH, "false");
+    assert.equal(env?.CLAUDE_CODE_TOTAL_TOKENS_REMINDER, "off");
+    assert.equal(env?.DISABLE_AUTO_COMPACT, "1");
   });
 
   for (const toolChoice of [undefined, "auto" as const]) {

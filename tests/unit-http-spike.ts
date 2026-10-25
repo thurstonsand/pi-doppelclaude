@@ -1175,15 +1175,9 @@ describe("native HTTP frontend", () => {
       assert.equal(request.toolNameToSdk?.get("lookup"), "mcp__custom-tools__lookup");
       assert.equal(request.effort, "high");
       assert.equal(request.maxTokens, 128_000);
-      assert.deepEqual(request.options?.tools, []);
       assert.deepEqual(request.options?.settingSources, []);
       assert.deepEqual(request.options?.thinking, { type: "adaptive" });
       assert.deepEqual(request.options?.extraArgs, { "thinking-display": "summarized" });
-      assert.equal(request.options?.env?.ENABLE_TOOL_SEARCH, "false");
-      assert.equal(request.options?.env?.DISABLE_AUTO_COMPACT, "1");
-      assert.equal(request.options?.env?.CLAUDE_CODE_DISABLE_AUTO_MEMORY, "1");
-      // The ceiling is the runtime's to apply, at spawn and on the live query alike.
-      assert.equal(request.options?.env?.CLAUDE_CODE_MAX_OUTPUT_TOKENS, undefined);
     } finally {
       await app.close();
     }

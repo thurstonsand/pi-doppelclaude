@@ -147,7 +147,7 @@ export function createCompaction(dependencies: CompactionDependencies) {
         prompt: promptText,
         options: {
           cwd,
-          env: sdkChildEnv({ DISABLE_AUTO_COMPACT: "1" }),
+          env: sdkChildEnv(),
           tools: [],
           strictMcpConfig: true,
           ...(compactSettingSources ? { settingSources: compactSettingSources } : {}),

@@ -2,6 +2,12 @@
 
 # Changelog
 
+## UNRELEASED
+
+### Fixed
+
+- **Every Claude Code subprocess gets the same environment** — the runtime now owns the child environment and spawn policy for both frontends, so a flag can no longer reach one and miss the other. The HTTP daemon now disables Claude Code's nonessential traffic (telemetry and error reporting) as pi did, pi now disables tool search as the daemon did, and both turn off Claude Code's moving total-tokens countdown.
+
 ## 0.14.13 — 2026-10-25
 
 ### Added

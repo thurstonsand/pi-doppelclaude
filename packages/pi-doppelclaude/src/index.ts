@@ -17,8 +17,6 @@ import { renderRefusalEntry } from "./refusal.js";
 import { loadBridgeSettings } from "./settings.js";
 
 export default function activate(pi: ExtensionAPI): void {
-  process.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1";
-
   const settings = loadBridgeSettings(process.cwd());
   configureDebug({
     ...settings.debug,

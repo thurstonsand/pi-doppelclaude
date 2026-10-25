@@ -17,7 +17,6 @@ import {
 import type { CoreResponseEvent, CoreResponseRecord } from "doppelclaude/core-response";
 import { canonicalClaudeModelId } from "doppelclaude/model-id";
 import type { RuntimeRequest } from "doppelclaude/runtime-request";
-import { sdkChildEnv } from "doppelclaude/sdk-child-env";
 import { prepareToolDescriptions } from "doppelclaude/tool-description-relocation";
 import sharp from "sharp";
 import { type Static, type TSchema, Type } from "typebox";
@@ -1394,7 +1393,6 @@ export function createHttpServer(options: HttpServerOptions): Server {
         signal: abort.signal,
         cwd: process.cwd(),
         options: {
-          tools: [],
           settingSources: [],
           thinking:
             body.thinking?.type === "enabled"
@@ -1406,10 +1404,6 @@ export function createHttpServer(options: HttpServerOptions): Server {
             body.thinking && "display" in body.thinking && body.thinking.display
               ? { "thinking-display": body.thinking.display }
               : undefined,
-          env: sdkChildEnv({
-            ENABLE_TOOL_SEARCH: "false",
-            DISABLE_AUTO_COMPACT: "1",
-          }),
         },
         toolNameToSdk,
         toolNameToClient,

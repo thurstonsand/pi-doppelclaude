@@ -13,7 +13,6 @@ import type {
   ToolChoice,
 } from "@earendil-works/pi-ai";
 import { makeCliDebugOptions } from "doppelclaude/debug";
-import { sdkChildEnv } from "doppelclaude/sdk-child-env";
 import { MCP_TOOL_PREFIX } from "doppelclaude/skills";
 import { descriptionExceedsCap } from "doppelclaude/tool-description-relocation";
 import { claudeCodeModelId, resolveThinkingEffort } from "./models.js";
@@ -131,12 +130,6 @@ export function planTurn(input: {
   });
   const queryOptions: Options = {
     cwd,
-    env: sdkChildEnv({ DISABLE_AUTO_COMPACT: "1" }),
-    tools: [],
-    permissionMode: "bypassPermissions",
-    allowDangerouslySkipPermissions: true,
-    includePartialMessages: true,
-    strictMcpConfig: true,
     systemPrompt,
     model: cliModel,
     extraArgs,

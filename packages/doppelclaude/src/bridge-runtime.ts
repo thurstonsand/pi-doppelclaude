@@ -1089,14 +1089,15 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies = {}
       const cliModel = request.sdkModel ?? request.model;
       const outputCeiling = request.maxTokens ?? null;
       const queryOptions: Options = {
+        ...request.options,
+        // Spawn policy every frontend shares, so none can drop or override part of it.
         cwd,
-        env: sdkChildEnv({ DISABLE_AUTO_COMPACT: "1" }),
+        env: sdkChildEnv(),
         tools: [],
         permissionMode: "bypassPermissions",
         allowDangerouslySkipPermissions: true,
         includePartialMessages: true,
         strictMcpConfig: true,
-        ...request.options,
         systemPrompt: request.systemPrompt,
         model: cliModel,
         ...(request.effort ? { effort: request.effort } : {}),

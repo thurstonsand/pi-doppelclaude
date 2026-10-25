@@ -15,8 +15,25 @@ export interface RuntimeRequest {
   maxTokens?: number;
   signal?: AbortSignal;
   cwd: string;
-  /** Frontend-prepared SDK spawn policy; runtime-owned session/MCP fields are added later. */
-  options?: Omit<Options, "cwd" | "model" | "systemPrompt" | "effort" | "mcpServers">;
+  /** Frontend-specific spawn options. The runtime owns the shared spawn policy (child env,
+   *  disabled native tools, permissions, streaming) and the session/MCP fields; a settings
+   *  overlay or custom spawner could carry an env of its own, so neither is admitted. */
+  options?: Omit<
+    Options,
+    | "cwd"
+    | "model"
+    | "systemPrompt"
+    | "effort"
+    | "mcpServers"
+    | "env"
+    | "tools"
+    | "permissionMode"
+    | "allowDangerouslySkipPermissions"
+    | "includePartialMessages"
+    | "strictMcpConfig"
+    | "settings"
+    | "spawnClaudeCodeProcess"
+  >;
   /** Client tool names to MCP-qualified SDK names, and the inverse used on output. */
   toolNameToSdk?: Map<string, string>;
   toolNameToClient?: Map<string, string>;

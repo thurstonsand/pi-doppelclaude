@@ -22,7 +22,7 @@ function anthropicBetas(): string {
   return [...betas].join(",");
 }
 
-export function sdkChildEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
+export function sdkChildEnv(): NodeJS.ProcessEnv {
   return {
     ...process.env,
     ANTHROPIC_BETAS: anthropicBetas(),
@@ -30,6 +30,13 @@ export function sdkChildEnv(extra: Record<string, string> = {}): NodeJS.ProcessE
     // Pi owns the conversation record; a bridge subprocess writing CC auto-memory
     // into ~/.claude from pi turns is state leaking outside that ownership.
     CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
-    ...extra,
+    // Also implies DISABLE_TELEMETRY and DISABLE_ERROR_REPORTING.
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+    // The caller owns its tools; deferring them behind a search tool hides them from the model.
+    ENABLE_TOOL_SEARCH: "false",
+    // The caller owns context, and the countdown it appends to tool results moves every turn.
+    CLAUDE_CODE_TOTAL_TOKENS_REMINDER: "off",
+    // The caller owns context management; Claude Code compacting on its own would desync it.
+    DISABLE_AUTO_COMPACT: "1",
   };
 }
