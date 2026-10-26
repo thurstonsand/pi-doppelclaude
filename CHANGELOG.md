@@ -15,6 +15,7 @@
 
 ### Fixed
 
+- **HTTP: `changedConfigurationFields` compares a runtime with its own last request** — a continued or reused runtime was compared with the thread's latest request, which in a thread with two runtimes (Amp's main thread beside its Oracle) reported their standing difference as a change on every alternation. An opened runtime still compares with the thread's latest request.
 - **Claude Code's silent-turn reminder is off** — Claude Code no longer tells the model the user has not heard from it in a while; the caller owns the conversation.
 - **Every Claude Code subprocess gets the same environment** — the runtime now owns the child environment and spawn policy for both frontends, so a flag can no longer reach one and miss the other. The HTTP daemon now disables Claude Code's nonessential traffic (telemetry and error reporting) as pi did, pi now disables tool search as the daemon did, and both turn off Claude Code's moving total-tokens countdown.
 

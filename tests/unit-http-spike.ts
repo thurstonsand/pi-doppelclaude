@@ -2420,10 +2420,18 @@ describe("native HTTP frontend", () => {
       assert.notEqual(executions[1][0].queryId, executions[2][0].queryId);
       assert.equal(executions[3][0].queryId, executions[0][0].queryId);
       assert.equal(completed[0].configurationFingerprint, completed[3].configurationFingerprint);
+      // The Oracle's new lane reports how it differs from main; main, continuing its own lane
+      // afterward, reports no change instead of the difference between the two lanes.
+      assert.equal(
+        completed[2].previousConfigurationFingerprint,
+        completed[1].configurationFingerprint,
+      );
+      assert.ok((completed[2].changedConfigurationFields as string[]).length > 0);
       assert.equal(
         completed[3].previousConfigurationFingerprint,
-        completed[2].configurationFingerprint,
+        completed[0].configurationFingerprint,
       );
+      assert.deepEqual(completed[3].changedConfigurationFields, []);
       assert.equal(completed[0].requestedModel, "opus");
       assert.equal(completed[0].resolvedModel, "claude-opus-5");
       assert.equal(completed[2].servedModel, "claude-fable-5-1");

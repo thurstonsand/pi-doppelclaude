@@ -1174,6 +1174,13 @@ export function createHttpServer(options: HttpServerOptions): Server {
               : lanes.sort((left, right) => left.lastActivity - right.lastActivity)[0]);
           if (existing) {
             diagnostic.lane = continued ? "continued" : "reused";
+            // A lane's settings only change against its own last request; another lane's would
+            // report the difference between the two lanes as a change.
+            if (existing.configurationFields)
+              previousConfiguration = {
+                fingerprint: existing.configurationFingerprint,
+                fields: existing.configurationFields,
+              };
             existing.busy = true;
             return existing;
           }
