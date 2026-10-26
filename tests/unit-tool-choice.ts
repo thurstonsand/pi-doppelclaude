@@ -166,6 +166,7 @@ describe("toolChoice", () => {
     assert.equal(env?.ENABLE_TOOL_SEARCH, "false");
     assert.equal(env?.CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH, "1000000");
     assert.equal(env?.CLAUDE_CODE_TOTAL_TOKENS_REMINDER, "off");
+    assert.equal(env?.CLAUDE_CODE_SILENT_TURN_REMINDER, "0");
     assert.equal(env?.DISABLE_AUTO_COMPACT, "1");
   });
 

@@ -39,6 +39,9 @@ export function sdkChildEnv(): NodeJS.ProcessEnv {
     CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH: "1000000",
     // The caller owns context, and the countdown it appends to tool results moves every turn.
     CLAUDE_CODE_TOTAL_TOKENS_REMINDER: "off",
+    // The caller owns the conversation; Claude Code telling the model the user has not heard from
+    // it in a while is a nudge the caller never asked for.
+    CLAUDE_CODE_SILENT_TURN_REMINDER: "0",
     // The caller owns context management; Claude Code compacting on its own would desync it.
     DISABLE_AUTO_COMPACT: "1",
   };
