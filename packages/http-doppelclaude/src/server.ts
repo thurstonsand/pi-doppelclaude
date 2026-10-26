@@ -336,6 +336,8 @@ export interface HttpServerOptions {
   queryFactory?: BridgeRuntimeDependencies["queryFactory"];
   createRuntime?: (threadId: string) => Runtime;
   log?: (record: Record<string, unknown>) => void;
+  /** Receives each distinct system prompt and tool list once; absent records neither. */
+  recordPrompts?: (record: Record<string, unknown>) => void;
 }
 
 export interface HttpEnvironmentConfig {
@@ -345,6 +347,7 @@ export interface HttpEnvironmentConfig {
   port: number;
   stateDir: string;
   recordRequestsPath: string | undefined;
+  recordPromptsPath: string | undefined;
   logFilePath: string | undefined;
   maxRuntimes: number;
   idleTtlMs: number;
@@ -897,6 +900,8 @@ export function createHttpServer(options: HttpServerOptions): Server {
   const log =
     options.log ??
     ((record: Record<string, unknown>) => process.stderr.write(`${JSON.stringify(record)}\n`));
+  const recordedPrompts = new Set<string>();
+  const recordedTools = new Set<string>();
   let shuttingDown = false;
   let shutdown: Promise<Error | undefined> | undefined;
   let registryTail = Promise.resolve();
@@ -1284,6 +1289,27 @@ export function createHttpServer(options: HttpServerOptions): Server {
             request: body,
           })}\n`,
         );
+      if (options.recordPrompts) {
+        const recorded = { timestamp: new Date().toISOString(), requestId, threadId: safeThreadId };
+        if (!recordedPrompts.has(configurationFields.prompt)) {
+          recordedPrompts.add(configurationFields.prompt);
+          options.recordPrompts({
+            event: "prompt",
+            ...recorded,
+            fingerprint: configurationFields.prompt,
+            prompt,
+          });
+        }
+        if (!recordedTools.has(configurationFields.tools)) {
+          recordedTools.add(configurationFields.tools);
+          options.recordPrompts({
+            event: "tools",
+            ...recorded,
+            fingerprint: configurationFields.tools,
+            tools,
+          });
+        }
+      }
       const previousFields = previousConfiguration.fields;
       const changedConfigurationFields = previousFields
         ? Object.keys(configurationFields).filter(
@@ -1698,6 +1724,9 @@ export async function httpConfigFromEnvironment(
   const recordRequestsPath = env.DOPPELCLAUDE_RECORD_REQUESTS;
   if (recordRequestsPath !== undefined && !recordRequestsPath.trim())
     throw new Error("DOPPELCLAUDE_RECORD_REQUESTS must not be blank");
+  const recordPromptsPath = env.DOPPELCLAUDE_RECORD_PROMPTS;
+  if (recordPromptsPath !== undefined && !recordPromptsPath.trim())
+    throw new Error("DOPPELCLAUDE_RECORD_PROMPTS must not be blank");
   const logFilePath = env.DOPPELCLAUDE_LOG_FILE;
   if (logFilePath !== undefined && !logFilePath.trim())
     throw new Error("DOPPELCLAUDE_LOG_FILE must not be blank");
@@ -1711,6 +1740,7 @@ export async function httpConfigFromEnvironment(
     port: integerOption(env, "PORT", 3456, 1, 65_535),
     stateDir,
     recordRequestsPath,
+    recordPromptsPath,
     logFilePath,
     maxRuntimes: integerOption(env, "DOPPELCLAUDE_MAX_RUNTIMES", 32),
     idleTtlMs: integerOption(env, "DOPPELCLAUDE_IDLE_TTL_MS", 3_600_000),

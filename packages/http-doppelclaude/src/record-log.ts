@@ -1,18 +1,20 @@
 import { appendFileSync, renameSync, statSync } from "node:fs";
 
 /**
- * Writes each structured record to stderr and, given a path, appends it to that JSONL file.
+ * Writes each structured record to stderr when `echo` is set and, given a path, appends it to that
+ * JSONL file.
  * The file rotates to `<path>.1` … `<path>.<keep>` before a record would push it past maxBytes.
  */
 export function createRecordLog(
   path: string | undefined,
   maxBytes: number,
   keep: number,
+  echo: boolean,
 ): (record: Record<string, unknown>) => void {
   let size = path === undefined ? 0 : sizeOf(path);
   return (record) => {
     const line = `${JSON.stringify(record)}\n`;
-    process.stderr.write(line);
+    if (echo) process.stderr.write(line);
     if (path === undefined) return;
     const bytes = Buffer.byteLength(line);
     if (size > 0 && size + bytes > maxBytes) {

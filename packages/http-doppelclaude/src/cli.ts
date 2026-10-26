@@ -30,6 +30,8 @@ Environment:
                                   rotated at 64 MiB, keeping 8 older files (off)
   DOPPELCLAUDE_RECORD_REQUESTS    Diagnostic: append each admitted request's prompt,
                                   tools, and history to this JSONL file (off)
+  DOPPELCLAUDE_RECORD_PROMPTS     Append each distinct system prompt and tool list once
+                                  to this JSONL file, rotated like the log file (off)
   CLAUDE_CODE_OAUTH_TOKEN         Passed unchanged to Claude Code
   CLAUDE_CONFIG_DIR               Passed unchanged to Claude Code
 

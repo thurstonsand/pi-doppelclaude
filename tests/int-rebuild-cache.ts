@@ -105,6 +105,15 @@ function rebuildOf(record: CompleteRecord) {
   return record.executions?.find((e) => e.event === "query_created")?.rebuild ?? null;
 }
 
+/** A rebuild that renders the live prefix differs from the live transcript nowhere they overlap. */
+function assertNoDivergence(label: string, record: CompleteRecord) {
+  const divergence = rebuildOf(record)?.divergence as { at: unknown } | null | undefined;
+  console.log(`${label} divergence: ${JSON.stringify(divergence)}`);
+  if (!divergence) throw new Error(`${label}: the rebuild reported no divergence check`);
+  if (divergence.at !== null)
+    throw new Error(`${label}: rebuilt transcript diverges at ${JSON.stringify(divergence.at)}`);
+}
+
 function text(value: string) {
   return { role: "user", content: [{ type: "text", text: value }] };
 }
@@ -160,6 +169,7 @@ try {
     throw new Error(`expected an own-transcript rebuild, got ${JSON.stringify(own)}`);
   if (own.emptyToolResults !== 1)
     throw new Error(`expected one empty tool result rendered, got ${own.emptyToolResults}`);
+  assertNoDivergence("own rebuild", rebuild.record);
   const warmRead = warm.record.usage?.cache_read ?? 0;
   const ownRead = rebuild.record.usage?.cache_read ?? 0;
   if (ownRead < warmRead)
@@ -189,6 +199,26 @@ try {
   );
   if (!opened || sibling?.contextSource !== "sibling")
     throw new Error(`expected a sibling-lane rebuild, got ${JSON.stringify(sibling)}`);
+  // The overlap history answers with a bare "ok" where Claude Code replied with thinking first. If
+  // the sibling copies a transcript Claude Code wrote live, its import differs exactly there, in its
+  // last group; if the first overlap request already rebuilt that lane from this history, nowhere.
+  const siblingDivergence = sibling.divergence as {
+    rebuiltGroups: number;
+    matchedGroups: number;
+    at: { role: string; sourceType: string; rebuiltType: string } | null;
+  };
+  console.log(`sibling rebuild divergence: ${JSON.stringify(siblingDivergence)}`);
+  const { at } = siblingDivergence;
+  if (
+    at !== null &&
+    (siblingDivergence.matchedGroups !== siblingDivergence.rebuiltGroups - 1 ||
+      at.role !== "assistant" ||
+      at.sourceType !== "thinking" ||
+      at.rebuiltType !== "text")
+  )
+    throw new Error(
+      `sibling rebuild misplaced its divergence: ${JSON.stringify(siblingDivergence)}`,
+    );
   const siblingRead = opened.usage?.cache_read ?? 0;
   if (siblingRead < ownRead)
     throw new Error(
@@ -249,6 +279,7 @@ try {
   const replayOwn = rebuildOf(replayRebuild.record);
   if (replayRebuild.record.sync !== "rebuild" || replayOwn?.contextSource !== "own")
     throw new Error(`expected an own-transcript rebuild, got ${JSON.stringify(replayOwn)}`);
+  assertNoDivergence("replay own rebuild", replayRebuild.record);
   const startCached =
     (start.record.usage?.cache_read ?? 0) + (start.record.usage?.cache_creation ?? 0);
   const replayRead = replayRebuild.record.usage?.cache_read ?? 0;

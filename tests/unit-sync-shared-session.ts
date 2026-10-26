@@ -251,7 +251,8 @@ describe("rebuild rendering", () => {
     const result = runtime.test.syncHostSession(history, cwd);
 
     assert.equal(result.path, "rebuild");
-    assert.deepEqual(result.rebuild, { contextSource: "own", ...counts });
+    const { divergence: _own, ...rebuild } = result.rebuild ?? {};
+    assert.deepEqual(rebuild, { contextSource: "own", ...counts });
     assert.deepEqual(shape(store.load(live.sessionId) ?? []), expected);
   });
 
@@ -269,7 +270,8 @@ describe("rebuild rendering", () => {
     const result = runtime.test.syncHostSession(history, cwd);
 
     assert.equal(result.path, "rebuild");
-    assert.deepEqual(result.rebuild, { contextSource: "sibling", ...counts });
+    const { divergence: _sibling, ...rebuild } = result.rebuild ?? {};
+    assert.deepEqual(rebuild, { contextSource: "sibling", ...counts });
     assert.ok(result.sessionId);
     assert.deepEqual(shape(store.load(result.sessionId) ?? []), expected);
   });
@@ -355,6 +357,68 @@ describe("rebuild rendering", () => {
           ),
       ).length,
       0,
+    );
+  });
+
+  // The live turn kept its signed thinking; a client that strips it from history rebuilds a
+  // transcript whose cached prefix ends at that turn. The steer Claude Code wrote as its own
+  // record renders in the same request message the history folds it into.
+  function thinkingTranscript() {
+    const live = createSession({ projectPath: cwd });
+    live.addUserMessage([{ type: "text", text: "q" }]);
+    live.addUserMessage([{ type: "text", text: "a steer" }]);
+    live.addAssistantMessage([
+      { type: "thinking", thinking: "hmm", signature: "sig" },
+      { type: "text", text: "a" },
+    ]);
+    live.addUserMessage([{ type: "text", text: "r" }]);
+    live.addAssistantMessage([{ type: "text", text: "b" }]);
+    return live;
+  }
+
+  function rebuildDivergence(firstAnswer: unknown[]) {
+    const store = new BridgeSessionStore();
+    const live = thinkingTranscript();
+    store.replace(live.sessionId, live.records);
+    const runtime = createCoreRuntime({ sessionStore: store });
+    void runtime.designateHost("host-session-id");
+    runtime.test.setHostSession({ sessionId: live.sessionId, cursor: 1, rebuildReason: "test" });
+    const result = runtime.test.syncHostSession(
+      [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "q" },
+            { type: "text", text: "a steer" },
+          ],
+        },
+        { role: "assistant", content: firstAnswer },
+        { role: "user", content: [{ type: "text", text: "r" }] },
+        { role: "assistant", content: [{ type: "text", text: "b" }] },
+        { role: "user", content: [{ type: "text", text: "next" }] },
+      ] as MessageParam[],
+      cwd,
+    );
+    assert.equal(result.path, "rebuild");
+    return result.rebuild?.divergence;
+  }
+
+  it("names the first block a rebuild renders differently from the live transcript", () => {
+    assert.deepEqual(rebuildDivergence([{ type: "text", text: "a" }]), {
+      sourceGroups: 4,
+      rebuiltGroups: 4,
+      matchedGroups: 1,
+      at: { role: "assistant", block: 0, sourceType: "thinking", rebuiltType: "text", fields: [] },
+    });
+  });
+
+  it("reports no divergence when the blocks differ only in key order", () => {
+    assert.deepEqual(
+      rebuildDivergence([
+        { signature: "sig", thinking: "hmm", type: "thinking" },
+        { text: "a", type: "text" },
+      ]),
+      { sourceGroups: 4, rebuiltGroups: 4, matchedGroups: 4, at: null },
     );
   });
 

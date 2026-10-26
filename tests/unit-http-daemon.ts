@@ -145,6 +145,51 @@ describe("HTTP daemon lifecycle", () => {
     }
   });
 
+  it("records each distinct prompt and tool list once, under the fingerprint requests log", async () => {
+    const logs: Record<string, unknown>[] = [];
+    const recorded: Record<string, unknown>[] = [];
+    const app = await openServer({
+      apiKey: key,
+      supportedModels: [],
+      log: (record) => logs.push(record),
+      recordPrompts: (record) => recorded.push(record),
+      createRuntime() {
+        return {
+          turn: successful,
+          replay: successful,
+          clear: async () => {},
+          designateHost: async () => {},
+          markRebuild: async () => {},
+        } as never;
+      },
+    });
+    try {
+      const tool = { name: "read", description: "Read a file.", input_schema: { type: "object" } };
+      const first = { ...requestBody(), tools: [tool] };
+      const changed = { ...first, system: `${first.system}\nGuidance that came and went.` };
+      for (const body of [first, first, changed]) await (await app.post(body)).text();
+
+      const completed = logs.filter((entry) => entry.event === "request_complete");
+      assert.equal(completed.length, 3);
+      const fields = completed.map((entry) => entry.configurationFields as Record<string, string>);
+      assert.deepEqual(
+        recorded.map(({ event, fingerprint }) => [event, fingerprint]),
+        [
+          ["prompt", fields[0].prompt],
+          ["tools", fields[0].tools],
+          ["prompt", fields[2].prompt],
+        ],
+      );
+      assert.notEqual(fields[2].prompt, fields[0].prompt);
+      assert.equal(recorded[0].prompt, first.system);
+      assert.equal(recorded[2].prompt, changed.system);
+      assert.deepEqual(recorded[1].tools, [tool]);
+      assert.equal(recorded[2].requestId, completed[2].requestId);
+    } finally {
+      await new Promise<void>((resolve) => app.server.close(() => resolve()));
+    }
+  });
+
   it("returns from shutdown deadline when runtime clear never settles", async () => {
     const app = await openServer({
       apiKey: key,
@@ -328,6 +373,7 @@ describe("HTTP daemon configuration", () => {
       { ...base, DOPPELCLAUDE_STATE_DIR: "  " },
       { ...base, DOPPELCLAUDE_RECORD_REQUESTS: " " },
       { ...base, DOPPELCLAUDE_LOG_FILE: " " },
+      { ...base, DOPPELCLAUDE_RECORD_PROMPTS: " " },
     ])
       await assert.rejects(httpConfigFromEnvironment(env));
   });

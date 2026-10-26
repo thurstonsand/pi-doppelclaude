@@ -120,6 +120,8 @@ interface ImportCompensations {
 export interface RebuildRendering extends ImportCompensations {
   /** Whose transcript the carried context records came from. */
   contextSource: "own" | "sibling" | "none";
+  /** Where the rebuilt transcript first differs from that one; null without a source. */
+  divergence: TranscriptDivergence | null;
 }
 
 export class Doppel {
@@ -342,6 +344,7 @@ export function applySessionSync(input: {
     rebuild: {
       contextSource: ownTranscript ? "own" : siblingTranscript ? "sibling" : "none",
       ...imported,
+      divergence: source ? transcriptDivergence(source, session.records) : null,
     },
   };
 }
@@ -382,6 +385,90 @@ function contextAttachments(entries: readonly SessionStoreEntry[]): ContextAttac
     if (!UNRENDERED_ATTACHMENTS.has(attachment.type)) attachments.push({ group, attachment });
   }
   return attachments;
+}
+
+/** Where a rebuilt transcript stops rendering what the live one did. Claude Code renders each run
+ *  of same-role records, with the context records that follow them, as one request message, so
+ *  the first differing block is where a rebuild's cached prefix ends. Names only the block type
+ *  and the fields that differ, never their content. */
+export interface TranscriptDivergence {
+  sourceGroups: number;
+  rebuiltGroups: number;
+  /** Role groups both transcripts render identically from the start. */
+  matchedGroups: number;
+  /** The first differing block; null when one transcript is a prefix of the other. */
+  at: {
+    role: string;
+    block: number;
+    sourceType: string | null;
+    rebuiltType: string | null;
+    /** Fields of that block whose values differ, when both sides have the same type. */
+    fields: string[];
+  } | null;
+}
+
+interface RenderedGroup {
+  role: string;
+  blocks: Array<Record<string, unknown>>;
+}
+
+function renderedGroups(entries: ReadonlyArray<{ type: string }>): RenderedGroup[] {
+  const groups: RenderedGroup[] = [];
+  for (const entry of entries) {
+    if (entry.type === "user" || entry.type === "assistant") {
+      if (groups.at(-1)?.role !== entry.type) groups.push({ role: entry.type, blocks: [] });
+      const content = (entry as { message?: { content?: unknown } }).message?.content;
+      const blocks = typeof content === "string" ? [{ type: "text", text: content }] : content;
+      if (Array.isArray(blocks)) groups.at(-1)?.blocks.push(...blocks);
+    } else if (entry.type === "attachment" && groups.length) {
+      const attachment = (entry as { attachment?: ContextPayload }).attachment;
+      if (attachment && !UNRENDERED_ATTACHMENTS.has(attachment.type))
+        groups.at(-1)?.blocks.push({ ...attachment, type: `attachment:${attachment.type}` });
+    }
+  }
+  return groups;
+}
+
+/** JSON with object keys sorted: key order does not reach the rendered request. */
+function canonical(value: unknown): string {
+  return JSON.stringify(value, (_key, field) =>
+    field && typeof field === "object" && !Array.isArray(field)
+      ? Object.fromEntries(Object.entries(field).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+      : field,
+  );
+}
+
+function transcriptDivergence(
+  source: ReadonlyArray<{ type: string }>,
+  rebuilt: ReadonlyArray<{ type: string }>,
+): TranscriptDivergence {
+  const live = renderedGroups(source);
+  const imported = renderedGroups(rebuilt);
+  const counts = { sourceGroups: live.length, rebuiltGroups: imported.length };
+  for (let group = 0; group < Math.min(live.length, imported.length); group++) {
+    const left = live[group];
+    const right = imported[group];
+    for (let block = 0; block < Math.max(left.blocks.length, right.blocks.length); block++) {
+      const a = left.blocks[block];
+      const b = right.blocks[block];
+      if (a && b && canonical(a) === canonical(b)) continue;
+      const sameType = a !== undefined && b !== undefined && a.type === b.type;
+      const fields = sameType
+        ? [...new Set([...Object.keys(a), ...Object.keys(b)])].filter(
+            (field) => canonical(a[field]) !== canonical(b[field]),
+          )
+        : [];
+      const at = {
+        role: left.role === right.role ? left.role : `${left.role}/${right.role}`,
+        block,
+        sourceType: typeof a?.type === "string" ? a.type : null,
+        rebuiltType: typeof b?.type === "string" ? b.type : null,
+        fields,
+      };
+      return { ...counts, matchedGroups: group, at };
+    }
+  }
+  return { ...counts, matchedGroups: Math.min(live.length, imported.length), at: null };
 }
 
 /** The index of the last message in each run of consecutive same-role messages. */

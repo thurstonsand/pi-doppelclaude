@@ -101,11 +101,16 @@ export async function runHttpDaemon(
     );
     if (!account.available)
       throw new Error("Claude Code is not authenticated with a first-party account subscription");
-    const log = createRecordLog(config.logFilePath, LOG_FILE_MAX_BYTES, LOG_FILE_KEEP);
+    const log = createRecordLog(config.logFilePath, LOG_FILE_MAX_BYTES, LOG_FILE_KEEP, true);
+    // A system prompt runs to about 100 KB, so these stay out of stderr and its journal.
+    const recordPrompts = config.recordPromptsPath
+      ? createRecordLog(config.recordPromptsPath, LOG_FILE_MAX_BYTES, LOG_FILE_KEEP, false)
+      : undefined;
     server = (dependencies.createServer ?? createHttpServer)({
       ...config,
       supportedModels: account.supportedModels,
       log,
+      recordPrompts,
     });
     await duringStartup(
       new Promise<void>((resolve, reject) => {

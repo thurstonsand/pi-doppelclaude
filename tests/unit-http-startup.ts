@@ -16,6 +16,7 @@ function config(stateDir: string): HttpEnvironmentConfig {
     port: 3456,
     stateDir,
     recordRequestsPath: undefined,
+    recordPromptsPath: undefined,
     logFilePath: undefined,
     maxRuntimes: 32,
     idleTtlMs: 1000,

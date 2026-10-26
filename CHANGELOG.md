@@ -8,6 +8,8 @@
 
 - **Extra Usage guard** — a turn Claude Code reports as billed to Extra Usage instead of your plan limits fails with a non-retryable billing error, and the query stops before Claude Code sends another request. Opt out with `doppelclaude.provider.allowExtraUsage` in pi or `DOPPELCLAUDE_ALLOW_EXTRA_USAGE=1` for the HTTP daemon. Pi's compaction summary is not guarded.
 - **Pi labels doppelclaude cost as a subscription's** — the footer shows `(sub)` after the list-price cost. Login stays with `claude auth login`; pi stores no credential.
+- **HTTP: incremental prompt log** — `DOPPELCLAUDE_RECORD_PROMPTS=<path>` appends each distinct prepared system prompt and tool list once per daemon process, keyed by the same `fingerprint` that `request_complete`'s `configurationFields.prompt` and `.tools` carry, so a configuration change in the telemetry can be diffed against the text that caused it. It stays off stderr and rotates like the telemetry file. Unlike `DOPPELCLAUDE_RECORD_REQUESTS`, it holds no history.
+- **Rebuilds report where they stopped matching** — `query_created.rebuild.divergence` compares the rebuilt transcript with the one it replaces, request message by request message, and names the first block that renders differently (`role`, `block`, the two block types, and which fields differ), or `at: null` when one is a prefix of the other. That block is where the rebuild's cached prefix ends. Only types and field names are logged.
 
 ### Changed
 
