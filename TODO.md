@@ -79,6 +79,15 @@
   `src/sdk-child-env.ts` adds it through `ANTHROPIC_BETAS`. Drop the entry once CC
   sends it, or once every served model has it GA.
 
+- **Per-result model usage is `@internal`**: since CC 2.1.310 every result
+  message carries `model_usage_since_last_result`, the calls counted since the
+  previous result, keyed and shaped like `modelUsage`. Its description says to
+  sum it rather than subtract `modelUsage` totals, because a resume or a kill
+  can move those totals. That is what `diffSdkModelUsage` and
+  `modelUsageSnapshot` reconstruct by hand. The field is stripped from the
+  public `sdk.d.ts`. Once it is published, read it and delete the snapshot
+  diff.
+
 - **No session-scoped model selection**: `AgentSession.setModel` writes the
   *global* default — `settingsManager.setDefaultModelAndProvider(...)` at
   `core/agent-session.ts:1587` marks `defaultProvider`/`defaultModel` modified

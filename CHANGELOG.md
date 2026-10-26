@@ -2,6 +2,12 @@
 
 # Changelog
 
+## UNRELEASED
+
+### Changed
+
+- Upgrade to **Agent SDK 0.3.310** (Claude Code 2.1.310).
+
 ## 0.14.14 — 2026-10-26
 
 ### Added

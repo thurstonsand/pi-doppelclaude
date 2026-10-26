@@ -1015,6 +1015,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies = {}
       const message = nativeMessages[index];
       if (message.role === "assistant") break;
       if (
+        message.role === "user" &&
         Array.isArray(message.content) &&
         message.content.some(
           (block) =>

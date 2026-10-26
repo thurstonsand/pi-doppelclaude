@@ -1433,7 +1433,8 @@ export function createHttpServer(options: HttpServerOptions): Server {
       };
       const last = normalized.messages.at(-1);
       const coldReplay =
-        Array.isArray(last?.content) &&
+        last?.role === "user" &&
+        Array.isArray(last.content) &&
         last.content.some((block) => block.type === "tool_result") &&
         (rebuild || !state.pendingTool);
       const assistantOrdinal = body.messages.filter(
