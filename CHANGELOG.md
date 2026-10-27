@@ -8,6 +8,10 @@
 
 - Upgrade to **Agent SDK 0.3.310** (Claude Code 2.1.310).
 
+### Fixed
+
+- **Rebuild divergence no longer stops at tool ids** — `query_created.rebuild.divergence` skips a tool call's `id`, its result's `tool_use_id`, and the API's `caller`, which never reach the cached prompt: a live rebuild under a client's own tool ids, without `caller`, read the whole cached prefix. Amp reassigns every tool id, so the diagnostic reported that harmless difference first and hid the one that ended the cache.
+
 ## 0.14.14 — 2026-10-26
 
 ### Added

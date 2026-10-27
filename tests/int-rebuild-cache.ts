@@ -114,6 +114,29 @@ function assertNoDivergence(label: string, record: CompleteRecord) {
     throw new Error(`${label}: rebuilt transcript diverges at ${JSON.stringify(divergence.at)}`);
 }
 
+/** The history as Amp sends it back: every tool call under an id of Amp's own, without the
+ *  direct-caller decoration the API returned. */
+function ampShaped(history: unknown[]): unknown[] {
+  const ids = new Map<string, string>();
+  return (history as Array<{ role: string; content: string | Block[] }>).map((message) =>
+    typeof message.content === "string"
+      ? message
+      : {
+          ...message,
+          content: message.content.map((block) => {
+            if (block.type === "tool_use") {
+              const { caller: _caller, ...call } = block;
+              ids.set(String(block.id), `toolu_amp${ids.size}`);
+              return { ...call, id: ids.get(String(block.id)) };
+            }
+            if (block.type === "tool_result")
+              return { ...block, tool_use_id: ids.get(String(block.tool_use_id)) };
+            return block;
+          }),
+        },
+  );
+}
+
 function text(value: string) {
   return { role: "user", content: [{ type: "text", text: value }] };
 }
@@ -163,7 +186,7 @@ try {
     { role: "assistant", content: [{ type: "text", text: "Noted; the value is fabricated-42." }] },
     text("Now say only: ok."),
   ];
-  const rebuild = await post("own rebuild", diverged);
+  const rebuild = await post("own rebuild", ampShaped(diverged));
   const own = rebuildOf(rebuild.record);
   if (rebuild.record.sync !== "rebuild" || own?.contextSource !== "own")
     throw new Error(`expected an own-transcript rebuild, got ${JSON.stringify(own)}`);
@@ -286,6 +309,40 @@ try {
   if (replayRead < startCached)
     throw new Error(
       `rebuild of a replay-started lane read ${replayRead} cached tokens, less than the ${startCached} its replay request cached: the replay's turn boundary is missing`,
+    );
+  // Amp sometimes resends a request it already sent, word for word, after the bridge answered it
+  // by continuing the warm query with its tool results. The lane's transcript then holds that
+  // answer, so the resend rebuilds; it must still read the history the first send cached.
+  const repeatThread = `T-0000000e-${String(Date.now()).slice(-4)}-4000-8000-00000000000e`;
+  const asked = [text("Look up key k0 and tell me its value.")];
+  const call = await post("repeat call", asked, repeatThread);
+  const calls = call.blocks.filter((block) => block.type === "tool_use");
+  if (!calls.length) throw new Error("the repeat lane did not call the tool");
+  const continued = [
+    ...asked,
+    { role: "assistant", content: call.blocks },
+    {
+      role: "user",
+      content: calls.map((block) => ({
+        type: "tool_result",
+        tool_use_id: block.id,
+        content: [{ type: "text", text: "value-k0" }],
+      })),
+    },
+  ];
+  const first = await post("repeat first send", continued, repeatThread);
+  if (first.record.lane !== "continued")
+    throw new Error("the first send did not continue the warm query");
+  const repeat = await post("repeat resend", ampShaped(continued), repeatThread);
+  if (rebuildOf(repeat.record)?.contextSource !== "own")
+    throw new Error(`expected the resend to rebuild its own transcript`);
+  assertNoDivergence("repeat resend", repeat.record);
+  const firstCached =
+    (first.record.usage?.cache_read ?? 0) + (first.record.usage?.cache_creation ?? 0);
+  const repeatRead = repeat.record.usage?.cache_read ?? 0;
+  if (repeatRead < firstCached)
+    throw new Error(
+      `the resend read ${repeatRead} cached tokens, less than the ${firstCached} its first send cached`,
     );
   console.log("PASS: rebuilds read the cached history");
 } finally {

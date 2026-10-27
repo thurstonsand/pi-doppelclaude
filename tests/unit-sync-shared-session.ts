@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import type { MessageParam } from "@anthropic-ai/sdk/resources";
 import type { Message as PiMessage } from "@earendil-works/pi-ai";
-import { createSession, getSessionPath } from "cc-session-io";
+import { type ContentBlock, createSession, getSessionPath } from "cc-session-io";
 import { createBridgeRuntime as createCoreRuntime } from "doppelclaude/bridge-runtime";
 import { describeSyncReason, planSessionSync } from "doppelclaude/doppel";
 import { BridgeSessionStore } from "doppelclaude/session-store";
@@ -420,6 +420,55 @@ describe("rebuild rendering", () => {
       ]),
       { sourceGroups: 4, rebuiltGroups: 4, matchedGroups: 4, at: null },
     );
+  });
+
+  it("reports no divergence for tool ids and decoration the prompt never carries", () => {
+    const store = new BridgeSessionStore();
+    const live = createSession({ projectPath: cwd });
+    live.addUserMessage([{ type: "text", text: "q" }]);
+    live.addAssistantMessage([
+      {
+        type: "tool_use",
+        id: "toolu_live",
+        name: "mcp__custom-tools__read",
+        input: { path: "a" },
+        caller: { type: "direct" },
+      } as ContentBlock,
+    ]);
+    live.addToolResults([{ toolUseId: "toolu_live", content: "A" }]);
+    live.addAssistantMessage([{ type: "text", text: "done" }]);
+    store.replace(live.sessionId, live.records);
+    const runtime = createCoreRuntime({ sessionStore: store });
+    void runtime.designateHost("host-session-id");
+    runtime.test.setHostSession({ sessionId: live.sessionId, cursor: 1, rebuildReason: "test" });
+
+    const result = runtime.test.syncHostSession(
+      [
+        { role: "user", content: [{ type: "text", text: "q" }] },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: "amp_1",
+              name: "mcp__custom-tools__read",
+              input: { path: "a" },
+            },
+          ],
+        },
+        { role: "user", content: [{ type: "tool_result", tool_use_id: "amp_1", content: "A" }] },
+        { role: "assistant", content: [{ type: "text", text: "done" }] },
+        { role: "user", content: [{ type: "text", text: "next" }] },
+      ] as MessageParam[],
+      cwd,
+    );
+
+    assert.deepEqual(result.rebuild?.divergence, {
+      sourceGroups: 4,
+      rebuiltGroups: 4,
+      matchedGroups: 4,
+      at: null,
+    });
   });
 
   it("counts the results the tool-pairing repair wrote and dropped", () => {

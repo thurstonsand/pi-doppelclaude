@@ -412,6 +412,17 @@ interface RenderedGroup {
   blocks: Array<Record<string, unknown>>;
 }
 
+/** Tool-call fields that pair a call with its result but never reach the cached prompt: a live
+ *  rebuild under a client's own tool ids, without the API's `caller`, read the live prefix whole. */
+const UNRENDERED_TOOL_FIELDS = new Set(["id", "tool_use_id", "caller"]);
+
+function rendered(block: Record<string, unknown>): Record<string, unknown> {
+  if (block.type !== "tool_use" && block.type !== "tool_result") return block;
+  return Object.fromEntries(
+    Object.entries(block).filter(([field]) => !UNRENDERED_TOOL_FIELDS.has(field)),
+  );
+}
+
 function renderedGroups(entries: ReadonlyArray<{ type: string }>): RenderedGroup[] {
   const groups: RenderedGroup[] = [];
   for (const entry of entries) {
@@ -419,7 +430,7 @@ function renderedGroups(entries: ReadonlyArray<{ type: string }>): RenderedGroup
       if (groups.at(-1)?.role !== entry.type) groups.push({ role: entry.type, blocks: [] });
       const content = (entry as { message?: { content?: unknown } }).message?.content;
       const blocks = typeof content === "string" ? [{ type: "text", text: content }] : content;
-      if (Array.isArray(blocks)) groups.at(-1)?.blocks.push(...blocks);
+      if (Array.isArray(blocks)) groups.at(-1)?.blocks.push(...blocks.map(rendered));
     } else if (entry.type === "attachment" && groups.length) {
       const attachment = (entry as { attachment?: ContextPayload }).attachment;
       if (attachment && !UNRENDERED_ATTACHMENTS.has(attachment.type))
