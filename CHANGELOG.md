@@ -2,7 +2,7 @@
 
 # Changelog
 
-## UNRELEASED
+## 0.14.15 — 2026-10-27
 
 ### Changed
 
