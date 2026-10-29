@@ -89,7 +89,7 @@
   diff.
 
 - **No session-scoped model selection**: `AgentSession.setModel` writes the
-  *global* default — `settingsManager.setDefaultModelAndProvider(...)` at
+  _global_ default — `settingsManager.setDefaultModelAndProvider(...)` at
   `core/agent-session.ts:1587` marks `defaultProvider`/`defaultModel` modified
   and saves `~/.pi/agent/settings.json`. The extension API's `setModel` routes
   to the same method, so a provider extension cannot change the session's model

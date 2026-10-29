@@ -58,12 +58,12 @@ order mechanically, two independent ways, both from the server's own responses:
    of CC's 1h system breakpoints drew a 400 whose message states: "blocks are
    processed in the following order: `tools`, `system`, `messages`."
 2. **The cache proved it.** With a 1h breakpoint on the last tool: run 1 wrote
-   6,061 tokens; run 2 with an *entirely different system prompt* read 5,457 back
+   6,061 tokens; run 2 with an _entirely different system prompt_ read 5,457 back
    and wrote only 618. A strict-prefix cache surviving a system change means the
    tool block precedes system in the serialized prompt.
 
 Consequences for this design: the `rendered-*.txt` TOOLS-first layout is the true
-adjacency; relocated text at the *top* of the pi prompt block sits closest to the
+adjacency; relocated text at the _top_ of the pi prompt block sits closest to the
 tool definitions; and a mid-session change to relocated text (respawn) invalidates
 only the system-and-later cache prefix, not the tool block ahead of it.
 

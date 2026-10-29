@@ -30,22 +30,22 @@ Four conditions, each run with the probe above. Values are tokens; `1M` =
 [Error shapes](#error-shapes)). One run predates full error-field capture (see
 the footnote below the table).
 
-| requested id              | Pro, credits off | Pro, credits on | Max, credits off | Max, credits on |
-|---------------------------|------------------|-----------------|------------------|-----------------|
-| `claude-opus-4-8`         | 200K             | 200K            | 200K             | 200K            |
-| `claude-opus-4-8[1m]`    | 1M               | 1M              | 1M               | 1M              |
-| `claude-opus-4-7`         | 1M               | 1M              | 1M               | 1M              |
-| `claude-opus-4-7[1m]`    | 1M               | 1M              | 1M               | 1M              |
-| `claude-opus-4-6`         | 200K             | 200K            | 200K             | 200K            |
-| `claude-opus-4-6[1m]`    | 429              | 1M              | 1M               | 1M              |
-| `claude-fable-5`          | 200K             | —               | —                | —               |
-| `claude-fable-5[1m]`     | 1M               | —               | —                | —               |
-| `claude-sonnet-5`         | 200K             | —               | —                | —               |
-| `claude-sonnet-5[1m]`    | 1M               | —               | —                | —               |
-| `claude-sonnet-4-6`       | 200K             | 200K            | 200K             | 200K            |
-| `claude-sonnet-4-6[1m]`  | 429              | 1M              | 429              | 1M              |
-| `claude-haiku-4-5`        | 200K             | 200K            | 200K             | 200K            |
-| `claude-haiku-4-5[1m]`   | 429†             | 400             | 400              | 400             |
+| requested id            | Pro, credits off | Pro, credits on | Max, credits off | Max, credits on |
+| ----------------------- | ---------------- | --------------- | ---------------- | --------------- |
+| `claude-opus-4-8`       | 200K             | 200K            | 200K             | 200K            |
+| `claude-opus-4-8[1m]`   | 1M               | 1M              | 1M               | 1M              |
+| `claude-opus-4-7`       | 1M               | 1M              | 1M               | 1M              |
+| `claude-opus-4-7[1m]`   | 1M               | 1M              | 1M               | 1M              |
+| `claude-opus-4-6`       | 200K             | 200K            | 200K             | 200K            |
+| `claude-opus-4-6[1m]`   | 429              | 1M              | 1M               | 1M              |
+| `claude-fable-5`        | 200K             | —               | —                | —               |
+| `claude-fable-5[1m]`    | 1M               | —               | —                | —               |
+| `claude-sonnet-5`       | 200K             | —               | —                | —               |
+| `claude-sonnet-5[1m]`   | 1M               | —               | —                | —               |
+| `claude-sonnet-4-6`     | 200K             | 200K            | 200K             | 200K            |
+| `claude-sonnet-4-6[1m]` | 429              | 1M              | 429              | 1M              |
+| `claude-haiku-4-5`      | 200K             | 200K            | 200K             | 200K            |
+| `claude-haiku-4-5[1m]`  | 429†             | 400             | 400              | 400             |
 
 Raw runs: `.test-output/context-size/{pro,max}-2026-06-26T21-*.json`
 
@@ -89,9 +89,20 @@ Same shape, `api_error_status: 400`, no `rate_limit_event`. Text varies:
 ### Served turn — e.g. `opus-4-8[1m]` → 1M
 
 ```json
-{ "subtype": "success", "is_error": false, "stop_reason": "end_turn",
-  "modelUsage": { "claude-opus-4-8[1m]": { "contextWindow": 1000000, "maxOutputTokens": 32000,
-    "inputTokens": 173, "outputTokens": 4, "costUSD": 0.000579 } } }
+{
+  "subtype": "success",
+  "is_error": false,
+  "stop_reason": "end_turn",
+  "modelUsage": {
+    "claude-opus-4-8[1m]": {
+      "contextWindow": 1000000,
+      "maxOutputTokens": 32000,
+      "inputTokens": 173,
+      "outputTokens": 4,
+      "costUSD": 0.000579
+    }
+  }
+}
 ```
 
 Allowed turns carry `rate_limit_event.status: "allowed"` plus `overageStatus` /

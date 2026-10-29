@@ -81,9 +81,14 @@ Add a provider to `opencode.json` using OpenCode's Anthropic SDK package, pointe
     "doppelclaude": {
       "npm": "@ai-sdk/anthropic",
       "name": "doppelclaude",
-      "options": { "baseURL": "https://doppelclaude.example/v1", "apiKey": "{env:DOPPELCLAUDE_API_KEY}" },
+      "options": {
+        "baseURL": "https://doppelclaude.example/v1",
+        "apiKey": "{env:DOPPELCLAUDE_API_KEY}"
+      },
       "models": {
-        "claude-opus-5-5": { "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] } },
+        "claude-opus-5-5": {
+          "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] }
+        },
         "haiku": { "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] } }
       }
     }

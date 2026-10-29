@@ -14,7 +14,7 @@ Resolves the deadlock documented in `docs/investigations/01-unmatched-tool-call-
 
 The investigation records a production deadlock: the model emitted `tool_use` with the CC-native name `bash` while running with `tools: []` (all pi tools exposed via MCP as `mcp__custom-tools__*`). Three failures compounded:
 
-1. **Name collision → unauthorized execution.** `mapSdkToolNameToPi` checks `SDK_TO_PI_TOOL_NAME` *before* the MCP map, so `bash` mapped to pi's real `bash` tool. Pi executed for ~7s a call Claude Code had already rejected internally ("No such tool available") and never dispatched.
+1. **Name collision → unauthorized execution.** `mapSdkToolNameToPi` checks `SDK_TO_PI_TOOL_NAME` _before_ the MCP map, so `bash` mapped to pi's real `bash` tool. Pi executed for ~7s a call Claude Code had already rejected internally ("No such tool available") and never dispatched.
 2. **Lost race → discarded correction.** With no MCP handler registered for the rejected call, nothing blocked the SDK generator. CC streamed the model's corrected `mcp__custom-tools__bash` call while `currentPiStream` was null (pi still executing), and the `provider-stream.ts:105` guard discarded every event of it.
 3. **Warn-and-hang.** Pi's result for the bad id matched no handler; it was parked in `pendingResults` with a warning, the corrected call's handler blocked the generator forever, and the session hung until manual abort.
 
@@ -23,7 +23,7 @@ The self-healing observed in earlier occurrences was pure ordering luck: when pi
 Concrete scenarios this design must handle:
 
 - Model emits `tool_use: bash` (or any unregistered name); CC rejects it; pi must not execute its real `bash`, the failure must persist in pi's transcript in position, and the model's follow-up must reach pi whichever side wins the race.
-- Model emits a correctly named call whose args fail the bridge's zod translation of pi's TypeBox schema; today the MCP SDK rejects before the handler, silently recreating the no-backpressure race with a *valid* name.
+- Model emits a correctly named call whose args fail the bridge's zod translation of pi's TypeBox schema; today the MCP SDK rejects before the handler, silently recreating the no-backpressure race with a _valid_ name.
 - After a rejection, the model talks at length without tool calls, or ends its turn immediately — pi asked for a continuation and must receive whatever CC produces next.
 - Pi takes arbitrarily long (e.g. 20s) to come back after the rejected call; CC's corrected valid call has already dispatched an MCP handler that is blocking the generator; pi's stale result must be dropped and the buffered correction replayed.
 - A message mixes one valid and one rejected call; the valid handler's backpressure holds while the rejected id is reconciled.
@@ -76,7 +76,7 @@ The marker is deliberately explicit: the pi TUI shows precisely what happened an
 
 ### 1. CC's transcript is ground truth for dispatch
 
-The bridge streams the model's raw output for fidelity but does not infer dispatch from it. Dispatch is what CC actually did: handler invocation is the positive signal; CC's synthesized `tool_use_error` (visible as a `tool_result` block in an SDK `user` message for an id the handler never saw) is the negative signal. This detector is route-agnostic — it catches name rejection, schema rejection, and any rejection route a future CC version invents, because CC *must* synthesize a tool_result for every tool_use to continue the conversation.
+The bridge streams the model's raw output for fidelity but does not infer dispatch from it. Dispatch is what CC actually did: handler invocation is the positive signal; CC's synthesized `tool_use_error` (visible as a `tool_result` block in an SDK `user` message for an id the handler never saw) is the negative signal. This detector is route-agnostic — it catches name rejection, schema rejection, and any rejection route a future CC version invents, because CC _must_ synthesize a tool_result for every tool_use to continue the conversation.
 
 Ordering invariant that makes the detector sufficient: CC must deliver the synthesized tool_result to the API before the model can begin generating its response to it, so rejection detection strictly precedes any event that needs buffering.
 
@@ -95,7 +95,7 @@ Marker chosen over alternatives (`unavailable__`, `rejected__`) for explicitness
 
 The zod schemas handed to `createSdkMcpServer` are the bridge's own lossy translation of pi's TypeBox schemas (`jsonSchemaToZodShape`). Any strictness delta between "CC validation" and pi is a translation artifact; when the translation is stricter, the MCP SDK rejects before the handler and silently recreates the no-backpressure race with a valid name — invisible to the name gate.
 
-Decision: keep schema *advertisement* (the model still sees pi's parameter shapes) but disarm the *rejecting* role. Implementation settled this differently than first drafted, and the simpler answer is to stop translating at all: `buildMcpServers` uses the low-level MCP `Server` instead of `createSdkMcpServer`, registers one `tools/list` handler that returns `tool.parameters` verbatim, and routes every known name straight to the blocking handler. `typebox-to-zod.ts` is deleted.
+Decision: keep schema _advertisement_ (the model still sees pi's parameter shapes) but disarm the _rejecting_ role. Implementation settled this differently than first drafted, and the simpler answer is to stop translating at all: `buildMcpServers` uses the low-level MCP `Server` instead of `createSdkMcpServer`, registers one `tools/list` handler that returns `tool.parameters` verbatim, and routes every known name straight to the blocking handler. `typebox-to-zod.ts` is deleted.
 
 The originally drafted mechanism — wrapping each zod property in `.catch(ctx => ctx.input)` — is not viable: zod v4 refuses to serialize a dynamic catch (`Dynamic catch values are not supported in JSON Schema`), so `tools/list` throws, and a static catch value serializes as `default` and drops the key from `required`. Advertising the TypeBox schema directly is both the fix and an upgrade in fidelity: unions, literals, and nested objects survive where the translation flattened objects to `record(unknown)`. `Server`'s `@deprecated` tag steers high-level users toward `McpServer`, whose pre-handler validation is precisely what must be escaped; the tag sanctions low-level use for advanced cases.
 
@@ -122,7 +122,7 @@ Query-scoped sets on `QueryContext` — `shownToolCallIds` (accumulating; replac
 
 Likewise, handlers still waiting after a full result delivery — previously the deadlock's warning symptom — now hard-fail the turn. The abort path (resolve-with-"Operation aborted") runs first and is unaffected.
 
-A hard-fail ends the turn for pi *and* force-closes the query. Reporting the desync to pi while leaving the subprocess warm was its own hang: the handler CC was blocked on never got an answer, and the context kept an `activeQuery` no turn could use, so every later turn in that conversation was read as reentrant and got a one-shot subprocess. `emitTerminalError` releases the handlers still blocked on the stream it ends, since pi answers a tool call through that stream and has just stopped being able to.
+A hard-fail ends the turn for pi _and_ force-closes the query. Reporting the desync to pi while leaving the subprocess warm was its own hang: the handler CC was blocked on never got an answer, and the context kept an `activeQuery` no turn could use, so every later turn in that conversation was read as reentrant and got a one-shot subprocess. `emitTerminalError` releases the handlers still blocked on the stream it ends, since pi answers a tool call through that stream and has just stopped being able to.
 
 ## Edge Cases & Failure Modes
 
@@ -153,7 +153,7 @@ A hard-fail ends the turn for pi *and* force-closes the query. Reporting the des
 ### Inject rejected calls as out-of-position CustomMessages / synthetic text
 
 - **Status:** Rejected
-- **Decision:** The investigation's original objection stands: transcript corruption risk, out of position. Mangling makes the failure representable *in position* as a normal toolCall + toolResult pair, which is strictly better and also round-trips through materialization.
+- **Decision:** The investigation's original objection stands: transcript corruption risk, out of position. Mangling makes the failure representable _in position_ as a normal toolCall + toolResult pair, which is strictly better and also round-trips through materialization.
 
 ### Ephemeral `piUI.notify` for rejected calls
 

@@ -20,7 +20,7 @@ mise run check      # offline verification: lint + typecheck + unit tests
 mise run test       # full suite: unit + integration
 
 # Individual steps
-mise run lint:biome                                 # TypeScript and JSON
+mise run lint:biome                                 # TypeScript, JSON, and Markdown
 mise run typecheck
 mise run test:unit                                  # offline unit suite (tests/unit-*.ts)
 node --import tsx --test tests/unit-models.ts       # single unit file

@@ -61,10 +61,10 @@ This was a real Amp-to-recorder experiment, not a replay. Amp CLI `0.0.178968880
 
 Two threads used identical prompts, mode instructions, working directory, title, and connection. Three user turns per thread were interleaved A1, B1, A2, B2, A3, B3. Every user turn caused two HTTP requests: the initial request and the tool-result continuation. Each follow-up launched a fresh CLI process using `amp threads continue`. The recorder was restarted before A3; its fingerprint key persisted.
 
-| Ground-truth thread | User turns | Inference requests | Requests containing its actual ID | Message counts |
-| --- | ---: | ---: | ---: | --- |
-| [A](https://ampcode.com/threads/T-01a0b1e4-bcfb-7776-9cc0-707b6dbc9d4c) | 3 | 6 | 6 | 1, 3, 5, 7, 9, 11 |
-| [B](https://ampcode.com/threads/T-01a0b1e5-0bfa-7179-b8b9-2848d2f64025) | 3 | 6 | 6 | 1, 3, 5, 7, 9, 11 |
+| Ground-truth thread                                                     | User turns | Inference requests | Requests containing its actual ID | Message counts    |
+| ----------------------------------------------------------------------- | ---------: | -----------------: | --------------------------------: | ----------------- |
+| [A](https://ampcode.com/threads/T-01a0b1e4-bcfb-7776-9cc0-707b6dbc9d4c) |          3 |                  6 |                                 6 | 1, 3, 5, 7, 9, 11 |
+| [B](https://ampcode.com/threads/T-01a0b1e5-0bfa-7179-b8b9-2848d2f64025) |          3 |                  6 |                                 6 | 1, 3, 5, 7, 9, 11 |
 
 Ground truth came from each CLI run's `system/init.session_id` and the controlled request order, not from choosing an ID in the request. The recorder HMACed every scalar request field and every embedded thread ID. Assertions matched each actual CLI thread ID against all six requests in its group. After detecting the IDs, an exact-prefix detector confirmed the `Amp Thread URL:` label in the final four requests; the whole system text fingerprint was unchanged across all six requests within each thread.
 

@@ -12,7 +12,7 @@ Claude Code truncates every MCP tool description at a hard-coded cap (2048 chars
 
 The pi-mcp-adapter's `mcp` proxy tool concentrates an entire MCP gateway into one tool description: server list, per-server instructions, usage table, mode precedence. With one server (`ha-mcp`) configured to inline its full 1,857-char MCP `instructions`, that description reaches 3,111 characters.
 
-Claude Code renders each MCP tool into the prompt via a `prompt()` accessor that hard-slices at a minified constant (`sne`/`Dre` = 2048, depending on build) and appends `… [truncated]`. The observed result in a live doppelclaude session: the model's copy of the `mcp` description stops mid-bullet at byte 2048, losing the tail of the server instructions *and the entire usage table* — the tool's own calling conventions. The same session running through the OpenAI provider sees everything, because only the Claude Code path truncates.
+Claude Code renders each MCP tool into the prompt via a `prompt()` accessor that hard-slices at a minified constant (`sne`/`Dre` = 2048, depending on build) and appends `… [truncated]`. The observed result in a live doppelclaude session: the model's copy of the `mcp` description stops mid-bullet at byte 2048, losing the tail of the server instructions _and the entire usage table_ — the tool's own calling conventions. The same session running through the OpenAI provider sees everything, because only the Claude Code path truncates.
 
 The constant is lexical — no env var, no SDK option (`MCP_TOOL_TIMEOUT` and `MCP_CONNECTION_NONBLOCKING` exist; nothing for length). The fix cannot live in the pi-mcp-adapter without baking one host's quirk into a host-agnostic package. It belongs in the layer that introduced Claude Code into the stack: this bridge.
 
@@ -28,7 +28,7 @@ The bridge holds both ends of the escape route. It owns the ListTools response (
 
 - Fixing or configuring Claude Code's cap itself (upstream, lexical constant).
 - Making the pi-mcp-adapter aware of Claude Code (host-agnostic package; its own `instructionsLength` knob is a separate, complementary change).
-- Relocating MCP *server* instructions of servers CC connects to directly (none exist in this bridge; CC-native tools are disabled).
+- Relocating MCP _server_ instructions of servers CC connects to directly (none exist in this bridge; CC-native tools are disabled).
 - The compaction path (`tools: []`, no MCP servers — nothing to relocate).
 
 ## Exposed Shape
@@ -39,9 +39,9 @@ The bridge holds both ends of the escape route. It owns the ListTools response (
 {
   "doppelclaude": {
     "provider": {
-      "toolDescriptionCap": 2048  // unset = probe the CC binary, fallback 2048
-                                  // number = manual cap, no probe
-                                  // false  = relocation disabled
+      "toolDescriptionCap": 2048 // unset = probe the CC binary, fallback 2048
+      // number = manual cap, no probe
+      // false  = relocation disabled
     }
   }
 }
@@ -67,7 +67,7 @@ The Anthropic API serializes `tools` before `system` (proven mechanically — se
 
 ### 1. Relocate, not splice or duplicate
 
-Three mechanisms were considered: splice the post-2048 overflow into the system prompt (zero duplication, but welded to CC's exact slice point — silent gap or overlap when the constant drifts), duplicate the full description in both places (robust, ~2KB duplicated per oversized tool per request), and relocate (stub advertised, full text in system prompt only). Relocation is the only shape where correctness never depends on reverse-engineered CC internals: the cap decides *when* to relocate, never *where* to cut. Its cost is weaker adjacency between the tool entry and its description, mitigated by a deterministic section label the stub names exactly.
+Three mechanisms were considered: splice the post-2048 overflow into the system prompt (zero duplication, but welded to CC's exact slice point — silent gap or overlap when the constant drifts), duplicate the full description in both places (robust, ~2KB duplicated per oversized tool per request), and relocate (stub advertised, full text in system prompt only). Relocation is the only shape where correctness never depends on reverse-engineered CC internals: the cap decides _when_ to relocate, never _where_ to cut. Its cost is weaker adjacency between the tool entry and its description, mitigated by a deterministic section label the stub names exactly.
 
 ### 2. Generic over all bridged tools
 
@@ -83,7 +83,7 @@ A relocated tool's advertised description is the empty string, and the relocatio
 
 ### 5. Relocated text rides `spawnSignature`
 
-The relocation section is part of the system prompt built in `planTurn`, which already folds `systemPrompt` into `spawnSignature`. A mid-session change to an oversized description therefore replaces the CC process (with session resume) instead of the cheap in-place MCP reconcile that description changes trigger today. Accepted deliberately: if the model's primary copy of a description lives in the system prompt, a stale copy is a lie, and the event is rare (adapter metadata refreshes; `freezeDirectTools` exists upstream for users who want none). Short-description changes still take the reconcile path — `mcpSignature` continues to hash the *original* tool list. Because tools precede system in the serialized prompt, such a respawn invalidates the cache only from the system blocks onward; the tool-block prefix stays warm.
+The relocation section is part of the system prompt built in `planTurn`, which already folds `systemPrompt` into `spawnSignature`. A mid-session change to an oversized description therefore replaces the CC process (with session resume) instead of the cheap in-place MCP reconcile that description changes trigger today. Accepted deliberately: if the model's primary copy of a description lives in the system prompt, a stale copy is a lie, and the event is rare (adapter metadata refreshes; `freezeDirectTools` exists upstream for users who want none). Short-description changes still take the reconcile path — `mcpSignature` continues to hash the _original_ tool list. Because tools precede system in the serialized prompt, such a respawn invalidates the cache only from the system blocks onward; the tool-block prefix stays warm.
 
 ### 6. Relocated block in harness vocabulary, placed after the identity paragraph
 
