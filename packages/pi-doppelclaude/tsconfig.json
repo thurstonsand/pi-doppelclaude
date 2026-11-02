@@ -1,5 +1,12 @@
 {
   "extends": "../../tsconfig.base.json",
-  "compilerOptions": { "rootDir": "src", "outDir": "dist", "declaration": true },
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "declaration": true,
+    // pi-schema's `Static` reads an all-optional schema such as pi's ThinkingLevelMap as `unknown`
+    // without strictNullChecks, where `unknown` is assignable to every weak type.
+    "strictNullChecks": true
+  },
   "include": ["src/**/*.ts"]
 }

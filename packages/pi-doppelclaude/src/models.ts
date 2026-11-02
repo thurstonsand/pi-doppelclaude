@@ -1,5 +1,5 @@
 import type { EffortLevel } from "@anthropic-ai/claude-agent-sdk";
-import type { Api, Model, ThinkingLevelMap } from "@earendil-works/pi-ai";
+import type { Api, Model, ModelThinkingLevel, ThinkingLevelMap } from "@earendil-works/pi-ai";
 
 export const PROVIDER_ID = "doppelclaude";
 export const PROVIDER_NAME = "Doppelclaude";
@@ -140,8 +140,8 @@ const REASONING_TO_EFFORT: Record<string, EffortLevel> = {
 };
 
 export function resolveThinkingEffort(
-  model: { thinkingLevelMap?: Record<string, string | null> } | undefined,
-  reasoning: string | undefined,
+  model: Model<Api> | undefined,
+  reasoning: ModelThinkingLevel | undefined,
 ): EffortLevel | undefined {
   if (!reasoning || reasoning === "off") return undefined;
   return (

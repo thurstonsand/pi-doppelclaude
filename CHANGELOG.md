@@ -2,6 +2,12 @@
 
 # Changelog
 
+## UNRELEASED
+
+### Fixed
+
+- **pi 1.5.0 no longer fails every request in `"pi"` and `"append"` modes** — pi 1.5.0 reworded its opening line and documentation heading, which the system prompt rewrite rejected as an unrecognised preamble. The rewrite now recognises both pi 1.5.0's wording and pi 1.4.0's, so a host can update pi before or after doppelclaude.
+
 ## 0.14.16 — 2026-11-02
 
 ### Added

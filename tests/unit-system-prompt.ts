@@ -3,7 +3,13 @@ import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import type { SystemMessage } from "@earendil-works/pi-ai";
 import { buildClaudeSystemPrompt, rewritePiSystemPrompt } from "pi-doppelclaude/system-prompt";
-import { PI_DOCS_HEADING, PI_IDENTITY, piSystemMessage } from "./lib/pi-prompt.js";
+import {
+  PI_1_4_DOCS_HEADING,
+  PI_1_4_IDENTITY,
+  PI_DOCS_HEADING,
+  PI_IDENTITY,
+  piSystemMessage,
+} from "./lib/pi-prompt.js";
 
 const SYSTEM_MESSAGE = piSystemMessage();
 
@@ -231,6 +237,71 @@ describe("rewritePiSystemPrompt", () => {
       type: "preset",
       preset: "claude_code",
     });
+  });
+});
+
+describe("pi's own system prompt", () => {
+  const PI_WORDING = [PI_IDENTITY, PI_DOCS_HEADING, PI_1_4_IDENTITY, PI_1_4_DOCS_HEADING];
+
+  it("rewrites the prompt the installed pi builds", async () => {
+    // Not in pi's export map, but it is the builder pi's agent loop calls for every turn.
+    const builder = (await import(
+      new URL(
+        "../node_modules/@earendil-works/pi-coding-agent/dist/core/system-prompt.js",
+        import.meta.url,
+      ).href
+    )) as {
+      buildSystemPromptState(input: {
+        cwd: string;
+        selectedTools: string[];
+        toolSnippets: Record<string, string>;
+      }): Pick<SystemMessage, "content" | "sections">;
+    };
+    const state = builder.buildSystemPromptState({
+      cwd: "/work",
+      selectedTools: ["read", "bash"],
+      toolSnippets: { read: "Read file contents", bash: "Run shell commands" },
+    });
+    const rewritten = rewritePiSystemPrompt(
+      { role: "system", content: state.content, sections: state.sections, timestamp: 0 },
+      REPLACEMENTS,
+    );
+
+    assert.ok(rewritten.startsWith("Custom identity.\n\nCustom tool note.\n\n<tools>\n- read:"));
+    assert.match(rewritten, /<docs>\nCustom docs:\n- Main documentation: .+\/README\.md\n/);
+    assert.match(rewritten, /\(extensions, custom tools, SDK\)\nCustom instructions\.\n<\/docs>/);
+    for (const wording of PI_WORDING) assert.ok(!rewritten.includes(wording), wording);
+  });
+
+  it("still rewrites pi 1.4.0's wording", () => {
+    const current = piSystemMessage();
+    const sections = current.sections ?? {};
+    const rewritten = rewritePiSystemPrompt(
+      {
+        ...current,
+        sections: {
+          ...sections,
+          preamble: PI_1_4_IDENTITY,
+          docs: sections.docs?.replace(PI_DOCS_HEADING, PI_1_4_DOCS_HEADING) ?? null,
+        },
+      },
+      REPLACEMENTS,
+    );
+
+    assert.ok(rewritten.startsWith("Custom identity."));
+    assert.match(rewritten, /<docs>\nCustom docs:\n/);
+    for (const wording of PI_WORDING) assert.ok(!rewritten.includes(wording), wording);
+  });
+
+  it("refuses to send pi 1.4.0's wording carried as flat text", () => {
+    assert.throws(
+      () =>
+        rewritePiSystemPrompt(
+          { role: "system", content: PI_1_4_IDENTITY, timestamp: 0 },
+          REPLACEMENTS,
+        ),
+      /still contains "You are an expert coding assistant/,
+    );
   });
 });
 

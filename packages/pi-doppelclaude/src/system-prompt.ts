@@ -8,9 +8,21 @@ export function settingSourcesFor(systemPromptMode: string): SettingSource[] | u
   return systemPromptMode === "pi" ? [] : undefined;
 }
 
-const PI_IDENTITY_PROMPT = `You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.`;
+// Pi rewords its prompt between releases, and hosts update pi on their own schedule, so the
+// rewrite knows the current wording and the release before it, newest first.
+const PI_IDENTITY_PROMPTS = [
+  // pi 1.5.0
+  `You are a coding assistant running inside pi, a coding agent harness. Help users inspect files, run commands, and modify code.`,
+  // pi 1.4.0
+  `You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.`,
+];
 
-const PI_DOCS_HEADING = `Pi documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):`;
+const PI_DOCS_HEADINGS = [
+  // pi 1.5.0
+  `Pi documentation (read only when the user asks about the harness itself, its SDK, extensions, themes, skills, or TUI):`,
+  // pi 1.4.0
+  `Pi documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):`,
+];
 
 // The docs section's paths are discovered from the running install, so they are kept as-is
 // while the prose around them is replaced.
@@ -41,7 +53,7 @@ function rewriteDocsSection(
   documentation: SystemPromptReplacements["documentation"],
 ): string {
   // An extension can replace pi's docs section by name; its own docs carry no pi wording.
-  if (!section.includes(PI_DOCS_HEADING)) return section;
+  if (!PI_DOCS_HEADINGS.some((heading) => section.includes(heading))) return section;
   const pathLines = section
     .split("\n")
     .filter((line) => PI_DOCS_PATH_PREFIXES.some((prefix) => line.startsWith(prefix)));
@@ -96,13 +108,13 @@ export function rewritePiSystemPrompt(
   // by those sections as well as by its preamble text keeps a reworded preamble from slipping
   // past both the rewrite and the wording check below.
   const sections = message.sections;
+  const knownPreamble = PI_IDENTITY_PROMPTS.includes(sections?.preamble ?? "");
   const piBuilt =
     !!sections &&
-    (sections.preamble === PI_IDENTITY_PROMPT ||
-      ("tools" in sections && "rules" in sections && "docs" in sections));
-  if (piBuilt && sections.preamble !== PI_IDENTITY_PROMPT) {
+    (knownPreamble || ("tools" in sections && "rules" in sections && "docs" in sections));
+  if (piBuilt && !knownPreamble) {
     throw new Error(
-      `doppelclaude: pi built its default system prompt with a preamble the rewrite does not recognise, so this pi version reworded it; update PI_IDENTITY_PROMPT in system-prompt.ts to match`,
+      `doppelclaude: pi built its default system prompt with a preamble the rewrite does not recognise, so this pi version reworded it; update PI_IDENTITY_PROMPTS in system-prompt.ts to match`,
     );
   }
   const rewritten = piBuilt
@@ -114,7 +126,7 @@ export function rewritePiSystemPrompt(
   // from `event.systemPrompt` forces pi's own prompt already rendered — neither is reachable by
   // replacing sections. Leaking pi's wording is the failure this rewrite exists to prevent, so
   // every prompt is checked on the way out rather than trusted for having the expected shape.
-  for (const wording of [PI_IDENTITY_PROMPT, PI_DOCS_HEADING]) {
+  for (const wording of [...PI_IDENTITY_PROMPTS, ...PI_DOCS_HEADINGS]) {
     if (rewritten.includes(wording)) throw survivingPiWordingError(wording);
   }
   return rewritten;
