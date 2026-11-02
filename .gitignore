@@ -1,5 +1,6 @@
 node_modules/
 packages/*/dist/
+packages/pi-doppelclaude/CHANGELOG.md
 .claude/
 .test-output/
 eli/.DS_Store

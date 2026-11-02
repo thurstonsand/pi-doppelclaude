@@ -2,7 +2,13 @@
 
 # Changelog
 
-## 0.14.17 — 2026-11-02
+## [Unreleased]
+
+### Added
+
+- **pi shows what changed after an update** — pi-doppelclaude now ships this changelog, so the first time pi starts after an upgrade it shows the entries since the version you had.
+
+## [0.14.17] - 2026-11-02
 
 ### Changed
 
@@ -15,13 +21,13 @@
 - **pi 1.5.0 no longer fails every request in `"pi"` and `"append"` modes** — pi 1.5.0 reworded its opening line and documentation heading, which the system prompt rewrite rejected as an unrecognised preamble. The rewrite now recognises pi 1.5.0's wording.
 - **Large tool calls no longer stall pi while they stream** — the bridge parsed a tool call's whole argument text again on every streamed piece, once in the core and once more for pi, so a 300 KB `write` spent about 9 seconds of CPU blocking pi's display. The core now parses each tool call once, when it ends, and pi's live preview uses pi's own incremental parser, as pi's built-in providers have since 1.5.0. A tool call cut off mid-stream keeps the arguments it had streamed.
 
-## 0.14.16 — 2026-11-02
+## [0.14.16] - 2026-11-02
 
 ### Added
 
 - **HTTP: every structured record names its release** — `startup`, `request_complete`, and `runtime_close` carry the daemon's `version`, so cache behaviour in the telemetry can be compared release against release. Images built from `main` report `0.0.0`.
 
-## 0.14.15 — 2026-10-27
+## [0.14.15] - 2026-10-27
 
 ### Changed
 
@@ -31,7 +37,7 @@
 
 - **Rebuild divergence no longer stops at tool ids** — `query_created.rebuild.divergence` skips a tool call's `id`, its result's `tool_use_id`, and the API's `caller`, which never reach the cached prompt: a live rebuild under a client's own tool ids, without `caller`, read the whole cached prefix. Amp reassigns every tool id, so the diagnostic reported that harmless difference first and hid the one that ended the cache.
 
-## 0.14.14 — 2026-10-26
+## [0.14.14] - 2026-10-26
 
 ### Added
 
@@ -50,13 +56,13 @@
 - **Claude Code's silent-turn reminder is off** — Claude Code no longer tells the model the user has not heard from it in a while; the caller owns the conversation.
 - **Every Claude Code subprocess gets the same environment** — the runtime now owns the child environment and spawn policy for both frontends, so a flag can no longer reach one and miss the other. The HTTP daemon now disables Claude Code's nonessential traffic (telemetry and error reporting) as pi did, pi now disables tool search as the daemon did, and both turn off Claude Code's moving total-tokens countdown.
 
-## 0.14.13 — 2026-10-25
+## [0.14.13] - 2026-10-25
 
 ### Added
 
 - **HTTP: telemetry that survives restarts** — `DOPPELCLAUDE_LOG_FILE=<path>` also appends the daemon's structured records (`startup`, `request_complete`, `runtime_close`) to a JSONL file that rotates at 64 MiB and keeps eight older files. Records written only to stderr lasted as long as the log driver kept them: Docker's default driver deletes them with the container, and a shared journal can evict them within hours.
 
-## 0.14.12 — 2026-10-24
+## [0.14.12] - 2026-10-24
 
 ### Changed
 
@@ -70,7 +76,7 @@
 
 - **Rebuilds of lanes that started on tool results keep the prompt cache** — when a runtime's first request ends in tool results (after a restart, an idle expiry, or a new lane beside a busy one), Claude Code writes a `No response requested.` turn and the replay prompt between those results and the reply, and every later live request carries them. A rebuild without them read nothing past the system prompt and tools. Rebuilds now put each such boundary back where the previous transcript had it. They also see the turn in flight: transcripts are now mirrored into the session store as Claude Code writes them instead of once per turn, so a rebuild arriving mid tool loop no longer reads a transcript missing that turn's context records and boundary, which also left 0.14.11's context carrying with nothing to carry in most Amp rebuilds. On a recorded Opus Amp conversation, the own rebuild of a replay-started lane went from reading 48,770 cached tokens (system and tools) and writing 13,888 to reading 61,275 and writing 1,435. `query_created.rebuild` gains `turnBoundaries` and `skippedTurnBoundaries`.
 
-## 0.14.11 — 2026-10-21
+## [0.14.11] - 2026-10-21
 
 ### Added
 
@@ -80,19 +86,19 @@
 
 - **Rebuilds keep the prompt cache** — a rebuilt transcript now renders the prompt the live query sent, so a rebuild reads the cached history instead of re-caching everything after the system prompt and tools. Claude Code keeps its injected context (environment, model, date, token budget) as transcript records after the prompt it arrived with; a rebuild without them got that context injected at the new tail, which changed message 0. Rebuilds now carry those records from the conversation's previous transcript, or, for a new HTTP runtime beside a busy one, from that sibling's, and render empty tool results the way Claude Code does live. Images and results large enough for Claude Code to persist to disk still render differently, so a rebuild re-caches from the first of those.
 
-## 0.14.10 — 2026-10-21
+## [0.14.10] - 2026-10-21
 
 ### Changed
 
 - Upgrade to **Agent SDK 0.3.303** (Claude Code 2.1.303).
 
-## 0.14.9 — 2026-10-17
+## [0.14.9] - 2026-10-17
 
 ### Fixed
 
 - **HTTP: no more "another request for this conversation is active"** — a thread can now hold several warm runtimes. When Amp resends a request whose stream dropped before the daemon saw the disconnect, or runs Oracle calls (sometimes in parallel) under the parent thread's marker, the overlapping request gets its own runtime instead of a 409. Each request continues the idle runtime that last served exactly its history and settings, so switching between main and Oracle no longer rebuilds the main conversation. `request_complete` records gain `lane` (`continued`, `reused`, `opened`) and `threadRuntimes`.
 
-## 0.14.8 — 2026-10-16
+## [0.14.8] - 2026-10-16
 
 ### Added
 
@@ -102,19 +108,19 @@
 
 - Upgrade to **Pi 1.3.0**, **Agent SDK 0.3.301** (Claude Code 2.1.301), and **Anthropic SDK 0.135**.
 
-## 0.14.7 — 2026-10-15
+## [0.14.7] - 2026-10-15
 
 ### Added
 
 - **HTTP: inbound request recording** — `DOPPELCLAUDE_RECORD_REQUESTS=<path>` appends one JSON line per admitted Messages request with the prepared system prompt, tools, full request body, and the `requestId`, thread, and model fields that correlate it with `request_complete`. Off by default; it writes prompts and history to disk, so use it only for a capture. `request_complete` records remain hash-only.
 
-## 0.14.6 — 2026-10-14
+## [0.14.6] - 2026-10-14
 
 ### Fixed
 
 - **HTTP: long-prompt Amp titles no longer fail** — markerless one-shot requests are now admitted up to 32 KiB of serialized context, up from 16 KiB. A thread whose first message pushed its title request past the old cap was rejected on every retry and never got a title. Multi-message and tool-bearing requests are still refused without a marker.
 
-## 0.14.5 — 2026-10-12
+## [0.14.5] - 2026-10-12
 
 ### Changed
 
@@ -125,19 +131,19 @@
 
 - **Long tool descriptions stay in the tool list** — Claude Code 2.1.295 reshaped how it sets its MCP description cap, and the probe misread it as ~1000 characters, relocating any tool description longer than that into the system prompt. The probe now reads the real 4096-character cap, and the fallback when it cannot is 4096 instead of 2048.
 
-## 0.14.4 — 2026-10-09
+## [0.14.4] - 2026-10-09
 
 ### Fixed
 
 - **HTTP: thinking-less history no longer rebuilds every turn** — Amp sends some threads (those that switched providers) with every thinking block stripped. History matching now ignores assistant thinking, so those threads reuse the live query instead of re-uploading their whole history on every tool call.
 
-## 0.14.3 — 2026-10-09
+## [0.14.3] - 2026-10-09
 
 ### Changed
 
 - Upgrade to **Agent SDK 0.3.295**, which serves **Haiku 5.5** as `claude-haiku-5-5`.
 
-## 0.14.2 — 2026-10-06
+## [0.14.2] - 2026-10-06
 
 ### Changed
 
@@ -145,13 +151,13 @@
 - **HTTP frontend tracks Anthropic SDK 0.131** — response messages now carry `diagnostics: null`, matching the current Messages API shape.
 - The container image's Node 24 base is refreshed.
 
-## 0.14.1 — 2026-10-02
+## [0.14.1] - 2026-10-02
 
 ### Fixed
 
 - **Survive slow answers to rejected tool calls** — when Claude Code rejects a misnamed tool call and retries with the right name before the client returns the rejection's error, the bridge no longer mistakes the retried call for a stuck handler and tears down the query. Amp, which takes seconds to answer, previously saw its turn end empty mid-task; Pi always answered first and never hit it.
 
-## 0.14.0 - 2026-09-30
+## [0.14.0] - 2026-09-30
 
 ### Added
 
@@ -168,31 +174,31 @@
 - **Honor Pi's output ceiling** — `maxTokens` reaches Claude Code, and payload hooks can change it through `max_tokens`.
 - **Keep the requested model visible after refusal fallback** — record the served model as `responseModel`, allowing Pi to account for each model separately.
 
-## 0.13.1 — 2026-09-27
+## [0.13.1] - 2026-09-27
 
 ### Fixed
 
 - **Keep the cache across output-ceiling changes** — `max_tokens` is applied to the live query instead of rebuilding it, so Amp's compaction (summary at 16384, compacted thread at 32000) no longer forfeits the cached prompt prefix twice per compaction. A reply the model stops at the ceiling now ends there, instead of Claude Code silently asking the model to continue.
 
-## 0.13.0 — 2026-09-27
+## [0.13.0] - 2026-09-27
 
 ### Added
 
 - **Serve OpenCode alongside Amp** — the HTTP frontend keys OpenCode conversations by its `X-Session-Id` header, runs its title and compaction requests as isolated one-shots, and replaces OpenCode's environment-block heading, which upstream otherwise rejects as extra usage, with wording from `DOPPELCLAUDE_HTTP_OPENCODE_ENVIRONMENT_HEADING`.
 
-## 0.12.4 — 2026-09-24
+## [0.12.4] - 2026-09-24
 
 ### Fixed
 
 - **Serve split steers on the live query** — when Amp answers a tool call with the results in one user message and the user's mid-turn text in a second, the HTTP frontend now delivers both to the waiting query instead of rebuilding the conversation cold.
 
-## 0.12.3 — 2026-09-23
+## [0.12.3] - 2026-09-23
 
 ### Fixed
 
 - **Preserve warm tool continuations** — avoid unnecessary history rebuilds (breaks cache) when Amp omits direct-call metadata or changes JSON object-key order.
 
-## 0.12.2 — 2026-09-23
+## [0.12.2] - 2026-09-23
 
 ### Changed
 
@@ -203,7 +209,7 @@
 
 - pi reworded its system prompt, so two of the three passages were no longer getting replaced. Updated wording to match the new prompt.
 
-## 0.12.1 — 2026-09-23
+## [0.12.1] - 2026-09-23
 
 ### Added
 
@@ -219,7 +225,7 @@
 
 - **Instruction examples no longer break Amp thread identification** — ignore balanced `<instructions>...</instructions>` regions when finding the thread marker. Unbalanced wrappers fall back to validating the full prompt; malformed or duplicate markers still return 400.
 
-## 0.12.0 — 2026-09-22
+## [0.12.0] - 2026-09-22
 
 ### Added
 
@@ -233,13 +239,13 @@
 
 - **Tool-description cap detection supports Claude Code 2.1.278** — recognize the generalized truncation helper in current native binaries and invalidate cached fallback results when the probe changes.
 
-## 0.11.0 — 2026-09-11
+## [0.11.0] - 2026-09-11
 
 ### Added
 
 - **`oauthTokenCommand` setting** — a command that prints a long-lived subscription token, run once at startup to populate `CLAUDE_CODE_OAUTH_TOKEN` for the Claude Code subprocesses. Allows for pulling credentials from a password manager.
 
-## 0.10.1 — 2026-09-03
+## [0.10.1] - 2026-09-03
 
 ### Added
 
@@ -257,7 +263,7 @@
 - Bump to pi 0.84.3
 - Improved logging of session rebuilds so that it's easier to track why
 
-## 0.10.0 — 2026-08-16
+## [0.10.0] - 2026-08-16
 
 ### Fixed
 
@@ -268,7 +274,7 @@
 
 - **`toolDescriptionCap` setting** — unset probes the Claude Code binary for its actual limit, a number pins it, `false` turns the relocation off.
 
-## 0.9.0 — 2026-08-06
+## [0.9.0] - 2026-08-06
 
 ### Changed
 
@@ -282,13 +288,13 @@
 
 - **A logged-out Claude Code is reported as such** — instead of Pi's misleading "No API key found for doppelclaude" pointing at the unrelated `/login` flow, auth failures now name `claude auth login` and the restart/`/model` recovery paths.
 
-## 0.8.2 — 2026-08-04
+## [0.8.2] - 2026-08-04
 
 ### Fixed
 
 - **`/reload` no longer breaks the session with "Unsupported Doppelclaude model"** — after a reload, the next message could fail with `Unsupported Doppelclaude model: doppelclaude/<model>`, and stayed broken until the model was picked again from `/model`.
 
-## 0.8.1 — 2026-08-04
+## [0.8.1] - 2026-08-04
 
 A review pass over upstream [`pi-claude-bridge`](https://github.com/elidickinson/pi-claude-bridge)'s recent activity; the fixes below are ported from it.
 
@@ -304,7 +310,7 @@ A review pass over upstream [`pi-claude-bridge`](https://github.com/elidickinson
 - **Tests now replay real recorded Claude Code streams** — instead of hand-written imitations. Re-record on an SDK bump and the diff shows exactly what the SDK changed.
 - **Diagnostic tools for inspecting Claude Code's API traffic** — a capture proxy and a request differ in `diag/`, plus a doc of confirmed findings about caching and a resume-ordering bug in CC itself.
 
-## 0.8.0 — 2026-08-02
+## [0.8.0] - 2026-08-02
 
 ### Added
 
@@ -331,7 +337,7 @@ A review pass over upstream [`pi-claude-bridge`](https://github.com/elidickinson
 
 ---
 
-## 0.7.0 — 2026-07-28
+## [0.7.0] - 2026-07-28
 
 The fork's first release. Between 0.6.2 and here, essentially every layer was rewritten: the provider registration, the model catalog, the settings surface, the session store, and the tool dispatch path.
 
@@ -375,17 +381,17 @@ The fork's first release. Between 0.6.2 and here, essentially every layer was re
 - **Fix: SDK failures surfacing as successful empty turns** — SDK and MCP failures propagate as terminal pi errors, fatal MCP failures survive stream handoff, and handlers match on Claude Code's native tool-use ID rather than call position, so parallel calls cannot be misrouted.
 - **Fix: compaction summary usage lost** — isolated Claude Code summaries reported synthetic zero usage, leaving compaction unaccounted for in session totals. They now share the same usage mapper as ordinary turns.
 
-## 0.6.2 — 2026-07-06
+## [0.6.2] - 2026-07-06
 
 - **Fix: Sonnet 5 and Fable 5 with 1M context** — bare model IDs (`claude-sonnet-5`, `claude-fable-5`) are 200K context. Must pass `[1m]` suffix for both, similar to Opus 4.8.
 - **Fix: xhigh thinking level hidden for Sonnet 5 and Sonnet 4.6 (issue #32)** — pi-ai ships no `thinkingLevelMap` for these models, and pi's `getSupportedThinkingLevels` requires an explicit mapping to show `xhigh` in the picker. This is a workaround for <https://github.com/earendil-works/pi/issues/6371>
 
-## 0.6.1 — 2026-07-01
+## [0.6.1] - 2026-07-01
 
 - **Add: claude-fable-5 and claude-sonnet-5 models** — Anthropic's Claude Fable 5 (released 2026-06-09) and Sonnet 5 (released 2026-06-30) are now selectable via `/model`. Both force adaptive thinking. The `fable` and `sonnet` shortcuts resolve to these new models.
 - **Bump: pi-ai >=0.80.3** — required for claude-fable-5 and claude-sonnet-5 model catalog entries.
 
-## 0.6.0 — 2026-06-29
+## [0.6.0] - 2026-06-29
 
 - **Fix: `/compact` hang (issue #18)** — the bridge now owns compaction for claude-bridge models, running split-turn summaries as isolated Claude Code subprocesses instead of routing them through the live provider stream. File ops (`<read-files>`/`<modified-files>`) carry forward across compactions. If compaction fails it is cancelled with a notification rather than falling back to the buggy native path.
 - **Fix: subagent routing (issue #19)** — provider calls from subagents while a parent query is active now start a nested query instead of being mistaken for empty tool-result delivery.
@@ -394,14 +400,14 @@ The fork's first release. Between 0.6.2 and here, essentially every layer was re
 - **Add: reasoning token tracking** — Claude Code `reasoning_tokens`/`thinking_tokens` are preserved on pi usage objects and in debug logs.
 - **Bump: pi 0.80 APIs** — compat catalog import, `CONFIG_DIR_NAME`, compaction metadata. Claude Agent SDK 0.2.x, TypeBox 1.3, tsx 4.22.
 
-## 0.5.0 — 2026-06-05
+## [0.5.0] - 2026-06-05
 
 - **Add: claude-opus-4-8 model** — migrated pi imports/dev peers from deprecated `@mariozechner/*` packages to `@earendil-works/*` 0.78.x so the official pi-ai registry supplies Opus 4.8. The `opus` shortcut now resolves to 4.8; 4.7/4.6 remain available for explicit pinning.
 - **Docs: Agent SDK quota warning** — note Anthropic's announced June 15, 2026 Agent SDK billing/quota change.
 - **Tests: isolate AskClaude config** — AskClaude integration tests now use project-local test config so they are unaffected by a user's global `askClaude.enabled` setting.
 - **Tests: harden shell integration tests** — use explicit alternate provider/model settings and pre-increment counters under `set -e`.
 
-## 0.4.0 — 2026-05-04
+## [0.4.0] - 2026-05-04
 
 - **Fix: Opus 4.7 + xhigh sent wrong effort to SDK** — pi-ai 0.72 ships per-model `thinkingLevelMap` overrides (e.g. `claude-opus-4-7` declares `xhigh→xhigh`, not `xhigh→max`), but our hardcoded `REASONING_TO_EFFORT` table ignored them. Effort lookup now consults `model.thinkingLevelMap` first, falls back to the table for older pi-ai or unmapped levels. Forwarded `thinkingLevelMap` through `buildModels` projection.
 - **Fix: zero out model cost in `buildModels`** — per-token pricing in the footer was wrong because models inherited pi-ai's non-zero cost fields, which pi then multiplied by the huge token counts from the SDK. Now explicitly zeroed so pi's footer shows no cost.
@@ -414,20 +420,20 @@ The fork's first release. Between 0.6.2 and here, essentially every layer was re
 - **Bump deps** — `@anthropic-ai/claude-agent-sdk` → ^0.2.126; migrate to TypeBox 1.x (new import paths per pi-mono 0.69); pi devDeps → ^0.72.1. Extract `registerTool` schemas to const with explicit `<typeof params>` generic to avoid TS2589 deep-instantiation under TypeBox 1.x.
 - **Internal: move sources into `src/`** — `index.ts` and the extracted modules now live under `src/`; screenshots under `assets/`. `pi.extensions` and published `files` updated accordingly.
 
-## 0.3.1 — 2026-04-18
+## [0.3.1] - 2026-04-18
 
 - **Fix: empty thinking blocks on Opus 4.7** — Opus 4.7 silently changed default `thinking.display` from `"summarized"` to `"omitted"`, so streams emitted `thinking_start` + `signature_delta` with zero `thinking_delta` events, leaving `ThinkingBlock.thinking == ""`. Now pass `--thinking-display=summarized` via `extraArgs` whenever `effort` is set (both provider and AskClaude paths). Bump `@anthropic-ai/claude-agent-sdk` to ^0.2.111 (required for Opus 4.7 + `--thinking-display` CLI flag). See [anthropics/claude-agent-sdk-python#830](https://github.com/anthropics/claude-agent-sdk-python/pull/830).
 - **Fix: `cachePct` debug metric misleading** — denominator was `input + cacheRead`, so once a conversation warmed up (tiny `input`, huge `cacheRead`) every turn rounded to 100% — even turns that rebuilt the cache from scratch. Now `cacheRead / (input + cacheRead + cacheWrite)`, so cache-rebuild turns show a low percentage.
 - **Internal: extract pure modules from `index.ts`** — split `models`, `skills`, `session-verify`, `extract-tool-results`, and `query-state` into their own TS files with real unit tests (no more `.js`+`.d.ts` mirror drift). Add `typecheck` script, `typescript` + `tsx` devDeps; test scripts run via `--import tsx`.
 
-## 0.3.0 — 2026-04-17
+## [0.3.0] - 2026-04-17
 
 - **Add: claude-opus-4-7 model** — Added `claude-opus-4-7` as a selectable model. The `opus` shortcut now resolves to 4.7 by default; 4.6 remains available for explicit pinning. Bumped `@mariozechner/pi-ai` to ^0.67.6 to include official model definitions (removed fallback).
 - **Refactor: QueryContext class replaces module-level state** — 12 mutable `let` variables + manual `SavedQueryState` push/pop replaced with a `QueryContext` class and context stack. Adding new per-query state is now 1 property instead of 6 edit sites. Fixes `deferredUserMessages` not being isolated across reentrant queries (subagent could consume parent's deferred steers). MCP handlers now close over captured context, abort handler captures context at the correct point after push.
 - **Fix: MODELS baseUrl leak** — the MODELS array exported to pi's provider registration now projects only the fields pi needs (id/name/reasoning/input/cost/contextWindow/maxTokens), stripping pi-ai's `baseUrl`/`api`/`provider`/`headers` so they can't shadow the values `registerProvider` supplies.
 - **Internal: `repairToolPairing` moved to cc-session-io 0.3.0**; convert logic extracted to `convert.js` with `convert.d.ts` types; various dead-code / type-safety cleanup.
 
-## 0.2.0 — 2026-04-15
+## [0.2.0] - 2026-04-15
 
 - **Fix: stale cursor after tool-using first turn (issue #4)** — after the first turn used tools, the session cursor pointed at the wrong message, causing Claude to re-process stale context. Now correctly advances past all tool_result blocks.
 - **Fix: session resume on symlinked paths / CLAUDE_CONFIG_DIR** — cc-session-io now resolves symlinks (realpathSync + NFC) and honors `CLAUDE_CONFIG_DIR`, matching how Claude Code resolves session paths. Fixes "No conversation found" on macOS symlinked dirs. Bump cc-session-io → 0.2.0.
@@ -437,7 +443,7 @@ The fork's first release. Between 0.6.2 and here, essentially every layer was re
 - **Fix: debug() logged Error objects as `{}`** — now formats with message and stack.
 - **Repair orphan tool_use/tool_result pairs before import** — prevents potential API 400s when history starts mid-turn after a provider switch.
 
-## 0.1.6 — 2026-04-10
+## [0.1.6] - 2026-04-10
 
 - **Fix: steer messages during tool execution now reach Claude** — when a user sends a steer while a tool is executing, pi injects it into context alongside the tool result. The bridge previously only processed tool results in this path, silently dropping the steer. Now detected and replayed as a continuation query after the current query completes.
 - **Fix: "No conversation found with session ID" in dirs with dots/underscores/spaces** — bump `cc-session-io` to 0.1.2; `projectPathToHash` now matches the CLI's sanitization (`/[^a-zA-Z0-9]/g` → `-`) instead of only replacing slashes

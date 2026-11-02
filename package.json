@@ -1,6 +1,6 @@
 {
   "name": "pi-doppelclaude-workspace",
-  "version": "0.0.0",
+  "version": "0.14.17",
   "private": true,
   "type": "module",
   "workspaces": [

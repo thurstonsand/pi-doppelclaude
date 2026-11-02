@@ -38,6 +38,10 @@ run = "biome check ."
 description = "Lint GitHub Actions workflows"
 run = "hk check --all --step jactionlint"
 
+[tasks."lint:release"]
+description = "Check the changelog's headings and that its newest release matches every package.json"
+run = "node scripts/check-release.mjs"
+
 [tasks."lint:shell"]
 description = "Lint shell scripts"
 run = "shellcheck -x -P SCRIPTDIR .agents/setup .agents/resume scripts/*.sh tests/*.sh tests/lib/*.sh"

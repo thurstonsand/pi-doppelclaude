@@ -19,14 +19,12 @@ if [[ ! -f "${release_file}" ]]; then
 fi
 
 awk -v version="${version}" '
-  # Headings look like "## X.Y.Z — YYYY-MM-DD"; match on the version prefix.
+  # Headings look like "## [X.Y.Z] - YYYY-MM-DD"; match on the version prefix.
   BEGIN {
-    plain_heading = "## " version
-    tagged_heading = "## v" version
+    heading = "## [" version "]"
   }
 
-  $0 == plain_heading || $0 == tagged_heading ||
-  index($0, plain_heading " ") == 1 || index($0, tagged_heading " ") == 1 {
+  $0 == heading || index($0, heading " ") == 1 {
     capture = 1
     found = 1
     print
