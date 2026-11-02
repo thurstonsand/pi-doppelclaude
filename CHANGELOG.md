@@ -2,22 +2,18 @@
 
 # Changelog
 
-## UNRELEASED
+## 0.14.17 — 2026-11-02
 
 ### Changed
 
+- **Requires pi 1.5.0 or newer** — doppelclaude now streams tool arguments through pi 1.5.0's own incremental parser and reads key hints from pi 1.5.0's renderer options. On an older pi it refuses to load with "pi-doppelclaude requires pi 1.5.0 or newer" instead of failing partway through a turn. Hosts that must stay on pi 1.4.0 should stay on 0.14.16.
 - Upgrade to **Agent SDK 0.3.316** (Claude Code 2.1.316).
 - **HTTP: the container image runs on Node 26** (26.13.0 LTS), up from Node 24.
 
 ### Fixed
 
+- **pi 1.5.0 no longer fails every request in `"pi"` and `"append"` modes** — pi 1.5.0 reworded its opening line and documentation heading, which the system prompt rewrite rejected as an unrecognised preamble. The rewrite now recognises pi 1.5.0's wording.
 - **Large tool calls no longer stall pi while they stream** — the bridge parsed a tool call's whole argument text again on every streamed piece, once in the core and once more for pi, so a 300 KB `write` spent about 9 seconds of CPU blocking pi's display. The core now parses each tool call once, when it ends, and pi's live preview uses pi's own incremental parser, as pi's built-in providers have since 1.5.0. A tool call cut off mid-stream keeps the arguments it had streamed.
-
-## 0.14.17 — 2026-11-02
-
-### Fixed
-
-- **pi 1.5.0 no longer fails every request in `"pi"` and `"append"` modes** — pi 1.5.0 reworded its opening line and documentation heading, which the system prompt rewrite rejected as an unrecognised preamble. The rewrite now recognises both pi 1.5.0's wording and pi 1.4.0's, so a host can update pi before or after doppelclaude.
 
 ## 0.14.16 — 2026-11-02
 
