@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { createRequire } from "node:module";
 import { describe, it } from "node:test";
 import type {
   Query,
@@ -8,7 +7,6 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { CustomEntry, ExtensionUIContext, Theme } from "@earendil-works/pi-coding-agent";
-import type { KeybindingsManager as KeybindingsManagerType } from "@earendil-works/pi-tui";
 import { Doppel } from "doppelclaude/doppel";
 import {
   REFUSAL_CUSTOM_TYPE,
@@ -18,20 +16,6 @@ import {
 import { createPiBridgeRuntime as createBridgeRuntime } from "pi-doppelclaude/pi-runtime";
 import { renderRefusalEntry } from "pi-doppelclaude/refusal";
 import { beginProjectedCommand } from "./lib/native-response.js";
-
-// pi-coding-agent 0.84.3 ships a shrinkwrap, so its pi-tui is a second copy nested under it and
-// the keybindings singleton `keyText` reads is that copy's, not the hoisted one this repo
-// installs for its own imports. Reach the singleton `keyText` actually observes; under real pi
-// there is one module graph and this distinction does not exist.
-const piTui = (await import(
-  createRequire(import.meta.resolve("@earendil-works/pi-coding-agent")).resolve(
-    "@earendil-works/pi-tui",
-  )
-)) as {
-  KeybindingsManager: new (definitions: never, userBindings?: never) => KeybindingsManagerType;
-  setKeybindings: (manager: KeybindingsManagerType) => void;
-};
-const { KeybindingsManager, setKeybindings } = piTui;
 
 const fakeModel = {
   api: "doppelclaude",
@@ -88,8 +72,24 @@ const plainTheme = {
   bg: (_color: string, text: string) => text,
 } as unknown as Theme;
 
-function plainRender(data: RefusalEntryData, expanded: boolean, outputPad = 1): string {
-  const component = renderRefusalEntry(entryFor(data), { expanded, outputPad }, plainTheme);
+// The host formats its own keybindings; this one has `alt+e` bound to expand.
+const altEBound = (keybinding: string) => (keybinding === "app.tools.expand" ? "alt+e" : "");
+
+function plainRender(
+  data: RefusalEntryData,
+  expanded: boolean,
+  { outputPad = 1, keyText = altEBound } = {},
+): string {
+  const component = renderRefusalEntry(
+    entryFor(data),
+    {
+      expanded,
+      outputPad,
+      keyText,
+      keyHint: (keybinding, text) => `${keyText(keybinding)} ${text}`,
+    },
+    plainTheme,
+  );
   assert.ok(component, "renderer produced no component");
   return component.render(100).join("\n");
 }
@@ -115,24 +115,15 @@ describe("Claude refusal entries", () => {
   });
 
   it("collapses to a headline carrying whatever key the user bound to expand", () => {
-    setKeybindings(
-      new KeybindingsManager(
-        {
-          "app.tools.expand": { defaultKeys: "ctrl+o", description: "Toggle tool output" },
-        } as never,
-        { "app.tools.expand": "alt+e" } as never,
-      ),
-    );
     const collapsed = plainRender(refusalEntryData(FALLBACK), false);
     assert.match(collapsed, /claude-fable-5 refused \(cyber\) — rerouted to claude-opus-4-8/u);
-    // Formatted for the platform by Pi, so `alt` surfaces as `option` on macOS.
-    assert.match(collapsed, /\((alt|option)\+e to expand\)/u);
+    assert.match(collapsed, /\(alt\+e to expand\)/u);
     assert.doesNotMatch(collapsed, /exploit chain/u);
   });
 
   it("pads its box by the user's outputPad setting", () => {
     const headlineLine = (outputPad: number) =>
-      plainRender(refusalEntryData(NO_FALLBACK), true, outputPad)
+      plainRender(refusalEntryData(NO_FALLBACK), true, { outputPad })
         .split("\n")
         .find((line) => line.includes("refused"));
     assert.match(headlineLine(1) ?? "", /^ ⚠ claude-fable-5 refused/u);
@@ -140,8 +131,8 @@ describe("Claude refusal entries", () => {
   });
 
   it("says so rather than offering a blank key when nothing is bound", () => {
-    setKeybindings(new KeybindingsManager({} as never));
-    assert.match(plainRender(refusalEntryData(FALLBACK), false), /\(expand key unbound\)/u);
+    const collapsed = plainRender(refusalEntryData(FALLBACK), false, { keyText: () => "" });
+    assert.match(collapsed, /\(expand key unbound\)/u);
   });
 
   it("expands to Claude's explanation, its own banner, and the request id", () => {

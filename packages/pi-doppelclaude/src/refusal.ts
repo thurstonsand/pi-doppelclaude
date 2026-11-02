@@ -1,5 +1,4 @@
-import type { CustomEntry, Theme } from "@earendil-works/pi-coding-agent";
-import { keyText } from "@earendil-works/pi-coding-agent";
+import type { CustomEntry, EntryRenderOptions, Theme } from "@earendil-works/pi-coding-agent";
 import { Box, type Component, Text } from "@earendil-works/pi-tui";
 import type { RefusalEntryData } from "doppelclaude/refusal-data";
 
@@ -12,7 +11,7 @@ function headline(data: RefusalEntryData): string {
 
 export function renderRefusalEntry(
   entry: CustomEntry<RefusalEntryData>,
-  options: { expanded: boolean; outputPad: number },
+  options: EntryRenderOptions & { outputPad: number },
   theme: Theme,
 ): Component | undefined {
   const data = entry.data;
@@ -22,7 +21,7 @@ export function renderRefusalEntry(
   const line = (text: string) => box.addChild(new Text(text, 0, 0));
 
   if (!options.expanded) {
-    const key = keyText("app.tools.expand");
+    const key = options.keyText("app.tools.expand");
     line(
       key
         ? theme.fg("warning", `⚠ ${headline(data)} (`) +
