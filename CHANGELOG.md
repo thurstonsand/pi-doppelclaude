@@ -2,6 +2,12 @@
 
 # Changelog
 
+## 0.14.16 — 2026-11-02
+
+### Added
+
+- **HTTP: every structured record names its release** — `startup`, `request_complete`, and `runtime_close` carry the daemon's `version`, so cache behaviour in the telemetry can be compared release against release. Images built from `main` report `0.0.0`.
+
 ## 0.14.15 — 2026-10-27
 
 ### Changed
