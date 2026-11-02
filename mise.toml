@@ -5,8 +5,8 @@ enter = "mise bootstrap --yes --quiet"
 
 [tools]
 actionlint = "1.7.12"
-hk = "2.8.1"
-node = "24"
+hk = "2.10.0"
+node = "26"
 shellcheck = "0.11.0"
 
 [env]
@@ -48,8 +48,8 @@ run = "shellcheck -x -P SCRIPTDIR .agents/setup .agents/resume scripts/*.sh test
 [tasks.renovate]
 description = "Run Renovate"
 run = "PATH=\"{{ tools.node.path }}/bin:$PATH\" renovate"
-tools.node = "24"
-tools."npm:renovate" = { version = "44.180.0", allow_builds = [
+tools.node = "26"
+tools."npm:renovate" = { version = "44.198.2", allow_builds = [
   "re2",
 ], trust_policy_excludes = [
   "@yarnpkg/libzip@3.2.2",
@@ -58,8 +58,8 @@ tools."npm:renovate" = { version = "44.180.0", allow_builds = [
 [tasks."lint:renovate"]
 description = "Validate Renovate configuration"
 run = "PATH=\"{{ tools.node.path }}/bin:$PATH\" renovate-config-validator renovate.json"
-tools.node = "24"
-tools."npm:renovate" = { version = "44.180.0", allow_builds = [
+tools.node = "26"
+tools."npm:renovate" = { version = "44.198.2", allow_builds = [
   "re2",
 ], trust_policy_excludes = [
   "@yarnpkg/libzip@3.2.2",

@@ -2,6 +2,13 @@
 
 # Changelog
 
+## UNRELEASED
+
+### Changed
+
+- Upgrade to **Agent SDK 0.3.316** (Claude Code 2.1.316).
+- **HTTP: the container image runs on Node 26** (26.13.0 LTS), up from Node 24.
+
 ## 0.14.17 — 2026-11-02
 
 ### Fixed
