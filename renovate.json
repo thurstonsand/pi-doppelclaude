@@ -75,6 +75,12 @@
       "description": "@types/node describes the oldest Node the packages support, the lowest `engines` floor (doppelclaude's and pi-doppelclaude's >=20), rather than the newest DefinitelyTyped release or the Node 26 the repo develops on. Types from a later major describe APIs that the floor lacks, and tsc believes them. Raise the ceiling when the lowest floor moves.",
       "matchPackageNames": ["@types/node"],
       "allowedVersions": "<21"
+    },
+    {
+      "description": "Renovate supports only Node 24 (its engines say ^24.11), so the toolset its own tasks run in stays there while the repo moves on.",
+      "matchFileNames": ["mise.renovate.toml"],
+      "matchPackageNames": ["node"],
+      "allowedVersions": "<25"
     }
   ]
 }

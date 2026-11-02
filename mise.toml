@@ -46,30 +46,18 @@ run = "node scripts/check-release.mjs"
 description = "Lint shell scripts"
 run = "shellcheck -x -P SCRIPTDIR .agents/setup .agents/resume scripts/*.sh tests/*.sh tests/lib/*.sh"
 
-# Renovate's bin shim ends in `exec node`, and mise builds a task's PATH from the shell's
-# pre-activation ordering, which on a Homebrew machine starts at /opt/homebrew/bin -- ahead of the
-# node this task declares. re2 is then compiled by mise's node and loaded by Homebrew's, which
-# fails the ABI check and downgrades regex validation to JavaScript RegExp with only a warning.
-# Naming the interpreter is the same move UV_PYTHON makes in ansiblonomicon.
+# Renovate supports only Node 24 (its engines say ^24.11), while the repo develops on 26. Its tasks
+# run under MISE_ENV=renovate, whose mise.renovate.toml overlays Node 24 and adds Renovate, so mise
+# both installs and runs it on 24: re2, Renovate's native regex engine, is built for the Node that
+# installs it and refuses to load in another, leaving validation on JavaScript RegExp with only a
+# warning. `mise x` also puts that Node ahead of a Homebrew one already on PATH.
 [tasks.renovate]
 description = "Run Renovate"
-run = "PATH=\"{{ tools.node.path }}/bin:$PATH\" renovate"
-tools.node = "26"
-tools."npm:renovate" = { version = "44.198.2", allow_builds = [
-  "re2",
-], trust_policy_excludes = [
-  "@yarnpkg/libzip@3.2.2",
-] }
+run = "MISE_ENV=renovate mise x -- renovate"
 
 [tasks."lint:renovate"]
 description = "Validate Renovate configuration"
-run = "PATH=\"{{ tools.node.path }}/bin:$PATH\" renovate-config-validator renovate.json"
-tools.node = "26"
-tools."npm:renovate" = { version = "44.198.2", allow_builds = [
-  "re2",
-], trust_policy_excludes = [
-  "@yarnpkg/libzip@3.2.2",
-] }
+run = "MISE_ENV=renovate mise x -- renovate-config-validator renovate.json"
 
 [tasks.format]
 description = "Format and apply safe fixes"
