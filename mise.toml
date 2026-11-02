@@ -38,6 +38,16 @@ run = "biome check ."
 description = "Lint GitHub Actions workflows"
 run = "hk check --all --step jactionlint"
 
+# `npm ci` installs a lockfile without resolving it again, so CI would pass one that `npm install`,
+# which Renovate runs, can no longer resolve. This resolves it with the repo's npm and fails if that
+# changes it.
+[tasks."lint:lockfile"]
+description = "Check that package-lock.json still resolves to itself"
+run = [
+    "npm install --package-lock-only --ignore-scripts --no-audit --no-fund",
+    "git diff --exit-code package-lock.json",
+]
+
 [tasks."lint:release"]
 description = "Check the changelog's headings and that its newest release matches every package.json"
 run = "node scripts/check-release.mjs"

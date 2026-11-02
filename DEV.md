@@ -13,7 +13,7 @@ The mise enter hook keeps the bootstrap current (npm ci, hk git hooks). Bootstra
 mise is the task runner of record; the `npm run` scripts are thin aliases onto it.
 
 ```bash
-mise run lint       # biome + jactionlint (through hk) + shellcheck (also the pre-commit hook)
+mise run lint       # biome, jactionlint (through hk), shellcheck, changelog, lockfile, Renovate config (also the pre-commit hook)
 mise run format     # biome check --write and jactionlint --fix: format and apply safe fixes
 mise run build      # build core, then Pi and HTTP frontends
 mise run check      # offline verification: lint + typecheck + unit tests
