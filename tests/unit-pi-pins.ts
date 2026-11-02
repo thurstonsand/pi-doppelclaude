@@ -68,7 +68,7 @@ describe("partial-json pin", () => {
 
   it("declares that version exactly, so npm update cannot float off it", () => {
     const local = readJson<{ dependencies: { "partial-json": string } }>(
-      "../packages/pi-doppelclaude/package.json",
+      "../packages/doppelclaude/package.json",
     );
     assert.equal(local.dependencies["partial-json"], piPinnedVersion);
   });

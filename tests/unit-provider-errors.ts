@@ -349,6 +349,30 @@ describe("provider stop reasons", () => {
     assert.equal(last.error.stopReason, "error");
   });
 
+  it("keeps the arguments a tool call streamed before its turn was cut off", async () => {
+    const last = await runTurn([
+      streamEvent({ type: "message_start", message: { model: "claude-test", usage: {} } }),
+      streamEvent({
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "tool_use", id: "toolu_cut", name: "write", input: {} },
+      }),
+      ...['{"path":"notes.md","con', 'tent":"first line\\nsecond'].map((partial_json) =>
+        streamEvent({
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "input_json_delta", partial_json },
+        }),
+      ),
+    ]);
+    assert.equal(last.type, "error");
+    if (last.type !== "error") throw new Error("expected a trailing error event");
+    const [call] = last.error.content;
+    assert.equal(call?.type, "toolCall");
+    if (call?.type !== "toolCall") throw new Error("expected the cut-off tool call");
+    assert.deepEqual(call.arguments, { path: "notes.md", content: "first line\nsecond" });
+  });
+
   // Legs that never stream a `message_delta` — partial messages off, or a bare result
   // carrying the text — are completed by the SDK result instead.
   it("completes a turn whose only terminal signal is the SDK result", async () => {

@@ -124,9 +124,23 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
     c.turnStarted = true;
   }
 
+  // Parsing the accumulated arguments on every delta costs time quadratic in their length.
+  function parseOpenToolInput(c: QueryContext, index: number): void {
+    const open = c.openStreamBlocks.get(index);
+    const block = open && c.turnOutput?.message.content[open.contentIndex];
+    if (block?.type === "tool_use")
+      block.input = parsePartialJson(open.partialJson, block.input as Record<string, unknown>);
+  }
+
+  /** A response that settles mid-block keeps the arguments streamed so far. */
+  function parseOpenToolInputs(c: QueryContext): void {
+    for (const index of c.openStreamBlocks.keys()) parseOpenToolInput(c, index);
+  }
+
   function closeResponse(c: QueryContext): void {
     const response = c.currentResponse;
     if (!response) return;
+    parseOpenToolInputs(c);
     flushStart(c);
     const terminal = c.terminalMessageDelta;
     response.stream.push(
@@ -168,6 +182,7 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
       null,
     );
     if (!response) return;
+    parseOpenToolInputs(c);
     const text = reason === "error" ? withReloginHint(message) : message;
     response.record.lifecycle = "failed";
     response.record.error = { reason, message: text };
@@ -322,15 +337,16 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
           block.thinking += event.delta.thinking;
         else if (event.delta.type === "signature_delta" && block.type === "thinking")
           block.signature += event.delta.signature;
-        else if (event.delta.type === "input_json_delta" && block.type === "tool_use") {
+        else if (event.delta.type === "input_json_delta" && block.type === "tool_use")
           open.partialJson += event.delta.partial_json;
-          block.input = parsePartialJson(open.partialJson, block.input as Record<string, unknown>);
-        }
       }
       pushNativeEvent(event, c);
       return;
     }
-    if (event.type === "content_block_stop") c.openStreamBlocks.delete(event.index);
+    if (event.type === "content_block_stop") {
+      parseOpenToolInput(c, event.index);
+      c.openStreamBlocks.delete(event.index);
+    }
     if (event.type === "message_delta") {
       output.stop_reason = event.delta.stop_reason;
       output.stop_sequence = event.delta.stop_sequence;

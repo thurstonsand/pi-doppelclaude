@@ -9,6 +9,10 @@
 - Upgrade to **Agent SDK 0.3.316** (Claude Code 2.1.316).
 - **HTTP: the container image runs on Node 26** (26.13.0 LTS), up from Node 24.
 
+### Fixed
+
+- **Large tool calls no longer stall pi while they stream** — the bridge parsed a tool call's whole argument text again on every streamed piece, once in the core and once more for pi, so a 300 KB `write` spent about 9 seconds of CPU blocking pi's display. The core now parses each tool call once, when it ends, and pi's live preview uses pi's own incremental parser, as pi's built-in providers have since 1.5.0. A tool call cut off mid-stream keeps the arguments it had streamed.
+
 ## 0.14.17 — 2026-11-02
 
 ### Fixed

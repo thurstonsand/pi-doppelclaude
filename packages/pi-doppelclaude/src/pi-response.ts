@@ -8,6 +8,7 @@ import {
   type ProviderResponse,
   type StopReason,
   type ToolCall,
+  ToolCallArgumentsStream,
 } from "@earendil-works/pi-ai";
 import type {
   CommandUsageObservation,
@@ -15,7 +16,6 @@ import type {
   CoreResponseRecord,
 } from "doppelclaude/core-response";
 import { PushQueue } from "doppelclaude/query-state";
-import { parse as parsePartialJsonText } from "partial-json";
 import { applySdkUsage, reconcileSdkModelUsage } from "./pi-usage.js";
 
 function stopReason(record: CoreResponseRecord): { reason: StopReason; error?: string } {
@@ -116,7 +116,7 @@ export function createPiResponseRuntime() {
     let output: AssistantMessage | undefined;
     let failure: AssistantMessage | undefined;
     const openBlocks = new Map<number, number>();
-    const partialToolJson = new Map<number, string>();
+    const toolArguments = new Map<number, ToolCallArgumentsStream>();
 
     function fail(error: unknown, responseId?: string): void {
       if (!output) {
@@ -181,7 +181,7 @@ export function createPiResponseRuntime() {
             stream.push({ type: "thinking_start", contentIndex: index, partial: output });
           } else if (block.type === "tool_use") {
             openBlocks.set(event.index, index);
-            partialToolJson.set(event.index, "");
+            toolArguments.set(event.index, new ToolCallArgumentsStream());
             output.content.push({
               type: "toolCall",
               id: block.id,
@@ -213,13 +213,8 @@ export function createPiResponseRuntime() {
           } else if (event.delta.type === "signature_delta" && block.type === "thinking") {
             block.thinkingSignature = (block.thinkingSignature ?? "") + event.delta.signature;
           } else if (event.delta.type === "input_json_delta" && block.type === "toolCall") {
-            const json = (partialToolJson.get(event.index) ?? "") + event.delta.partial_json;
-            partialToolJson.set(event.index, json);
-            try {
-              const parsed = parsePartialJsonText(json);
-              if (typeof parsed === "object" && parsed !== null)
-                block.arguments = parsed as JsonObject;
-            } catch {}
+            const args = toolArguments.get(event.index);
+            if (args) block.arguments = args.append(event.delta.partial_json);
             stream.push({
               type: "toolcall_delta",
               contentIndex: index,
@@ -231,8 +226,11 @@ export function createPiResponseRuntime() {
           const index = openBlocks.get(event.index);
           if (index === undefined) continue;
           openBlocks.delete(event.index);
-          partialToolJson.delete(event.index);
+          const args = toolArguments.get(event.index);
+          toolArguments.delete(event.index);
           const block = output.content[index];
+          // A preview snapshot may lag the text it has read; the finished call parses it whole.
+          if (block.type === "toolCall" && args?.text) block.arguments = args.finish().arguments;
           if (block.type === "text")
             stream.push({
               type: "text_end",
