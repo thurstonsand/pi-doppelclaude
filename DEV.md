@@ -18,6 +18,7 @@ mise run format     # biome check --write and jactionlint --fix: format and appl
 mise run build      # build core, then Pi and HTTP frontends
 mise run check      # offline verification: lint + typecheck + unit tests
 mise run test       # full suite: unit + integration
+mise run release X.Y.Z  # cut a release from CHANGELOG.md's Unreleased entries (docs/release.md)
 
 # Individual steps
 mise run lint:biome                                 # TypeScript, JSON, and Markdown

@@ -12,8 +12,28 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  verify:
+    name: Verify release version
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up mise
+        uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
+        with:
+          install_args: node
+          cache: false
+
+      - name: Check that the tag, package.json files and changelog agree
+        run: node scripts/check-release.mjs "$GITHUB_REF_NAME"
+
   ci:
     name: CI
+    needs: verify
     uses: ./.github/workflows/ci.yml
 
   publish-npm:
@@ -34,12 +54,6 @@ jobs:
         with:
           install: true
           cache: false
-
-      - name: Set synchronized package versions from tag
-        run: |
-          version="${GITHUB_REF_NAME#v}"
-          node scripts/set-release-version.mjs "$version"
-          npm install --package-lock-only --ignore-scripts
 
       - name: Install dependencies
         run: npm ci

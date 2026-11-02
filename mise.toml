@@ -75,6 +75,11 @@ tools."npm:renovate" = { version = "44.198.2", allow_builds = [
 description = "Format and apply safe fixes"
 run = ["biome check --write .", "hk fix --all --step jactionlint"]
 
+[tasks.release]
+description = "Release CHANGELOG.md's Unreleased entries as X.Y.Z: version, commit, tag and push"
+usage = 'arg "<version>" help="The version to release, X.Y.Z"'
+run = "node scripts/release.mjs {{usage.version}}"
+
 [tasks.build]
 description = "Build all publishable packages in dependency order"
 run = [

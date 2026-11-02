@@ -12,7 +12,7 @@ Use this skill when preparing and publishing a new release for `pi-doppelclaude`
 - Release from `main`.
 - npm publishing is tag-driven through `.github/workflows/release.yml`.
 - Use `CHANGELOG.md` for human release notes.
-- Use the exact same release-note text from `CHANGELOG.md` for the annotated git tag body.
+- `mise run release X.Y.Z` cuts the release: it versions the packages, commits, tags with the release's `CHANGELOG.md` section as the body, and pushes.
 - Stable releases are `vX.Y.Z` tags.
 - Stable package tags are immutable. Never force-push a stable release tag.
 - The GitHub Action uses npm Trusted Publishing through OIDC.
@@ -30,17 +30,19 @@ Use this skill when preparing and publishing a new release for `pi-doppelclaude`
 
 Ask the user to confirm the target version unless they already specified it.
 
-## 2. Prepare release notes
+## 2. Review the changelog
 
-Promote the `## UNRELEASED` section of `CHANGELOG.md` into a versioned entry, keeping the repo's existing entry format:
+`## [Unreleased]` in `CHANGELOG.md` collects the entries as changes land. Review it against the changes since the latest stable tag, keeping the repo's existing entry format:
 
 ```md
-## X.Y.Z — YYYY-MM-DD
+## [Unreleased]
+
+### Added
 
 - **Tag: summary** — detail
 ```
 
-Omit internal refactors that have no user-facing effect. If the user edits the notes, preserve their wording.
+Omit internal refactors that have no user-facing effect. If the user edits the notes, preserve their wording. Leave the version heading to the release task.
 
 If release mechanics change, update `docs/release.md`.
 
@@ -50,45 +52,35 @@ Run the offline gate and inspect package contents:
 
 ```sh
 mise run check
-npm pack --dry-run
+npm pack --dry-run --workspace pi-doppelclaude
 ```
 
 Do not proceed on failures. Fix them or report the blocker. Integration tests (`npm test`) hit live APIs; run them only when the release changes provider behavior.
 
-## 4. Commit release prep
+## 4. Commit and push the changelog
 
-Stage only release-relevant files and commit.
+Stage only the changelog edits and other release-relevant files, commit, and push `main`. If hooks modify staged files, the commit will fail; resolve the hook and recommit. Wait for every workflow run on the pushed commit to pass (`gh run list --commit "$(git rev-parse HEAD)"`).
 
-If hooks modify staged files, the commit will fail, ensure the hook is resolved then recommit.
-
-## 5. Push main
-
-Push the release prep commit to `main`
-
-## 6. Create and push the stable tag
-
-Use the final `CHANGELOG.md` entry for the tag notes:
+## 5. Run the release task
 
 ```sh
-VERSION=X.Y.Z
-scripts/extract-release-notes.sh "v${VERSION}" > "/tmp/pi-doppelclaude-v${VERSION}-notes.md"
-cat "/tmp/pi-doppelclaude-v${VERSION}-notes.md"
-git tag -a "v${VERSION}" --cleanup=verbatim -F "/tmp/pi-doppelclaude-v${VERSION}-notes.md"
-git push origin "v${VERSION}"
+mise run release X.Y.Z
 ```
 
-Do not force-push a stable tag. If a tag already exists, stop and inspect; do not overwrite it.
+It refuses unless `main` is clean, matches `origin/main`, and every workflow run on HEAD is green, `## [Unreleased]` has entries, and `X.Y.Z` is greater than the newest release. Then it moves the Unreleased entries under `## [X.Y.Z] - <today>`, versions every package.json and the lockfile, commits `chore(release): X.Y.Z`, creates the annotated tag `vX.Y.Z` from that section, and pushes `main` and the tag together.
 
-## 7. Watch GitHub Actions publishing
+If it refuses, report the reason; do not work around it. Stable tags are immutable: if a push fails after the tag was created, inspect before retrying, and never force-push a tag.
+
+## 6. Watch GitHub Actions publishing
 
 The tag should trigger the Release workflow.
 
 - Use the `gh` tool to find the release (`gh run list --workflow Release`)
 - Watch the release action to completion
-- The workflow should run CI, set the package version from the tag, and publish to npm with the `latest` dist-tag.
+- The workflow should check that the tag, package.json files and changelog agree, run CI, and publish to npm with the `latest` dist-tag. The `Container image` workflow publishes the image for the same tag.
 - If there is an error, inform the user what went wrong, including a proposed fix when feasible.
 
-## 8. Final verification
+## 7. Final verification
 
 Confirm npm and git remote state:
 

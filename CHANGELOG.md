@@ -8,6 +8,10 @@
 
 - **pi shows what changed after an update** — pi-doppelclaude now ships this changelog, so the first time pi starts after an upgrade it shows the entries since the version you had.
 
+### Changed
+
+- **HTTP: images built from `main` report the release they follow** — every package.json on `main` now carries the latest release's version, so a `main-sha-*` image reports that version instead of `0.0.0`. Its `org.opencontainers.image.revision` label still names the exact commit.
+
 ## [0.14.17] - 2026-11-02
 
 ### Changed

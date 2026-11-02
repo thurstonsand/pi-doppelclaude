@@ -3,12 +3,8 @@ FROM node:26-bookworm-slim@sha256:bc0a2afd3b74ce12222fc8bab99271e66257f021078f5f
 WORKDIR /source
 COPY package.json package-lock.json tsconfig.json tsconfig.base.json mise.toml ./
 COPY packages ./packages
-COPY scripts ./scripts
 RUN npm ci --ignore-scripts --no-audit --no-fund
-ARG VERSION=0.0.0
-RUN node scripts/set-release-version.mjs "$VERSION" && \
-    npm install --package-lock-only --ignore-scripts --offline --no-audit --no-fund && \
-    npx tsc -p packages/doppelclaude && \
+RUN npx tsc -p packages/doppelclaude && \
     npx tsc -p packages/http-doppelclaude
 
 FROM node:26-bookworm-slim@sha256:bc0a2afd3b74ce12222fc8bab99271e66257f021078f5f4a5d687a77d280c1d9
