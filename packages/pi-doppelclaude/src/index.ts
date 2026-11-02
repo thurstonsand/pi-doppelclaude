@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import { ToolCallArgumentsStream } from "@earendil-works/pi-ai";
 import { type ExtensionAPI, getAgentDir, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { configureDebug, debug, moduleInstanceId } from "doppelclaude/debug";
 import { errorMessage } from "doppelclaude/errors";
@@ -16,6 +17,11 @@ import { renderRefusalEntry } from "./refusal.js";
 import { loadBridgeSettings } from "./settings.js";
 
 export default function activate(pi: ExtensionAPI): void {
+  // Pi's extension loader resolves a missing export to undefined rather than failing the import,
+  // so an older pi would otherwise surface as a TypeError partway through the first tool call.
+  if (typeof ToolCallArgumentsStream !== "function") {
+    throw new Error("pi-doppelclaude requires pi 1.5.0 or newer; update pi");
+  }
   const settings = loadBridgeSettings(process.cwd());
   configureDebug({
     ...settings.debug,

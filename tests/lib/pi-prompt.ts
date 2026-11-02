@@ -12,13 +12,6 @@ export const PI_IDENTITY =
 export const PI_DOCS_HEADING =
   "Pi documentation (read only when the user asks about the harness itself, its SDK, extensions, themes, skills, or TUI):";
 
-// pi 1.4.0's wording, which hosts that have not updated pi still send.
-export const PI_1_4_IDENTITY =
-  "You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.";
-
-export const PI_1_4_DOCS_HEADING =
-  "Pi documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):";
-
 export function piSystemMessage(toolLines = "- read: read a file"): SystemMessage {
   return {
     role: "system",

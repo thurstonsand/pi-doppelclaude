@@ -3,13 +3,7 @@ import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import type { SystemMessage } from "@earendil-works/pi-ai";
 import { buildClaudeSystemPrompt, rewritePiSystemPrompt } from "pi-doppelclaude/system-prompt";
-import {
-  PI_1_4_DOCS_HEADING,
-  PI_1_4_IDENTITY,
-  PI_DOCS_HEADING,
-  PI_IDENTITY,
-  piSystemMessage,
-} from "./lib/pi-prompt.js";
+import { PI_DOCS_HEADING, PI_IDENTITY, piSystemMessage } from "./lib/pi-prompt.js";
 
 const SYSTEM_MESSAGE = piSystemMessage();
 
@@ -241,7 +235,7 @@ describe("rewritePiSystemPrompt", () => {
 });
 
 describe("pi's own system prompt", () => {
-  const PI_WORDING = [PI_IDENTITY, PI_DOCS_HEADING, PI_1_4_IDENTITY, PI_1_4_DOCS_HEADING];
+  const PI_WORDING = [PI_IDENTITY, PI_DOCS_HEADING];
 
   it("rewrites the prompt the installed pi builds", async () => {
     // Not in pi's export map, but it is the builder pi's agent loop calls for every turn.
@@ -273,34 +267,22 @@ describe("pi's own system prompt", () => {
     for (const wording of PI_WORDING) assert.ok(!rewritten.includes(wording), wording);
   });
 
-  it("still rewrites pi 1.4.0's wording", () => {
+  it("refuses pi 1.4.0's preamble", () => {
     const current = piSystemMessage();
-    const sections = current.sections ?? {};
-    const rewritten = rewritePiSystemPrompt(
-      {
-        ...current,
-        sections: {
-          ...sections,
-          preamble: PI_1_4_IDENTITY,
-          docs: sections.docs?.replace(PI_DOCS_HEADING, PI_1_4_DOCS_HEADING) ?? null,
-        },
-      },
-      REPLACEMENTS,
-    );
-
-    assert.ok(rewritten.startsWith("Custom identity."));
-    assert.match(rewritten, /<docs>\nCustom docs:\n/);
-    for (const wording of PI_WORDING) assert.ok(!rewritten.includes(wording), wording);
-  });
-
-  it("refuses to send pi 1.4.0's wording carried as flat text", () => {
     assert.throws(
       () =>
         rewritePiSystemPrompt(
-          { role: "system", content: PI_1_4_IDENTITY, timestamp: 0 },
+          {
+            ...current,
+            sections: {
+              ...current.sections,
+              preamble:
+                "You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.",
+            },
+          },
           REPLACEMENTS,
         ),
-      /still contains "You are an expert coding assistant/,
+      /preamble the rewrite does not recognise/,
     );
   });
 });

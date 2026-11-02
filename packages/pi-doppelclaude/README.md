@@ -22,6 +22,8 @@ Forked from [pi-claude-bridge](https://github.com/elidickinson/pi-claude-bridge)
 pi install npm:pi-doppelclaude
 ```
 
+Requires pi 1.5.0 or newer.
+
 Authenticate with Claude Code first; pi stores no key for this provider.
 
 ```sh
