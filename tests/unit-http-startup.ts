@@ -157,11 +157,12 @@ describe("HTTP startup", () => {
       assert.ok(log);
       return log;
     };
-    const events = async (path: string) =>
+    const records = async (path: string) =>
       (await readFile(path, "utf8"))
         .trim()
         .split("\n")
-        .map((line) => JSON.parse(line).event);
+        .map((line) => JSON.parse(line));
+    const events = async (path: string) => (await records(path)).map((record) => record.event);
     const filler = "x".repeat(1024 * 1024);
     try {
       const first = await start();
@@ -175,6 +176,16 @@ describe("HTTP startup", () => {
       assert.deepEqual(rotated, ["startup", ...Array(63).fill("before"), "startup"]);
       assert.ok((await stat(`${logFilePath}.1`)).size <= 64 * 1024 * 1024);
       assert.deepEqual(await events(logFilePath), ["rotates", "after"]);
+      const manifest = JSON.parse(
+        await readFile(
+          new URL("../packages/http-doppelclaude/package.json", import.meta.url),
+          "utf8",
+        ),
+      );
+      assert.deepEqual(
+        new Set((await records(`${logFilePath}.1`)).map((record) => record.version)),
+        new Set([manifest.version]),
+      );
       await assert.rejects(stat(`${logFilePath}.2`));
       assert.equal((await stat(logFilePath)).mode & 0o777, 0o600);
     } finally {

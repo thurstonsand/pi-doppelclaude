@@ -10,6 +10,7 @@ import {
   type HttpEnvironmentConfig,
   httpConfigFromEnvironment,
 } from "./server.js";
+import { packageVersion } from "./version.js";
 
 export interface HttpStartupDependencies {
   environment?: NodeJS.ProcessEnv;
@@ -101,7 +102,10 @@ export async function runHttpDaemon(
     );
     if (!account.available)
       throw new Error("Claude Code is not authenticated with a first-party account subscription");
-    const log = createRecordLog(config.logFilePath, LOG_FILE_MAX_BYTES, LOG_FILE_KEEP, true);
+    const version = await duringStartup(packageVersion());
+    const record = createRecordLog(config.logFilePath, LOG_FILE_MAX_BYTES, LOG_FILE_KEEP, true);
+    // Every record names its release, so cache behaviour can be compared across releases.
+    const log = (entry: Record<string, unknown>) => record({ ...entry, version });
     // A system prompt runs to about 100 KB, so these stay out of stderr and its journal.
     const recordPrompts = config.recordPromptsPath
       ? createRecordLog(config.recordPromptsPath, LOG_FILE_MAX_BYTES, LOG_FILE_KEEP, false)

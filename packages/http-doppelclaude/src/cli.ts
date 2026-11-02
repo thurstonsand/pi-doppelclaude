@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 
-import { readFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
 import { runHttpDaemon } from "./startup.js";
+import { packageVersion } from "./version.js";
 
 const HELP = `Usage: doppelclaude-serve [--help | --version]
 
@@ -38,19 +37,13 @@ Environment:
 * Set exactly one API key variable.
 `;
 
-async function version(): Promise<string> {
-  const manifest = new URL("../package.json", import.meta.url);
-  const value = JSON.parse(await readFile(fileURLToPath(manifest), "utf8")) as { version: string };
-  return value.version;
-}
-
 async function main(args: string[]): Promise<void> {
   if (args.length === 1 && (args[0] === "--help" || args[0] === "-h")) {
     process.stdout.write(HELP);
     return;
   }
   if (args.length === 1 && (args[0] === "--version" || args[0] === "-v")) {
-    process.stdout.write(`http-doppelclaude ${await version()}\n`);
+    process.stdout.write(`http-doppelclaude ${await packageVersion()}\n`);
     return;
   }
   if (args.length > 0) throw new Error(`unexpected argument${args.length > 1 ? "s" : ""}`);
