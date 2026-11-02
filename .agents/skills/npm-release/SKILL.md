@@ -59,7 +59,7 @@ Do not proceed on failures. Fix them or report the blocker. Integration tests (`
 
 ## 4. Commit and push the changelog
 
-Stage only the changelog edits and other release-relevant files, commit, and push `main`. If hooks modify staged files, the commit will fail; resolve the hook and recommit. Wait for every workflow run on the pushed commit to pass (`gh run list --commit "$(git rev-parse HEAD)"`).
+Stage only the changelog edits and other release-relevant files, commit, and push `main`. If hooks modify staged files, the commit will fail; resolve the hook and recommit. Wait for every push-triggered run on the pushed commit to pass (`gh run list --commit "$(git rev-parse HEAD)" --event push`).
 
 ## 5. Run the release task
 
@@ -67,7 +67,7 @@ Stage only the changelog edits and other release-relevant files, commit, and pus
 mise run release X.Y.Z
 ```
 
-It refuses unless `main` is clean, matches `origin/main`, and every workflow run on HEAD is green, `## [Unreleased]` has entries, and `X.Y.Z` is greater than the newest release. Then it moves the Unreleased entries under `## [X.Y.Z] - <today>`, versions every package.json and the lockfile, commits `chore(release): X.Y.Z`, creates the annotated tag `vX.Y.Z` from that section, and pushes `main` and the tag together.
+It refuses unless `main` is clean, matches `origin/main`, and CI and every other push-triggered run on HEAD are green, `## [Unreleased]` has entries, and `X.Y.Z` is greater than the newest release. Then it moves the Unreleased entries under `## [X.Y.Z] - <today>`, versions every package.json and the lockfile, commits `chore(release): X.Y.Z`, creates the annotated tag `vX.Y.Z` from that section, and pushes `main` and the tag together.
 
 If it refuses, report the reason; do not work around it. Stable tags are immutable: if a push fails after the tag was created, inspect before retrying, and never force-push a tag.
 

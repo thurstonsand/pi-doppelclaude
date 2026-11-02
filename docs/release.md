@@ -15,7 +15,7 @@ Every published package.json on `main` carries the version of the latest release
 3. Run `mise run release X.Y.Z`.
 4. The `Release` and `Container image` workflows check that the tag, every package.json and the changelog's newest release agree, then run CI and publish: npm with the `latest` dist-tag and provenance, and the container image as `X.Y.Z` and `latest`.
 
-`mise run release X.Y.Z` refuses unless it runs on a clean `main` that matches `origin/main` with every workflow run on HEAD green, `## [Unreleased]` has entries, and `X.Y.Z` is greater than the newest release. It then moves Unreleased's entries under `## [X.Y.Z] - <today>`, leaves an empty `## [Unreleased]`, writes `X.Y.Z` into every package.json and the lockfile, commits `chore(release): X.Y.Z`, creates the annotated tag `vX.Y.Z` with that section as its body, and pushes `main` and the tag together.
+`mise run release X.Y.Z` refuses unless it runs on a clean `main` that matches `origin/main` with CI and every other push-triggered run on HEAD green, `## [Unreleased]` has entries, and `X.Y.Z` is greater than the newest release. It then moves Unreleased's entries under `## [X.Y.Z] - <today>`, leaves an empty `## [Unreleased]`, writes `X.Y.Z` into every package.json and the lockfile, commits `chore(release): X.Y.Z`, creates the annotated tag `vX.Y.Z` with that section as its body, and pushes `main` and the tag together.
 
 ## Release note extraction
 

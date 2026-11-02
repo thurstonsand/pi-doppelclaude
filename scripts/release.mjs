@@ -35,7 +35,16 @@ const head = run("git", ["rev-parse", "HEAD"]);
 if (head !== run("git", ["rev-parse", "origin/main"])) refuse("main does not match origin/main");
 
 const runs = JSON.parse(
-  run("gh", ["run", "list", "--commit", head, "--json", "workflowName,status,conclusion,url"]),
+  run("gh", [
+    "run",
+    "list",
+    "--commit",
+    head,
+    "--event",
+    "push",
+    "--json",
+    "workflowName,status,conclusion,url",
+  ]),
 );
 if (!runs.some((entry) => entry.workflowName === "CI")) refuse(`CI has not run on ${head}`);
 for (const entry of runs) {
