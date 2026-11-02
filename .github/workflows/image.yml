@@ -15,6 +15,12 @@ on:
 permissions:
   contents: read
 
+# Pull requests cancel their superseded runs; publishing runs queue instead, so a release is never cut
+# off halfway through.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && format('refs/tags/v{0}', inputs.version) || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   IMAGE: ghcr.io/thurstonsand/http-doppelclaude
   LOCAL_IMAGE: http-doppelclaude:tested
@@ -23,16 +29,18 @@ jobs:
   check:
     name: Check repository
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout repository
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
+          persist-credentials: false
           ref: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', inputs.version) || github.ref }}
       - name: Set up mise
-        uses: jdx/mise-action@v5
+        uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
         with:
           install: true
-          cache: true
+          cache: false
       - name: Install dependencies
         run: npm ci
       - name: Check
@@ -42,6 +50,7 @@ jobs:
     name: Build and smoke test (${{ matrix.platform }})
     needs: check
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -52,33 +61,38 @@ jobs:
             architecture: arm64
     steps:
       - name: Checkout repository
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
+          persist-credentials: false
           ref: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', inputs.version) || github.ref }}
       - name: Record source revision
         id: source
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+        with:
+          cache-binary: false
       - name: Select package version
         id: version
         shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
           if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
-            if [[ ! "${{ inputs.version }}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            if [[ ! "$INPUT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
               echo "version must be X.Y.Z" >&2
               exit 1
             fi
-            echo "value=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+            echo "value=$INPUT_VERSION" >> "$GITHUB_OUTPUT"
           elif [[ "$GITHUB_REF_TYPE" == tag ]]; then
             echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
           else
             echo "value=0.0.0" >> "$GITHUB_OUTPUT"
           fi
       - name: Build image
-        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
         with:
           context: .
           load: true
@@ -93,12 +107,13 @@ jobs:
         run: scripts/smoke-http-image.sh "$LOCAL_IMAGE-${{ matrix.architecture }}"
       - name: Save tested image
         if: github.event_name != 'pull_request'
+        shell: bash
         run: >-
           docker save "$LOCAL_IMAGE-${{ matrix.architecture }}" |
           gzip > "http-doppelclaude-image-${{ matrix.architecture }}.tar.gz"
       - name: Upload tested image
         if: github.event_name != 'pull_request'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: tested-http-doppelclaude-image-${{ matrix.architecture }}
           path: http-doppelclaude-image-${{ matrix.architecture }}.tar.gz
@@ -113,38 +128,43 @@ jobs:
       (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))
     needs: build-and-smoke
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: read
       packages: write
     steps:
       - name: Checkout source revision
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
+          persist-credentials: false
           ref: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', inputs.version) || github.ref }}
       - name: Download tested image
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
         with:
           pattern: tested-http-doppelclaude-image-*
           merge-multiple: true
       - name: Load tested image
+        shell: bash
         run: |
           for archive in http-doppelclaude-image-*.tar.gz; do
             gzip --decompress --stdout "$archive" | docker load
           done
       - name: Log in to GHCR
-        uses: docker/login-action@184bdaa0721073962dff0199f1fb9940f07167d1
+        uses: docker/login-action@184bdaa0721073962dff0199f1fb9940f07167d1 # v3.5.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Tag and publish
         shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
           source_sha=$(git rev-parse HEAD)
           tags=()
           if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
             component_prefix="release-sha-$source_sha"
-            tags+=("$IMAGE:${{ inputs.version }}" "$IMAGE:$component_prefix" "$IMAGE:latest")
+            tags+=("$IMAGE:$INPUT_VERSION" "$IMAGE:$component_prefix" "$IMAGE:latest")
           elif [[ "$GITHUB_REF_TYPE" == tag ]]; then
             component_prefix="release-sha-$source_sha"
             tags+=("$IMAGE:${GITHUB_REF_NAME#v}" "$IMAGE:$component_prefix" "$IMAGE:latest")
