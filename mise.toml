@@ -4,8 +4,10 @@ min_version = "2026.7.4"
 enter = "mise bootstrap --yes --quiet"
 
 [tools]
-actionlint = "1.7.12"
 hk = "2.10.0"
+# hk's check and fix hooks run jactionlint, which runs shellcheck over every `run:` script. Renovate
+# does not know mise's `jactionlint` shorthand, so the backend is spelled out.
+"aqua:jdx/jactionlint" = "2.4.0"
 node = "26"
 shellcheck = "0.11.0"
 
@@ -34,7 +36,7 @@ run = "biome check ."
 
 [tasks."lint:actions"]
 description = "Lint GitHub Actions workflows"
-run = "actionlint"
+run = "hk check --all --step jactionlint"
 
 [tasks."lint:shell"]
 description = "Lint shell scripts"
@@ -67,7 +69,7 @@ tools."npm:renovate" = { version = "44.198.2", allow_builds = [
 
 [tasks.format]
 description = "Format and apply safe fixes"
-run = "biome check --write ."
+run = ["biome check --write .", "hk fix --all --step jactionlint"]
 
 [tasks.build]
 description = "Build all publishable packages in dependency order"
