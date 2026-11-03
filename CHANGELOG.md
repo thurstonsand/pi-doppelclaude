@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.14.18] - 2026-11-02
+
 ### Added
 
 - **pi shows what changed after an update** — pi-doppelclaude now ships this changelog, so the first time pi starts after an upgrade it shows the entries since the version you had.

@@ -1,6 +1,6 @@
 {
   "name": "pi-doppelclaude",
-  "version": "0.14.17",
+  "version": "0.14.18",
   "description": "Pi provider that runs your Claude Code subscription as pi models via the Claude Agent SDK.",
   "keywords": [
     "pi-package",
@@ -48,7 +48,7 @@
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.316",
     "cc-session-io": "^0.4.0",
-    "doppelclaude": "0.14.17"
+    "doppelclaude": "0.14.18"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": ">=1.5.0",
