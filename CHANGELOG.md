@@ -12,6 +12,10 @@
 
 - **HTTP: images built from `main` report the release they follow** — every package.json on `main` now carries the latest release's version, so a `main-sha-*` image reports that version instead of `0.0.0`. Its `org.opencontainers.image.revision` label still names the exact commit.
 
+### Fixed
+
+- **Claude Code's cached rollouts remain available with telemetry disabled** — bridge subprocesses can now read cached feature flags, including the message-threads rollout that avoids resending full history on every request. Telemetry and flag fetching remain disabled; message threads still depend on the account's cached rollout.
+
 ## [0.14.17] - 2026-11-02
 
 ### Changed

@@ -32,6 +32,8 @@ export function sdkChildEnv(): NodeJS.ProcessEnv {
     CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
     // Also implies DISABLE_TELEMETRY and DISABLE_ERROR_REPORTING.
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+    // Keep cached rollouts (including message threads) without fetching flags or sending telemetry.
+    CLAUDE_CODE_GB_DISK_CACHE_WHEN_TELEMETRY_OFF: "1",
     // The caller owns its tools; deferring them behind a search tool hides them from the model.
     ENABLE_TOOL_SEARCH: "false",
     // Claude Code cuts MCP tool descriptions at 4096 characters; the caller's tools are its own,
