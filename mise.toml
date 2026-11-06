@@ -4,7 +4,7 @@ min_version = "2026.10.4"
 enter = "mise bootstrap --yes --quiet"
 
 [tools]
-hk = "2.10.0"
+hk = "2.11.1"
 # hk's check and fix hooks run jactionlint, which runs shellcheck over every `run:` script. Renovate
 # does not know mise's `jactionlint` shorthand, so the backend is spelled out.
 "aqua:jdx/jactionlint" = "2.4.0"
