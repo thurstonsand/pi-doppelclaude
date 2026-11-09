@@ -26,7 +26,7 @@ Use this skill when preparing and publishing a new release for `pi-doppelclaude`
   - package, install, or release changes
   - API changes
   - documentation updates
-  - likely semver bump: patch, minor, or major
+  - likely bump: patch, minor, or major, by the versioning rule in `docs/release.md`
 
 Ask the user to confirm the target version unless they already specified it.
 

@@ -8,6 +8,8 @@ Every published package.json on `main` carries the version of the latest release
 
 `mise run lint:release`, part of `mise run check` and CI, fails when a heading other than `## [Unreleased]` breaks that format, when the versions do not strictly descend, or when the newest release does not match every package.json.
 
+Versions follow semantic versioning: a release with any new feature (an `Added` entry), a raised floor (a higher minimum Pi, Node, OS, or other dependency version), or anything breaking is at least minor, and breaking is major from 1.0 on; patch is only for fixes and dependency updates.
+
 ## Release flow
 
 1. Review `## [Unreleased]` in `CHANGELOG.md` and commit any edits to `main`.
