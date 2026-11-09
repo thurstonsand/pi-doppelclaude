@@ -62,6 +62,8 @@ export interface BridgeRuntimeDependencies {
   notify?(message: string, level: "info" | "warning" | "error"): void;
   refusal?(customType: string, data: RefusalEntryData): void;
   observeServedModel?(id: string): void | Promise<void>;
+  /** When the stored claude.ai login Claude Code signs in with ends, reported on every result. */
+  observeCredentialExpiry?(expiresAt: string): void;
   observeCommandUsage?(observation: CommandUsageObservation): void;
   observeExecution?(observation: BridgeExecutionObservation): void;
   /** Absent means a turn Claude Code reports as billed to Extra Usage fails instead. */
@@ -108,6 +110,8 @@ export type BridgeExecutionObservation =
       limits: Array<{ contextWindow: number; maxOutputTokens: number }>;
       /** This query's own usage, so an attempt that is retried or replaced still shows its cost. */
       usage: AttemptUsage;
+      /** When the stored claude.ai login Claude Code signs in with ends; null for any other credential. */
+      credentialExpiresAt: string | null;
     }
   | {
       event: "sdk_api_retry";
@@ -832,7 +836,10 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies = {}
               cacheRead: result.usage.cache_read_input_tokens ?? 0,
               cacheWrite: result.usage.cache_creation_input_tokens ?? 0,
             },
+            credentialExpiresAt: result.credential_expires_at ?? null,
           });
+          if (result.credential_expires_at)
+            dependencies.observeCredentialExpiry?.(result.credential_expires_at);
           // Claude Code can report a dead-query failure as a result instead of a rejection —
           // notably a revoked token, which it answers rather than throws.
           if (verdict?.type === "terminal" && retryDeadQuery(queryCtx, verdict.message, "rebuild"))

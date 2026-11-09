@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- **pi warns before your Claude Code sign-in ends** — when Claude Code reports that its stored claude.ai login ends within 10 days, the notice Claude Code's own `claude -p` gives, pi shows a warning once per session with the date and the command that renews it (`claude auth login`), instead of every turn failing once it has ended. Logins from an API key or a token in the environment report no end date and get no warning.
+- **HTTP: `request_complete` records when the sign-in ends** — each `sdk_result` execution carries `credentialExpiresAt`, the end of the stored claude.ai login Claude Code used, or `null` for any other credential.
+
 ### Changed
 
 - Upgrade to **Agent SDK 0.3.319** (Claude Code 2.1.319).

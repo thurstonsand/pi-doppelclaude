@@ -2339,6 +2339,7 @@ describe("native HTTP frontend", () => {
                   result: "ok",
                   is_error: false,
                   modelUsage: {},
+                  credential_expires_at: "2026-12-01T00:00:00.000Z",
                 },
               ] as unknown as SDKMessage[];
             }
@@ -2442,6 +2443,13 @@ describe("native HTTP frontend", () => {
           cache_creation: 0,
           output: 9,
         });
+        const results = (record.executions as Array<Record<string, unknown>>).filter(
+          (execution) => execution.event === "sdk_result",
+        );
+        assert.deepEqual(
+          results.map((execution) => execution.credentialExpiresAt),
+          ["2026-12-01T00:00:00.000Z"],
+        );
       }
       assert.doesNotMatch(JSON.stringify(logs), /private-|test-key|\bgo\b/);
     } finally {

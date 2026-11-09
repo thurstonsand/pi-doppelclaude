@@ -72,6 +72,17 @@ function resetText(resetsAt: number | undefined): string | null {
   return reset.toLocaleString(undefined, RESET_FORMAT);
 }
 
+// Claude Code's own `claude -p` starts warning 10 days out.
+const LOGIN_EXPIRY_WARNING_MS = 10 * 24 * 60 * 60 * 1000;
+
+/** Renewing the access token never moves a stored login's end, so only signing in again
+ *  does; the warning names the command that does it. */
+export function loginExpiryWarning(expiresAt: string, now: number): string | null {
+  const end = Date.parse(expiresAt);
+  if (Number.isNaN(end) || end - now > LOGIN_EXPIRY_WARNING_MS) return null;
+  return `Claude Code's sign-in ends ${new Date(end).toLocaleString(undefined, RESET_FORMAT)}; run \`claude auth login\` to renew it`;
+}
+
 function limitName(type: SDKRateLimitInfo["rateLimitType"]): string {
   switch (type) {
     case "five_hour":

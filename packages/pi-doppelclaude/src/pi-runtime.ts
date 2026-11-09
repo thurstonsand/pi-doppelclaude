@@ -12,6 +12,7 @@ import { debug } from "doppelclaude/debug";
 import type { RefusalEntryData } from "doppelclaude/refusal-data";
 import type { RuntimeRequest } from "doppelclaude/runtime-request";
 import { logServedContextWindow } from "doppelclaude/sdk-result";
+import { loginExpiryWarning } from "doppelclaude/sdk-signals";
 import type { BridgeSessionStore } from "doppelclaude/session-store";
 import { convertPiMessages, readPiTranscript } from "./convert.js";
 import type { BridgeModelCatalog } from "./model-catalog.js";
@@ -35,6 +36,7 @@ export interface BridgeHost {
 /** Pi-only adapter. Conversion, provider settings, model metadata, and response accounting stop here. */
 export function createPiBridgeRuntime(dependencies: PiBridgeRuntimeDependencies) {
   let host: BridgeHost | null = null;
+  let loginExpiryWarned = false;
   const responses = createPiResponseRuntime();
   const models = new Map<string, Model<Api>>();
   const core = createBridgeRuntime({
@@ -44,6 +46,13 @@ export function createPiBridgeRuntime(dependencies: PiBridgeRuntimeDependencies)
     notify: (message, level) => host?.ui.notify(message, level),
     refusal: (customType, data) => host?.appendEntry(customType, data),
     observeServedModel: (id) => dependencies.modelCatalog?.noteServedModel(id),
+    observeCredentialExpiry: (expiresAt) => {
+      if (!host || loginExpiryWarned) return;
+      const warning = loginExpiryWarning(expiresAt, Date.now());
+      if (!warning) return;
+      loginExpiryWarned = true;
+      host.ui.notify(warning, "warning");
+    },
     observeCommandUsage: (usage) => {
       const model = models.get(usage.requestedModel);
       if (model) {
@@ -127,6 +136,7 @@ export function createPiBridgeRuntime(dependencies: PiBridgeRuntimeDependencies)
       stream(model, context, options, true),
     setHost(next: BridgeHost | null) {
       host = next;
+      loginExpiryWarned = false;
     },
     clear: core.clear,
     closePersistent: core.closePersistent,
