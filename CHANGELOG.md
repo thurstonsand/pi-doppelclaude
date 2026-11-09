@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.14.19] - 2026-11-09
+
 ### Added
 
 - **pi warns before your Claude Code sign-in ends** — when Claude Code reports that its stored claude.ai login ends within 10 days, the notice Claude Code's own `claude -p` gives, pi shows a warning once per session with the date and the command that renews it (`claude auth login`), instead of every turn failing once it has ended. Logins from an API key or a token in the environment report no end date and get no warning.
