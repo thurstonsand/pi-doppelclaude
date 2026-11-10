@@ -99,8 +99,15 @@ export function isStableClaudeModelId(id: string): boolean {
   return modelOrder(id) !== undefined;
 }
 
+// Pi warms a model's prompt cache by replaying its last request with a one-token cap. Through the
+// bridge that replay is a turn on the conversation's doppel, which it would cut short and force to
+// rebuild, so bridge models advertise no cache lifetime and Pi never schedules one.
 function projectModel(canonical: Model<Api>): BridgeModel {
-  const { compat: _canonicalApiCompatibility, ...metadata } = canonical;
+  const {
+    compat: _canonicalApiCompatibility,
+    promptCache: _canonicalCacheLifetimes,
+    ...metadata
+  } = canonical;
   return {
     ...metadata,
     api: PROVIDER_API,

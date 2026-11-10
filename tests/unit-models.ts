@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { getPromptCacheTtlMs } from "@earendil-works/pi-ai";
 import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
 import {
   claudeCodeModelId,
@@ -66,6 +67,16 @@ describe("native model projection", () => {
       assert.deepEqual(model.cost, canonical.cost);
       assert.equal(model.contextWindow, canonical.contextWindow);
       assert.equal(model.maxTokens, canonical.maxTokens);
+    }
+  });
+
+  it("gives Pi no cache lifetime to warm, though the canonical model has one", () => {
+    for (const model of project("claude-fable-5", "claude-sonnet-5", "claude-haiku-4-5")) {
+      const canonical = find(canonicalModels, model.id);
+      for (const cacheRetention of ["short", "long"] as const) {
+        assert.notEqual(getPromptCacheTtlMs(canonical, { cacheRetention }), undefined);
+        assert.equal(getPromptCacheTtlMs(model, { cacheRetention }), undefined);
+      }
     }
   });
 

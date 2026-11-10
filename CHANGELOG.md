@@ -8,6 +8,10 @@
 
 - Upgrade to **Agent SDK 0.3.322** (Claude Code 2.1.322).
 
+### Fixed
+
+- **pi no longer warms the prompt cache through doppelclaude** — pi's cache warming replays a conversation's last request to keep its cache entry alive, by default for up to 30 minutes after every run since pi 1.5.1. Through doppelclaude each replay started a Claude Code subprocess, cut it off after one token, and made the conversation's next turn rebuild its Claude Code session, spending quota and the cache it meant to save. Doppelclaude models now give pi no cache lifetime, so `/session` shows cache warming as inactive (`cache lifetime unavailable`) for them.
+
 ## [0.14.19] - 2026-11-09
 
 ### Added
