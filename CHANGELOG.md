@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- pi-doppelclaude declares pi's packages as peer dependencies at any version (`*`) instead of `>=1.5.0`, as pi's package guidance asks. pi supplies them to every extension it loads, so the range was a floor nothing enforced.
+
 ## [0.14.20] - 2026-11-10
 
 ### Changed
