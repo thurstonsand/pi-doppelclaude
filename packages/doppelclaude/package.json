@@ -1,6 +1,6 @@
 {
   "name": "doppelclaude",
-  "version": "0.14.20",
+  "version": "0.14.21",
   "description": "Messages-shaped core for bridging clients to the Claude Agent SDK.",
   "license": "MIT",
   "repository": {
