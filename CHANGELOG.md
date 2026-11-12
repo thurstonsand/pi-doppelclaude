@@ -8,6 +8,10 @@
 
 - pi-doppelclaude declares pi's packages as peer dependencies at any version (`*`) instead of `>=1.5.0`, as pi's package guidance asks. pi supplies them to every extension it loads, so the range was a floor nothing enforced.
 
+### Fixed
+
+- **pi keeps working after it compacts between tool calls** — when pi compacted the conversation while a tool ran, the next turn ended with an empty reply and the agent stopped until you typed "continue" ([#45](https://github.com/thurstonsand/pi-doppelclaude/issues/45)). The compaction closes Claude Code's live query, and the bridge read the tool results that query was waiting on as left over from an abort. The run now continues from the results on a fresh Claude Code session built from the compacted history. A run you abort while a tool runs still ends there.
+
 ## [0.14.20] - 2026-11-10
 
 ### Changed

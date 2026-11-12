@@ -580,3 +580,48 @@ describe("dead query retry", () => {
     assert.equal(terminalError(turn.events), "Claude Code process exited with code 1");
   });
 });
+
+describe("tool results no query is waiting on", () => {
+  // Pi compacts between a tool call and the request that answers it, so the query the
+  // compaction closes is the one still waiting on these results.
+  const compactedToolTurn = answeredToolCall([
+    { role: "user", content: "Summary of the conversation so far: the user asked to go." },
+  ]);
+
+  it("continues a run whose query a compaction closed mid-tool-wait", async () => {
+    const { runtime, spawned } = makeHarness([
+      { stayOpen: true, messages: toolCallEvents() },
+      { stayOpen: true },
+    ]);
+    await record(stream(runtime, prompt, undefined, [bashTool])).done;
+    runtime.test.setHostSession({ sessionId: "11111111-1111-4111-8111-111111111111", cursor: 2 });
+    await runtime.markRebuild("session_compact:threshold:willRetry=false");
+
+    const continuation = record(stream(runtime, compactedToolTurn, undefined, [bashTool]));
+    await until(() => spawned[1]?.prompts.length === 1, "the continuation to be replayed");
+    assert.match(String(spawned[1].prompts[0]?.message.content), /tool results/);
+    spawned[1].emit([...textEvents("the tool said a.txt"), successResult]);
+    await continuation.done;
+
+    assert.deepEqual(texts(continuation.events), ["the tool said a.txt"]);
+    assert.equal(continuation.events.at(-1)?.type, "done");
+  });
+
+  it("ends a run the user aborted mid-tool-wait without asking Claude Code again", async () => {
+    const controller = new AbortController();
+    const options = { signal: controller.signal } as SimpleStreamOptions;
+    const { runtime, spawned } = makeHarness([
+      { stayOpen: true, messages: toolCallEvents() },
+      { stayOpen: true },
+    ]);
+    await record(stream(runtime, prompt, options, [bashTool])).done;
+    // Pi aborts the run while its tool executes, then still sends the aborted result.
+    controller.abort();
+
+    const continuation = record(stream(runtime, toolTurn, options, [bashTool]));
+    await continuation.done;
+
+    assert.equal(spawned.length, 1, "an aborted run was continued");
+    assert.deepEqual(texts(continuation.events), []);
+  });
+});

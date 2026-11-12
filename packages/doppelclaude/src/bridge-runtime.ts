@@ -1339,9 +1339,47 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies = {}
       return stream;
     }
 
-    if (replayToolContent || (lastHasToolResult && request.explicitReplay)) {
+    const resultsOnly = lastHasToolResult && !lastHasUserInput;
+    if (replayToolContent || (lastHasToolResult && request.explicitReplay) || resultsOnly) {
       const doppel = doppels.resolve(request.conversationKey);
       const replayCtx = doppel.context;
+      // Results no query is waiting on. Pi still sends a run's results after the user aborts it
+      // mid-tool, and that run ends here, as does one whose query died of a failure worth
+      // reporting. Any other close was the bridge's own, such as a compaction while pi ran the
+      // tools, and the run continues from the results.
+      if (
+        !replayToolContent &&
+        !request.explicitReplay &&
+        (request.signal?.aborted || replayCtx.fatalError)
+      ) {
+        debug("provider: orphaned tool result after abort, emitting end_turn");
+        if (doppel.session) doppel.session.cursor = nativeCursor;
+        if (replayCtx.fatalError) {
+          replayCtx.beginCommand(model, native);
+          claimCurrentResponse(replayCtx.currentResponse, "orphan-tool-result-error", replayCtx);
+          replayCtx.observeCommandUsage = dependencies.observeCommandUsage;
+          emitTerminalError(replayCtx, "error", replayCtx.fatalError);
+          return stream;
+        }
+        queueMicrotask(() => {
+          replayCtx.beginCommand(model, native);
+          claimCurrentResponse(replayCtx.currentResponse, "orphan-tool-result", replayCtx);
+          replayCtx.observeCommandUsage = dependencies.observeCommandUsage;
+          // Deliberate completion, not a streamed one: no SDK query runs here, so the
+          // acknowledgement has to name its own terminal state or finalize reads it
+          // as a turn that died mid-stream.
+          if (replayCtx.turnOutput) replayCtx.turnOutput.message.stop_reason = "end_turn";
+          finalizeCurrentResponse(replayCtx);
+          replayCtx.completeCommandUsage(model, null);
+          if (doppel.kind === "ephemeral") doppels.discard(doppel);
+        });
+        return stream;
+      }
+      const trigger: QueryTrigger = replayToolContent
+        ? "rich_content_replay"
+        : request.explicitReplay
+          ? "explicit_replay"
+          : "continuation_replay";
       const persistent = doppel.kind === "host";
       replayCtx.activeModel = model;
       replayCtx.beginCommand(model, native);
@@ -1349,7 +1387,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies = {}
       replayCtx.observeCommandUsage = dependencies.observeCommandUsage;
       replayCtx.latestCursor = nativeCursor;
       replayCtx.fatalError = null;
-      debug(`provider: explicitly replaying imported tool-result history (doppel=${doppel.label})`);
+      debug(`provider: replaying tool-result history (doppel=${doppel.label}, trigger=${trigger})`);
       spawnTurn({
         queryCtx: replayCtx,
         freshTurn: planFreshTurn(replayCtx, persistent),
@@ -1357,34 +1395,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies = {}
         promptMessage: sdkPrompt(REPLAY_PROMPT),
         persistent,
         drainExisting: !replayToolContent && Boolean(replayCtx.activeQuery),
-        trigger: replayToolContent ? "rich_content_replay" : "explicit_replay",
-      });
-      return stream;
-    }
-
-    if (lastHasToolResult && !lastHasUserInput) {
-      debug("provider: orphaned tool result after abort, emitting end_turn");
-      const doppel = doppels.resolve(request.conversationKey);
-      const orphanCtx = doppel.context;
-      if (doppel.session) doppel.session.cursor = nativeCursor;
-      if (orphanCtx.fatalError) {
-        orphanCtx.beginCommand(model, native);
-        claimCurrentResponse(orphanCtx.currentResponse, "orphan-tool-result-error", orphanCtx);
-        orphanCtx.observeCommandUsage = dependencies.observeCommandUsage;
-        emitTerminalError(orphanCtx, "error", orphanCtx.fatalError);
-        return stream;
-      }
-      queueMicrotask(() => {
-        orphanCtx.beginCommand(model, native);
-        claimCurrentResponse(orphanCtx.currentResponse, "orphan-tool-result", orphanCtx);
-        orphanCtx.observeCommandUsage = dependencies.observeCommandUsage;
-        // Deliberate completion, not a streamed one: no SDK query runs here, so the
-        // acknowledgement has to name its own terminal state or finalize reads it
-        // as a turn that died mid-stream.
-        if (orphanCtx.turnOutput) orphanCtx.turnOutput.message.stop_reason = "end_turn";
-        finalizeCurrentResponse(orphanCtx);
-        orphanCtx.completeCommandUsage(model, null);
-        if (doppel.kind === "ephemeral") doppels.discard(doppel);
+        trigger,
       });
       return stream;
     }
