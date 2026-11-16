@@ -168,7 +168,7 @@ describe("replaying a recorded thinking turn", () => {
       ["thinking", "text"],
     );
     const [thinking] = blocks(ctx, "thinking");
-    assert.match(thinking.thinking, /1048576/);
+    assert.match(thinking.thinking, /1,?048,?576/);
     assert.ok(thinking.signature.length > 0, "the signature must survive for replay to the API");
     assert.equal(blocks(ctx, "text")[0].text.trim(), "31");
     assert.ok(

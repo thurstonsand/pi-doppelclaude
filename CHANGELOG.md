@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Upgrade to **Agent SDK 0.3.325** (Claude Code 2.1.325).
+
 ## [0.14.21] - 2026-11-12
 
 ### Changed
