@@ -19,6 +19,12 @@ import {
   repairToolPairing,
   type Session,
 } from "cc-session-io";
+import type {
+  CarriedContext,
+  ContextAttachment,
+  ContextPayload,
+  TurnBoundary,
+} from "./carried-context.js";
 import { debug } from "./debug.js";
 import { QueryContext } from "./query-state.js";
 import type { BridgeSessionStore } from "./session-store.js";
@@ -118,14 +124,17 @@ interface ImportCompensations {
 }
 
 export interface RebuildRendering extends ImportCompensations {
-  /** Whose transcript the carried context records came from. */
-  contextSource: "own" | "sibling" | "none";
+  /** Where the carried context records came from: a transcript in this process, the context
+   *  saved from an earlier one, or nowhere. */
+  contextSource: "own" | "sibling" | "saved" | "none";
   /** Where the rebuilt transcript first differs from that one; null without a source. */
   divergence: TranscriptDivergence | null;
 }
 
 export class Doppel {
   session: SessionState | null = null;
+  /** The carried context last saved or loaded for this conversation, serialized. */
+  savedContext: string | null = null;
   /** The doppel's own context: warm and persistent for the host, respawned per turn for everyone else. */
   readonly context: QueryContext;
 
@@ -283,6 +292,8 @@ export function applySessionSync(input: {
   modelId?: string;
   /** Another transcript of this same conversation, read when the doppel has none of its own. */
   siblingTranscript?: () => readonly SessionStoreEntry[] | null;
+  /** The context saved from this conversation's last transcript, read when no transcript is left. */
+  savedContext?: () => CarriedContext | null;
 }): SyncResult {
   const { doppel, plan, cwd, sessionStore, modelId } = input;
   const why = describeSyncReason(plan.reason);
@@ -312,6 +323,8 @@ export function applySessionSync(input: {
   const ownTranscript = previousSessionId ? sessionStore.load(previousSessionId) : null;
   const siblingTranscript = previousSessionId ? null : (input.siblingTranscript?.() ?? null);
   const source = ownTranscript ?? siblingTranscript;
+  const saved = source ? null : (input.savedContext?.() ?? null);
+  const carried = source ? carriedContext(source) : saved;
   const session = createSession({
     projectPath: cwd,
     ...(previousSessionId ? { sessionId: previousSessionId } : {}),
@@ -320,8 +333,7 @@ export function applySessionSync(input: {
   const imported = importMessages(
     session,
     plan.priorMessages,
-    source ? contextAttachments(source) : [],
-    source ? turnBoundaries(source) : [],
+    carried ?? { attachments: [], boundaries: [] },
   );
   sessionStore.replace(session.sessionId, session.records);
   doppel.session = { sessionId: session.sessionId, cursor: plan.priorMessages.length };
@@ -335,14 +347,21 @@ export function applySessionSync(input: {
       `Case 4: doppel=${doppel.label} ${missedCount} missed messages, ${plan.priorMessages.length} total → replaced session ${session.sessionId.slice(0, 8)} (same id), ${session.records.length} records`,
     );
   }
+  const contextSource = ownTranscript
+    ? "own"
+    : siblingTranscript
+      ? "sibling"
+      : saved
+        ? "saved"
+        : "none";
   debug(
-    `syncResult: path=rebuild doppel=${doppel.label} reason=${why} sessionId=${session.sessionId} priors=${plan.priorMessages.length} cursor=${previousCursor} ${previousSessionId === undefined ? "first" : "preserved"}`,
+    `syncResult: path=rebuild doppel=${doppel.label} reason=${why} sessionId=${session.sessionId} priors=${plan.priorMessages.length} cursor=${previousCursor} ${previousSessionId === undefined ? "first" : "preserved"} context=${contextSource}`,
   );
   return {
     sessionId: session.sessionId,
     path: "rebuild",
     rebuild: {
-      contextSource: ownTranscript ? "own" : siblingTranscript ? "sibling" : "none",
+      contextSource,
       ...imported,
       divergence: source ? transcriptDivergence(source, session.records) : null,
     },
@@ -358,15 +377,9 @@ export function applySessionSync(input: {
  *  reminder on nearly every user turn that a custom base URL never sees. */
 const UNRENDERED_ATTACHMENTS = new Set(["prompt_snapshot"]);
 
-interface ContextPayload {
-  type: string;
-  [key: string]: unknown;
-}
-
-interface ContextAttachment {
-  /** Which run of consecutive same-role messages the attachment followed. */
-  group: number;
-  attachment: ContextPayload;
+/** What a transcript holds that a rebuild of its history needs Claude Code's own copy of. */
+export function carriedContext(entries: readonly SessionStoreEntry[]): CarriedContext {
+  return { attachments: contextAttachments(entries), boundaries: turnBoundaries(entries) };
 }
 
 function contextAttachments(entries: readonly SessionStoreEntry[]): ContextAttachment[] {
@@ -510,14 +523,6 @@ function placeAttachments(
  *  cached prefix only through the system prompt and tools. */
 const SYNTHETIC_TURN = "No response requested.";
 
-interface TurnBoundary {
-  /** The role group of the synthetic assistant turn; the replay prompt is the next group. */
-  group: number;
-  /** Tool results in the user group the boundary follows. */
-  results: number;
-  prompt: string | ContentBlock[];
-}
-
 function turnBoundaries(entries: readonly SessionStoreEntry[]): TurnBoundary[] {
   const boundaries: TurnBoundary[] = [];
   /** Tool results per role group, counted the way `contextAttachments` numbers the groups. */
@@ -608,8 +613,7 @@ function toolResultIds(messages: ReadonlyArray<{ content: unknown }>): Set<strin
 function importMessages(
   session: Session,
   messages: MessageParam[],
-  attachments: readonly ContextAttachment[],
-  boundaries: readonly TurnBoundary[],
+  { attachments, boundaries }: CarriedContext,
 ): ImportCompensations {
   const sanitizedIds = new Map<string, string>();
   const toolNames = new Map<string, string>();

@@ -58,6 +58,7 @@ mise run test:usage                                 # on-demand A/B subscription
 - **Doppels**: `packages/doppelclaude/src/doppel.ts` — per-conversation session state, the doppel registry, and session sync planning.
 - **Provider**: `packages/pi-doppelclaude/src/provider.ts` — Pi Provider composition. Core consumes SDK events.
 - **Session store**: `packages/doppelclaude/src/session-store.ts` — in-memory SDK SessionStore with writer revision fencing.
+- **Carried context**: `packages/doppelclaude/src/carried-context.ts` — Claude Code's context records a rebuild needs word for word, saved by each frontend (`pi-doppelclaude/src/saved-context.ts`, the HTTP `contexts/` state) so thinking survives a restart.
 - **Compaction**: `packages/pi-doppelclaude/src/compaction.ts` — isolated summary subprocess, file-op carry-forward.
 - **Account probe**: `packages/pi-doppelclaude/src/account-probe.ts` — auth/first-party gate.
 - **System prompt**: `packages/pi-doppelclaude/src/system-prompt.ts` — all prompt-rewrite behavior stays isolated here.

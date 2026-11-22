@@ -14,6 +14,7 @@ import { resolveOauthToken, runShellCommand } from "./oauth-token.js";
 import { createPiBridgeRuntime } from "./pi-runtime.js";
 import { createAnthropicAgentSdkProvider } from "./provider.js";
 import { renderRefusalEntry } from "./refusal.js";
+import { CONTEXT_CUSTOM_TYPE, savedContext } from "./saved-context.js";
 import { loadBridgeSettings } from "./settings.js";
 import {
   renderThinkingDropEntry,
@@ -132,6 +133,8 @@ export default function activate(pi: ExtensionAPI): void {
     runtime.setHost({
       ui: ctx.ui,
       appendEntry: (customType, data) => pi.appendEntry(customType, data),
+      savedContext: () => savedContext(ctx.sessionManager.getBranch()),
+      saveContext: (context) => pi.appendEntry(CONTEXT_CUSTOM_TYPE, context),
     });
     await runtime.designateHost(ctx.sessionManager.getSessionId());
     if (event.reason === "new" || event.reason === "resume" || event.reason === "fork") {

@@ -9,6 +9,10 @@
 - **pi tells you when Claude's API drops earlier thinking** — the API can remove thinking blocks from earlier turns before Claude reads the request, for example when the conversation before them has changed since they were written, and says so with a reason. Doppelclaude used to discard that report, so Claude continued without its earlier reasoning and nobody knew. pi now shows `⚠ Claude's API dropped 2 earlier thinking blocks before this reply (prefix_binding_mismatch)` after the reply, with the API's reasons verbatim, only when the count rises above the previous reply's. The report is also kept on the message as pi's own `anthropic_input_transformations` diagnostic. If you have set pi's `showCacheMissNotices`, pi's setting decides instead: `true` shows pi's own notice for it, and `false` hides it.
 - **HTTP: `message_start` carries `input_transformations`** — the API's report of what it changed in the request, such as dropped thinking, now reaches clients as the Messages API sends it.
 
+### Fixed
+
+- **Claude keeps its earlier thinking after you resume a session** — after `pi --session`, `--continue`, `/resume`, or any pi restart, Claude's API dropped all the thinking from before the restart (`prefix_binding_mismatch`), and the prompt cache missed from the first message on. Claude binds each thinking block to everything before it, including the context Claude Code puts in the first message: working directory, platform, model, and date. A new process had no copy of that context, so it sent a different first message. Doppelclaude now saves that context word for word in the pi session, as an entry pi never sends to the model, and uses it when it rebuilds the conversation. The HTTP daemon saves the same context per thread under its state directory, in `contexts/`, so its restarts keep thinking too. The saved context is kept for the life of the conversation, because the binding never expires. A resumed conversation therefore still sees the date it started on, as it does in Claude Code's own `--resume`.
+
 ## [0.14.22] - 2026-11-16
 
 ### Changed

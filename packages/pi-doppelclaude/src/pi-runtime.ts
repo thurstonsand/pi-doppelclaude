@@ -8,6 +8,7 @@ import type {
 } from "@earendil-works/pi-ai";
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { createBridgeRuntime } from "doppelclaude/bridge-runtime";
+import type { CarriedContext } from "doppelclaude/carried-context";
 import { debug } from "doppelclaude/debug";
 import type { RefusalEntryData } from "doppelclaude/refusal-data";
 import type { RuntimeRequest } from "doppelclaude/runtime-request";
@@ -31,6 +32,9 @@ export interface PiBridgeRuntimeDependencies {
 export interface BridgeHost {
   ui: ExtensionUIContext;
   appendEntry(customType: string, data: RefusalEntryData): void;
+  /** The context saved on the hosting session's current branch. */
+  savedContext(): CarriedContext | null;
+  saveContext(context: CarriedContext): void;
 }
 
 /** Pi-only adapter. Conversion, provider settings, model metadata, and response accounting stop here. */
@@ -45,6 +49,8 @@ export function createPiBridgeRuntime(dependencies: PiBridgeRuntimeDependencies)
     allowExtraUsage: dependencies.providerSettings.allowExtraUsage,
     notify: (message, level) => host?.ui.notify(message, level),
     refusal: (customType, data) => host?.appendEntry(customType, data),
+    loadHostContext: () => host?.savedContext() ?? null,
+    saveHostContext: (context) => host?.saveContext(context),
     observeServedModel: (id) => dependencies.modelCatalog?.noteServedModel(id),
     observeCredentialExpiry: (expiresAt) => {
       if (!host || loginExpiryWarned) return;

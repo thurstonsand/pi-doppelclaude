@@ -155,6 +155,8 @@ describe("Claude refusal entries", () => {
     runtime.setHost({
       ui: { notify: (message: string) => warnings.push(message) } as unknown as ExtensionUIContext,
       appendEntry: (customType, data) => entries.push({ customType, data }),
+      savedContext: () => null,
+      saveContext() {},
     });
 
     const queryCtx = new Doppel("test-doppel", "guest").context;

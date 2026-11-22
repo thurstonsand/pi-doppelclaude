@@ -90,6 +90,8 @@ function makeHarness(credentialExpiresAt: () => string | undefined) {
     runtime.setHost({
       ui: { notify: (message: string) => warnings.push(message) } as unknown as ExtensionUIContext,
       appendEntry() {},
+      savedContext: () => null,
+      saveContext() {},
     });
   startSession();
   const turn = () =>

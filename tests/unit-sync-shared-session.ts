@@ -11,7 +11,8 @@ import type { MessageParam } from "@anthropic-ai/sdk/resources";
 import type { Message as PiMessage } from "@earendil-works/pi-ai";
 import { type ContentBlock, createSession, getSessionPath } from "cc-session-io";
 import { createBridgeRuntime as createCoreRuntime } from "doppelclaude/bridge-runtime";
-import { describeSyncReason, planSessionSync } from "doppelclaude/doppel";
+import { readCarriedContext } from "doppelclaude/carried-context";
+import { carriedContext, describeSyncReason, planSessionSync } from "doppelclaude/doppel";
 import { BridgeSessionStore } from "doppelclaude/session-store";
 import { convertPiMessages } from "pi-doppelclaude/convert";
 import { createPiBridgeRuntime as createBridgeRuntime } from "pi-doppelclaude/pi-runtime";
@@ -272,6 +273,27 @@ describe("rebuild rendering", () => {
     assert.equal(result.path, "rebuild");
     const { divergence: _sibling, ...rebuild } = result.rebuild ?? {};
     assert.deepEqual(rebuild, { contextSource: "sibling", ...counts });
+    assert.ok(result.sessionId);
+    assert.deepEqual(shape(store.load(result.sessionId) ?? []), expected);
+  });
+
+  it("takes the context records saved by an earlier process when no transcript is left", () => {
+    const live = liveTranscript();
+    const earlier = new BridgeSessionStore();
+    earlier.replace(live.sessionId, live.records);
+    // The saved copy goes through JSON, as it does through a pi session file or the HTTP state.
+    const transcript = earlier.load(live.sessionId) ?? [];
+    const saved = readCarriedContext(JSON.parse(JSON.stringify(carriedContext(transcript))));
+    assert.ok(saved, "a transcript's own context reads back as saved context");
+    const store = new BridgeSessionStore();
+    const runtime = createCoreRuntime({ sessionStore: store, loadHostContext: () => saved });
+    void runtime.designateHost("host-session-id");
+
+    const result = runtime.test.syncHostSession(history, cwd);
+
+    const { divergence, ...rebuild } = result.rebuild ?? {};
+    assert.deepEqual(rebuild, { contextSource: "saved", ...counts });
+    assert.equal(divergence, null);
     assert.ok(result.sessionId);
     assert.deepEqual(shape(store.load(result.sessionId) ?? []), expected);
   });

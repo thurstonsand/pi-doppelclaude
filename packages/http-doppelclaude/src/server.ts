@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { appendFile, readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { isIP } from "node:net";
@@ -14,6 +14,7 @@ import {
   type BridgeRuntimeDependencies,
   createBridgeRuntime,
 } from "doppelclaude/bridge-runtime";
+import { type CarriedContext, readCarriedContext } from "doppelclaude/carried-context";
 import type { CoreResponseEvent, CoreResponseRecord } from "doppelclaude/core-response";
 import { canonicalClaudeModelId } from "doppelclaude/model-id";
 import type { RuntimeRequest } from "doppelclaude/runtime-request";
@@ -942,6 +943,26 @@ export function createHttpServer(options: HttpServerOptions): Server {
     closing.set(key, promise);
     return promise;
   };
+  // Each thread's Claude Code context, kept so a rebuild after a restart renders the prefix Claude's
+  // earlier thinking is bound to. Kept for good: that binding never expires.
+  const contextDir = join(stateDir, "contexts");
+  const contextPath = (threadId: string) => join(contextDir, `${fingerprint(threadId)}.json`);
+  const loadContext = (threadId: string): CarriedContext | null => {
+    let text: string;
+    try {
+      text = readFileSync(contextPath(threadId), "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+    return readCarriedContext(JSON.parse(text));
+  };
+  const saveContext = (threadId: string, context: CarriedContext): void => {
+    mkdirSync(contextDir, { recursive: true, mode: 0o700 });
+    const path = contextPath(threadId);
+    writeFileSync(`${path}.tmp`, JSON.stringify(context), { mode: 0o600 });
+    renameSync(`${path}.tmp`, path);
+  };
   const makeRuntime = (threadId: string, anonymous: boolean) => {
     const observationState = {
       observations: null as BridgeExecutionObservation[] | null,
@@ -957,6 +978,8 @@ export function createHttpServer(options: HttpServerOptions): Server {
         ...(anonymous
           ? {}
           : {
+              loadHostContext: () => loadContext(threadId),
+              saveHostContext: (context) => saveContext(threadId, context),
               hostSiblingTranscript: () => {
                 for (const sibling of [...states.values()].sort(
                   (left, right) => right.lastActivity - left.lastActivity,

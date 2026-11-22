@@ -179,6 +179,8 @@ describe("provider SDK result errors", () => {
     runtime.setHost({
       ui: { notify: (text: string) => notifications.push(text) } as unknown as ExtensionUIContext,
       appendEntry() {},
+      savedContext: () => null,
+      saveContext() {},
     });
 
     const sdkQuery = (async function* () {

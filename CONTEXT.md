@@ -34,6 +34,7 @@
 
 - **Sync paths**: `reuse` (Pi's history matches the live session; send only the new tail), `rebuild` (history diverged — including a rewind to a shorter context; synthesize a complete CC transcript and atomically replace the store entry), and `clean-start` (no prior context). Each doppel plans its own.
 - **Cursor**: how many of Pi's messages Claude Code has been shown.
+- **Carried context**: what Claude Code writes into a transcript that the client's history lacks — the context records in the first message (environment, model, date, …) and replay turn boundaries. A rebuild renders them from its own or a sibling transcript, or, in a new process, from the copy the frontend saved. Claude's thinking is bound to them, so they are kept for the conversation's whole life.
 
 ## Models and usage
 

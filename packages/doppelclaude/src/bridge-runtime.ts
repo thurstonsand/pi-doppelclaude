@@ -30,11 +30,13 @@ import {
 import { deleteSession } from "cc-session-io";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
+import type { CarriedContext } from "./carried-context.js";
 import type { CommandUsageObservation, CoreResponseEvent } from "./core-response.js";
 import { isDeadQueryFailure } from "./dead-query.js";
 import { debug, diagDump, makeCliDebugOptions } from "./debug.js";
 import {
   applySessionSync,
+  carriedContext,
   createDoppelRegistry,
   type Doppel,
   planReplaySync,
@@ -70,6 +72,10 @@ export interface BridgeRuntimeDependencies {
   allowExtraUsage?: boolean;
   /** Another runtime's transcript of the host conversation, for a host rebuild with none of its own. */
   hostSiblingTranscript?(): SessionStoreEntry[] | null;
+  /** The host conversation's context as last saved, for a rebuild with no transcript left. */
+  loadHostContext?(): CarriedContext | null;
+  /** Keep the host conversation's context beyond this process; called each time it changes. */
+  saveHostContext?(context: CarriedContext): void;
 }
 
 export type BridgeExecutionObservation =
@@ -856,6 +862,7 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies = {}
             debug(
               `provider: turn complete, doppel=${doppel.label}, session=${sessionId.slice(0, 8)}, cursor=${queryCtx.latestCursor}, storedRecords=${sessionStore.entryCount(sessionId)}`,
             );
+            saveContext(doppel, sessionId);
           }
           if (!verdict) {
             observeCompensation(queryCtx, "unclassified_result", null);
@@ -1551,14 +1558,36 @@ export function createBridgeRuntime(dependencies: BridgeRuntimeDependencies = {}
   }
 
   function syncSession(doppel: Doppel, plan: SyncPlan, cwd: string, modelId?: string) {
+    const host = doppel.kind === "host";
     return applySessionSync({
       doppel,
       plan,
       cwd,
       sessionStore,
       modelId,
-      siblingTranscript: doppel.kind === "host" ? dependencies.hostSiblingTranscript : undefined,
+      siblingTranscript: host ? dependencies.hostSiblingTranscript : undefined,
+      savedContext: host
+        ? () => {
+            const saved = dependencies.loadHostContext?.() ?? null;
+            if (saved) doppel.savedContext = JSON.stringify(saved);
+            return saved;
+          }
+        : undefined,
     });
+  }
+
+  function saveContext(doppel: Doppel, sessionId: string): void {
+    if (doppel.kind !== "host" || !dependencies.saveHostContext) return;
+    const transcript = sessionStore.load(sessionId);
+    if (!transcript) return;
+    const context = carriedContext(transcript);
+    const serialized = JSON.stringify(context);
+    if (serialized === doppel.savedContext) return;
+    doppel.savedContext = serialized;
+    debug(
+      `provider: saving context for ${doppel.label}: ${context.attachments.length} attachments, ${context.boundaries.length} turn boundaries`,
+    );
+    dependencies.saveHostContext(context);
   }
 
   function hostTranscript(): SessionStoreEntry[] | null {
