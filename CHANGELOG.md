@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-22
+
 ### Added
 
 - **pi tells you when Claude's API drops earlier thinking** — the API can remove thinking blocks from earlier turns before Claude reads the request, for example when the conversation before them has changed since they were written, and says so with a reason. Doppelclaude used to discard that report, so Claude continued without its earlier reasoning and nobody knew. pi now shows `⚠ Claude's API dropped 2 earlier thinking blocks before this reply (prefix_binding_mismatch)` after the reply, with the API's reasons verbatim, only when the count rises above the previous reply's. The report is also kept on the message as pi's own `anthropic_input_transformations` diagnostic. If you have set pi's `showCacheMissNotices`, pi's setting decides instead: `true` shows pi's own notice for it, and `false` hides it.
