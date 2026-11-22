@@ -17,6 +17,7 @@ import type {
 } from "doppelclaude/core-response";
 import { PushQueue } from "doppelclaude/query-state";
 import { applySdkUsage, reconcileSdkModelUsage } from "./pi-usage.js";
+import { inputTransformationsDiagnostic } from "./thinking-drop.js";
 
 function stopReason(record: CoreResponseRecord): { reason: StopReason; error?: string } {
   if (record.error) return { reason: record.error.reason, error: record.error.message };
@@ -286,6 +287,12 @@ export function createPiResponseRuntime() {
             }
           }
           applySdkUsage(output, event.response.message.usage, model);
+          const transformations = event.response.inputTransformations;
+          if (transformations?.length)
+            output.diagnostics = [
+              ...(output.diagnostics ?? []),
+              inputTransformationsDiagnostic(transformations),
+            ];
           terminalResponses.add(event.response.id);
           retryPendingUsage();
           const terminal = stopReason(event.response);

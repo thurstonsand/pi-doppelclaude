@@ -15,7 +15,7 @@
 // uuids. scrub() below strips that, keeping only the fields consumeQuery reads.
 // Never commit a fixture that has not been through it.
 
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -33,7 +33,17 @@ const FILES: Record<string, string> = {
   "three.txt": "THREE\n",
 };
 
-const SCENARIOS: Record<string, { prompt: string; args?: string[] }> = {
+const THINKING_PROMPT =
+  "Think it through step by step before answering: what is the sum of the digits of 2^20? Reply with only the number.";
+
+interface Scenario {
+  prompt: string;
+  args?: string[];
+  /** Runs before recording and returns more pi arguments, such as a session to resume. */
+  setup?: () => Promise<string[]>;
+}
+
+const SCENARIOS: Record<string, Scenario> = {
   // Plain text turn: no tools, no thinking. The baseline shape.
   text: { prompt: "Reply with exactly the word ALPHA and nothing else." },
   // One tool call, then a text answer — the two-request tool boundary.
@@ -48,12 +58,41 @@ const SCENARIOS: Record<string, { prompt: string; args?: string[] }> = {
   },
   // Thinking blocks and their deltas ahead of the answer. A trivial prompt gets
   // no thinking even at high effort, so this one needs a few steps of arithmetic.
-  thinking: {
-    prompt:
-      "Think it through step by step before answering: what is the sum of the digits of 2^20? Reply with only the number.",
+  thinking: { prompt: THINKING_PROMPT, args: ["--thinking", "high"] },
+  // The API dropping replayed thinking. Editing the first prompt of a saved thinking turn means
+  // the conversation that thinking was created in no longer precedes it, so the resumed turn's
+  // request reports it under input_transformations as prefix_binding_mismatch.
+  "thinking-dropped": {
+    prompt: "Now double that number. Reply with only the number.",
     args: ["--thinking", "high"],
+    setup: editedThinkingSession,
   },
 };
+
+async function editedThinkingSession(): Promise<string[]> {
+  const dir = join(WORKDIR, "sessions");
+  const harness = createRpcHarness({
+    name: "record-thinking-dropped-setup",
+    args: ["--model", "doppelclaude/haiku", "--thinking", "high", "--session-dir", dir],
+    cwd: WORKDIR,
+    defaultTimeout: 120_000,
+    persistSession: true,
+  });
+  await harness.startAndWait();
+  try {
+    await harness.promptAndWait(THINKING_PROMPT, 180_000);
+  } finally {
+    await harness.stop();
+  }
+  const [file, ...extra] = readdirSync(dir).filter((name) => name.endsWith(".jsonl"));
+  if (!file || extra.length) throw new Error(`expected one saved session in ${dir}`);
+  const path = join(dir, file);
+  const saved = readFileSync(path, "utf8");
+  const edited = saved.replace(THINKING_PROMPT, `${THINKING_PROMPT} Be brief.`);
+  if (edited === saved) throw new Error(`${path}: the first prompt was not found to edit`);
+  writeFileSync(path, edited);
+  return ["--session", path];
+}
 
 const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
 // Only the fields consumeQuery actually reads survive from system/init. Everything
@@ -114,12 +153,14 @@ for (const name of chosen) {
   rmSync(raw, { force: true });
   writeFileSync(raw, "");
 
+  const setupArgs = (await scenario.setup?.()) ?? [];
   const harness = createRpcHarness({
     name: `record-${name}`,
-    args: ["--model", "doppelclaude/haiku", ...(scenario.args ?? [])],
+    args: ["--model", "doppelclaude/haiku", ...(scenario.args ?? []), ...setupArgs],
     cwd: WORKDIR,
     env: { DOPPELCLAUDE_RECORD_STREAM: raw },
     defaultTimeout: 120_000,
+    persistSession: setupArgs.length > 0,
   });
   await harness.startAndWait();
   try {

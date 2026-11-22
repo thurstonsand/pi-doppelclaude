@@ -1,3 +1,4 @@
+import type { BetaInputTransformation } from "@anthropic-ai/sdk/resources/beta/messages/messages";
 import type {
   ContentBlock,
   Message,
@@ -51,6 +52,8 @@ export interface CoreResponseRecord {
   lifecycle: "open" | "closed" | "failed";
   error: { reason: "aborted" | "error"; message: string } | null;
   rawStopReason?: string;
+  /** What the API changed in the request before the model saw it, such as dropped thinking. */
+  inputTransformations?: BetaInputTransformation[];
 }
 
 export interface PushStream<T> extends AsyncIterable<T> {

@@ -165,6 +165,8 @@ export interface RpcHarnessOptions {
   env?: Record<string, string>;
   cwd?: string;
   defaultTimeout?: number;
+  /** Let pi save the session (the default is `--no-session`); pass where through `args`. */
+  persistSession?: boolean;
 }
 
 export function isolateAgentDir(name: string, logdir: string, customAgentDir?: string): string {
@@ -218,7 +220,14 @@ if (existsSync(ENV_FILE)) process.loadEnvFile(ENV_FILE);
 
 /** Create an RPC harness for pi integration tests. */
 export function createRpcHarness(opts: RpcHarnessOptions) {
-  const { name, args = [], env = {}, cwd = DIR, defaultTimeout = 30_000 } = opts;
+  const {
+    name,
+    args = [],
+    env = {},
+    cwd = DIR,
+    defaultTimeout = 30_000,
+    persistSession = false,
+  } = opts;
 
   const LOGDIR = `${DIR}/.test-output`;
   mkdirSync(LOGDIR, { recursive: true });
@@ -245,7 +254,7 @@ export function createRpcHarness(opts: RpcHarnessOptions) {
     writeFileSync(DEBUG_LOG, "");
     rpcLog = createWriteStream(RPC_LOG, { flags: "a" });
     const spawnArgs = [
-      "--no-session",
+      ...(persistSession ? [] : ["--no-session"]),
       "-ne",
       "-e",
       join(DIR, "packages/pi-doppelclaude"),

@@ -15,6 +15,12 @@ import { createPiBridgeRuntime } from "./pi-runtime.js";
 import { createAnthropicAgentSdkProvider } from "./provider.js";
 import { renderRefusalEntry } from "./refusal.js";
 import { loadBridgeSettings } from "./settings.js";
+import {
+  renderThinkingDropEntry,
+  THINKING_DROP_CUSTOM_TYPE,
+  type ThinkingDropEntryData,
+  thinkingDropNotice,
+} from "./thinking-drop.js";
 
 export default function activate(pi: ExtensionAPI): void {
   // Pi's extension loader resolves a missing export to undefined rather than failing the import,
@@ -68,6 +74,24 @@ export default function activate(pi: ExtensionAPI): void {
   pi.registerEntryRenderer<RefusalEntryData>(REFUSAL_CUSTOM_TYPE, (entry, options, theme) =>
     renderRefusalEntry(entry, { ...options, outputPad: pi.getSettings().outputPad ?? 1 }, theme),
   );
+  pi.registerEntryRenderer<ThinkingDropEntryData>(
+    THINKING_DROP_CUSTOM_TYPE,
+    (entry, options, theme) =>
+      renderThinkingDropEntry(
+        entry,
+        { ...options, outputPad: pi.getSettings().outputPad ?? 1 },
+        theme,
+      ),
+  );
+  // turn_end, not message_end: the reply is in the session by now, so the notice lands after it.
+  pi.on("turn_end", (event, ctx) => {
+    const notice = thinkingDropNotice(
+      ctx.sessionManager.getBranch(),
+      event.messageEntryId,
+      pi.getSettings().showCacheMissNotices,
+    );
+    if (notice) pi.appendEntry(THINKING_DROP_CUSTOM_TYPE, notice);
+  });
 
   pi.on("session_before_compact", async (event, ctx) => {
     if (ctx.model?.provider !== PROVIDER_ID) return undefined;

@@ -16,11 +16,14 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import type { Query, SDKMessage, SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
-import type { Api, AssistantMessageEvent, Model } from "@earendil-works/pi-ai";
+import type { Api, AssistantMessage, AssistantMessageEvent, Model } from "@earendil-works/pi-ai";
+import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+import type { CoreResponseEvent } from "doppelclaude/core-response";
 import { Doppel } from "doppelclaude/doppel";
 import { isCcRejectedToolName } from "doppelclaude/tool-names";
 import { projectCatalogModels } from "pi-doppelclaude/models";
 import { createPiBridgeRuntime as createBridgeRuntime } from "pi-doppelclaude/pi-runtime";
+import { thinkingDropNotice } from "pi-doppelclaude/thinking-drop";
 import { beginProjectedCommand } from "./lib/native-response.js";
 
 // `cost` matters: a recorded stream carries real usage, so consumeQuery reaches
@@ -53,8 +56,9 @@ function fixture(name: string): SDKMessage[] {
 /** Replays a fixture through the real consumeQuery, collecting the pi-side events. */
 async function replay(name: string, { toolNames = ["read"] }: { toolNames?: string[] } = {}) {
   const events: AssistantMessageEvent[] = [];
+  const native: CoreResponseEvent[] = [];
   const c = new Doppel("stream-replay", "guest").context;
-  const piStream = beginProjectedCommand(c, model);
+  const piStream = beginProjectedCommand(c, model, native);
   const projected = (async () => {
     for await (const event of piStream) events.push(event);
   })();
@@ -76,7 +80,13 @@ async function replay(name: string, { toolNames = ["read"] }: { toolNames?: stri
   });
   runtime.test.finalizeCurrentResponse(c);
   await projected;
-  return { events, ctx: c, results, capturedSessionId };
+  return { events, native, ctx: c, results, capturedSessionId };
+}
+
+function finalMessage(events: AssistantMessageEvent[]): AssistantMessage {
+  const done = events.find((e) => e.type === "done");
+  assert.ok(done, "the turn should finish");
+  return done.message;
 }
 
 type Ctx = Awaited<ReturnType<typeof replay>>["ctx"];
@@ -175,5 +185,74 @@ describe("replaying a recorded thinking turn", () => {
       events.some((e) => e.type === "thinking_delta"),
       "pi should have seen streaming thinking deltas",
     );
+  });
+});
+
+// The fixture resumes a saved thinking turn whose first prompt was edited, so the API dropped that
+// turn's thinking from the request and said why. Only what it reported may reach the user.
+describe("replaying a recorded turn the API dropped thinking from", () => {
+  const dropped = {
+    type: "thinking_dropped",
+    path: "messages.2.content.0",
+    reason: "prefix_binding_mismatch",
+  };
+
+  it("records the API's report on pi's message, verbatim", async () => {
+    const message = finalMessage((await replay("thinking-dropped")).events);
+    assert.deepEqual(
+      message.diagnostics?.map(({ type, details }) => ({ type, details })),
+      [{ type: "anthropic_input_transformations", details: { transformations: [dropped] } }],
+    );
+  });
+
+  it("serves the report in the native message_start the HTTP frontend streams", async () => {
+    const { native } = await replay("thinking-dropped");
+    const start = native.find((e) => e.type === "message_start");
+    assert.ok(start);
+    assert.deepEqual((start.message as { input_transformations?: unknown }).input_transformations, [
+      dropped,
+    ]);
+  });
+
+  it("adds no diagnostic when the API reports nothing dropped", async () => {
+    // Every recorded turn carries input_transformations, as [] when nothing was dropped.
+    const message = finalMessage((await replay("thinking")).events);
+    assert.equal(message.diagnostics, undefined);
+  });
+
+  describe("telling the user", () => {
+    const entry = (id: string, message: AssistantMessage): SessionEntry => ({
+      type: "message",
+      id,
+      parentId: null,
+      timestamp: new Date(0).toISOString(),
+      message,
+    });
+    const quiet = (message: AssistantMessage): AssistantMessage => ({
+      ...message,
+      diagnostics: [],
+    });
+
+    it("tells them what the API said when they have not chosen pi's own notice", async () => {
+      const message = finalMessage((await replay("thinking-dropped")).events);
+      assert.deepEqual(thinkingDropNotice([entry("reply", message)], "reply", undefined), {
+        count: 1,
+        reasons: ["prefix_binding_mismatch"],
+      });
+    });
+
+    it("leaves it to pi once they have set showCacheMissNotices either way", async () => {
+      const branch = [entry("reply", finalMessage((await replay("thinking-dropped")).events))];
+      assert.equal(thinkingDropNotice(branch, "reply", true), undefined);
+      assert.equal(thinkingDropNotice(branch, "reply", false), undefined);
+    });
+
+    it("stays quiet when the previous reply already reported as many drops", async () => {
+      const message = finalMessage((await replay("thinking-dropped")).events);
+      const branch = [entry("before", message), entry("reply", message)];
+      assert.equal(thinkingDropNotice(branch, "reply", undefined), undefined);
+      const afterQuiet = [entry("before", quiet(message)), entry("reply", message)];
+      assert.ok(thinkingDropNotice(afterQuiet, "reply", undefined));
+    });
   });
 });

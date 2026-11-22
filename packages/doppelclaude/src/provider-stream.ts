@@ -300,15 +300,28 @@ export function createProviderStreamRuntime(dependencies: ProviderStreamDependen
   ): void {
     if (!c.currentResponse || !c.turnOutput) return;
     c.turnSawStreamEvent = true;
-    const event = (message as SDKPartialAssistantMessage).event as RawMessageStreamEvent;
+    const sdkEvent = (message as SDKPartialAssistantMessage).event;
+    const event = sdkEvent as RawMessageStreamEvent;
     if (!event) return;
     const output = c.turnOutput.message;
+    // message_start holds the final list; a message_delta carries one only after a mid-stream
+    // server-side fallback, and then replaces it.
+    const transformations =
+      sdkEvent.type === "message_start"
+        ? sdkEvent.message.input_transformations
+        : sdkEvent.type === "message_delta"
+          ? sdkEvent.input_transformations
+          : undefined;
+    if (transformations) c.turnOutput.inputTransformations = structuredClone(transformations);
     if (event.type === "message_start") {
       noteServedModel(event.message.model, requestedModel, c);
       applySdkUsage(c.turnOutput, event.message.usage);
       c.currentResponse.pendingStart = {
         ...structuredClone(event),
-        message: structuredClone(output),
+        message: {
+          ...structuredClone(output),
+          ...(transformations && { input_transformations: structuredClone(transformations) }),
+        },
       };
       return;
     }
