@@ -1,7 +1,7 @@
 FROM node:26-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1 AS build
 
 WORKDIR /source
-COPY package.json package-lock.json tsconfig.json tsconfig.base.json mise.toml ./
+COPY .npmrc package.json package-lock.json tsconfig.json tsconfig.base.json mise.toml ./
 COPY packages ./packages
 RUN npm ci --ignore-scripts --no-audit --no-fund
 RUN npx tsc -p packages/doppelclaude && \
@@ -15,7 +15,7 @@ RUN groupadd --gid 3456 doppelclaude && \
     mkdir -p /app /var/lib/doppelclaude && \
     chown 3456:3456 /var/lib/doppelclaude
 WORKDIR /app
-COPY --from=build /source/package.json /source/package-lock.json ./
+COPY --from=build /source/.npmrc /source/package.json /source/package-lock.json ./
 COPY --from=build /source/packages/doppelclaude/package.json \
   /source/packages/doppelclaude/LICENSE /source/packages/doppelclaude/README.md \
   ./packages/doppelclaude/

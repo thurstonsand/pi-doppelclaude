@@ -6,7 +6,9 @@
     "helpers:pinGitHubActionDigests",
     ":maintainLockFilesWeekly"
   ],
-  "dependencyDashboard": true,
+  "dependencyDashboard": {
+    "enabled": true
+  },
   "minimumReleaseAge": "3 days",
   "internalChecksFilter": "strict",
   "forkProcessing": "enabled",
@@ -50,13 +52,18 @@
       "description": "The harnesses this bridge joins always take their latest release, exempt from the global minimumReleaseAge: the bridge tracks them closely and drops workarounds as soon as they catch up.",
       "matchPackageNames": [
         "@earendil-works/**",
-        "@anthropic-ai/claude-agent-sdk",
-        "@anthropic-ai/claude-code",
-        "@openai/codex",
-        "@openai/codex-sdk",
+        "@anthropic-ai/claude-agent-sdk*",
+        "@anthropic-ai/claude-code*",
+        "@openai/codex*",
         "npm:@earendil-works/**",
-        "npm:@anthropic-ai/claude-code",
-        "npm:@openai/codex"
+        "npm:@anthropic-ai/claude-agent-sdk*",
+        "npm:@anthropic-ai/claude-code*",
+        "npm:@openai/codex*",
+        "@thurstonsand/**",
+        "pi-sessions",
+        "doppelclaude",
+        "http-doppelclaude",
+        "pi-doppelclaude"
       ],
       "minimumReleaseAge": null
     },
