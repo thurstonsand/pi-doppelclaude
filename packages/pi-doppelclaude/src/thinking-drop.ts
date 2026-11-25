@@ -53,15 +53,15 @@ function droppedThinking(message: AssistantMessage): ThinkingDropEntryData | und
  * message `messageEntryId`, or nothing. The API reports a dropped block again on every later
  * request that replays it, so only a count above the previous reply's is news.
  *
- * pi has its own notice for this diagnostic behind `showCacheMissNotices`, off by default. Once
+ * pi has its own notice for this diagnostic behind `notices.reasoningDrops`, off by default. Once
  * the user has set it either way pi's answer stands; until then doppelclaude tells them itself.
  */
 export function thinkingDropNotice(
   branch: SessionEntry[],
   messageEntryId: string,
-  showCacheMissNotices: boolean | undefined,
+  reasoningDrops: boolean | undefined,
 ): ThinkingDropEntryData | undefined {
-  if (showCacheMissNotices !== undefined) return undefined;
+  if (reasoningDrops !== undefined) return undefined;
   const index = branch.findIndex((entry) => entry.id === messageEntryId);
   const entry = branch[index];
   if (entry?.type !== "message" || entry.message.role !== "assistant") return undefined;

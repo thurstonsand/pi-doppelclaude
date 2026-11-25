@@ -17,7 +17,7 @@ import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import type { Query, SDKMessage, SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { Api, AssistantMessage, AssistantMessageEvent, Model } from "@earendil-works/pi-ai";
-import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+import { type SessionEntry, SettingsManager } from "@earendil-works/pi-coding-agent";
 import type { CoreResponseEvent } from "doppelclaude/core-response";
 import { Doppel } from "doppelclaude/doppel";
 import { isCcRejectedToolName } from "doppelclaude/tool-names";
@@ -241,10 +241,23 @@ describe("replaying a recorded turn the API dropped thinking from", () => {
       });
     });
 
-    it("leaves it to pi once they have set showCacheMissNotices either way", async () => {
+    it("leaves it to pi once they have set reasoningDrops, including migrated settings", async () => {
       const branch = [entry("reply", finalMessage((await replay("thinking-dropped")).events))];
-      assert.equal(thinkingDropNotice(branch, "reply", true), undefined);
-      assert.equal(thinkingDropNotice(branch, "reply", false), undefined);
+      for (const saved of [
+        { notices: { reasoningDrops: true } },
+        { showCacheMissNotices: true, notices: { reasoningDrops: false } },
+        { showCacheMissNotices: false },
+      ]) {
+        const settings = SettingsManager.fromStorage({
+          withLock: (scope, read) => {
+            if (scope === "global") read(JSON.stringify(saved));
+          },
+        }).getSettings();
+        assert.equal(
+          thinkingDropNotice(branch, "reply", settings.notices?.reasoningDrops),
+          undefined,
+        );
+      }
     });
 
     it("stays quiet when the previous reply already reported as many drops", async () => {
