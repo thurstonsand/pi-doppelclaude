@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-11-25
+
 ### Changed
 
 - **Requires pi 1.6.1 or newer.** Doppelclaude now follows the Reasoning drops toggle under Notices in `/settings`. If you leave it unset, Doppelclaude still warns you about newly dropped thinking. Pi migrates an explicit `showCacheMissNotices` choice, so it still takes precedence.
