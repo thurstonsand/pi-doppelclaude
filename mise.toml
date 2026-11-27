@@ -11,7 +11,7 @@ minimum_release_age = "3d"
 enter = "mise bootstrap --yes --quiet"
 
 [tools]
-hk = "2.13.0"
+hk = "2.14.0"
 # hk's check and fix hooks run jactionlint, which runs shellcheck over every `run:` script. Renovate
 # does not know mise's `jactionlint` shorthand, so the backend is spelled out.
 "aqua:jdx/jactionlint" = "2.6.0"
