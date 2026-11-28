@@ -32,7 +32,7 @@
     "doppelclaude-serve": "dist/cli.js"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.325",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.332",
     "@anthropic-ai/sdk": "^1.8.0",
     "doppelclaude": "0.15.1",
     "sharp": "^0.35.5",

@@ -1,4 +1,4 @@
-FROM node:26-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1 AS build
+FROM node:26-bookworm-slim@sha256:0042e17d232a87a2cd485be1da7900fca4d10a4ad11b29e9285da1d2e54798c9 AS build
 
 WORKDIR /source
 COPY .npmrc package.json package-lock.json tsconfig.json tsconfig.base.json mise.toml ./
@@ -7,7 +7,7 @@ RUN npm ci --ignore-scripts --no-audit --no-fund
 RUN npx tsc -p packages/doppelclaude && \
     npx tsc -p packages/http-doppelclaude
 
-FROM node:26-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1
+FROM node:26-bookworm-slim@sha256:0042e17d232a87a2cd485be1da7900fca4d10a4ad11b29e9285da1d2e54798c9
 
 RUN groupadd --gid 3456 doppelclaude && \
     useradd --uid 3456 --gid 3456 --home-dir /var/lib/doppelclaude \

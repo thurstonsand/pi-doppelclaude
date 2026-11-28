@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Upgrade to **Agent SDK 0.3.332** (Claude Code 2.1.332), which retries stalled streaming replies and reports clearer errors when a proxy cuts a compressed response short.
+
 ## [0.15.1] - 2026-11-25
 
 ### Changed

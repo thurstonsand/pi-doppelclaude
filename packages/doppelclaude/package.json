@@ -29,7 +29,7 @@
     }
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.325",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.332",
     "@anthropic-ai/sdk": "^1.8.0",
     "@modelcontextprotocol/sdk": "^1.32.1",
     "cc-session-io": "^0.4.1",
